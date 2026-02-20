@@ -1,18 +1,36 @@
-# React + Vite
+# Client Portal
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This project is a React + Vite client portal UI.
 
-Currently, two official plugins are available:
+## Hyacinth Attendance API integration
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+The app now supports loading employee attendance data from the Hyacinth Attendance API.
 
-## React Compiler
+### Environment variables
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+Create a `.env` file with:
 
-Note: This will impact Vite dev & build performances.
+```bash
+VITE_HYACINTH_API_KEY=hk_your_api_key_here
+VITE_HYACINTH_DEPARTMENT_ID=dept_123
+```
 
-## Expanding the ESLint configuration
+If either variable is missing, the app falls back to the existing local dummy data.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Implemented API endpoints
+
+- `POST /getUsersByDepartment`
+- `POST /getUserSchedule`
+- `POST /getAttendanceLogs`
+
+Implemented in `src/api/hyacinthAttendanceApi.js`.
+
+The client also includes:
+
+- retry with exponential backoff for retryable HTTP statuses (`429`, `500`, `502`, `503`, `504`)
+- consistent error objects with `status` and optional `debug` metadata
+- automatic unwrapping of Firebase callable responses that return `{ data: ... }`
+
+### Callable functions support
+
+The same API client includes wrappers for documented callable functions (`generateApiKey`, `listApiKeys`, `deleteApiKey`, `changeUserPassword`, `changeUserEmail`, `testFunction`, `testAuth`) via an injected `callableInvoker` function.
