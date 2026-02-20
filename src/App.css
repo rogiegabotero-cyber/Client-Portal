@@ -1,0 +1,32 @@
+:root {
+  --sidebar-expanded: 240px;
+  --sidebar-collapsed: 80px;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-layout {
+  min-height: 100vh;
+  /* default */
+  --sidebar-width: var(--sidebar-expanded);
+}
+
+.app-layout.collapsed {
+  --sidebar-width: var(--sidebar-collapsed);
+}
+
+/* Push + resize the entire content area */
+.app-content {
+  margin-left: var(--sidebar-width);
+  min-height: 100vh;
+  transition: margin-left 0.25s ease, width 0.25s ease;
+  box-sizing: border-box;
+}
+
+.main-content {
+  box-sizing: border-box;
+  margin: 1.5rem;
+  min-width: 0; /* prevents overflow/layout issues */
+}

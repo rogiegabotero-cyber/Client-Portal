@@ -1,0 +1,165 @@
+.sidebar {
+  width: 240px;
+  height: 100vh;
+  background: linear-gradient(180deg, #5b0008, #3a0004);
+  color: #ffffff;
+  padding: 18px 18px 60px;
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  left: 0;
+  top: 0;
+  transition: width 0.25s ease;
+  z-index: 2;
+}
+
+.sidebar.collapsed {
+  width: 84px;
+  padding: 18px 12px 60px;
+}
+
+/* BRAND */
+.sb-brand {
+  margin-bottom: 22px;
+}
+
+.sb-brand-title {
+  font-weight: 950;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-size: 22px;
+  line-height: 1.1;
+  text-align: left;
+}
+
+.sidebar.collapsed .sb-brand-title {
+  font-size: 16px;
+  text-align: center;
+}
+
+/* SECTION */
+.sb-section {
+  margin-bottom: 20px;
+}
+
+.sb-section-title {
+  font-weight: 950;
+  text-transform: uppercase;
+  font-size: 16px;
+  letter-spacing: 0.6px;
+  margin-bottom: 10px;
+}
+
+/* LIVE LIST */
+.sb-live-list {
+  display: grid;
+  gap: 4px;
+  padding-left: 2px;
+}
+
+.sb-live-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  letter-spacing: 0.2px;
+}
+
+.sb-live-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+}
+
+.sb-live-name {
+  opacity: 0.95;
+}
+
+/* NAV LINKS */
+.sb-nav {
+  display: grid;
+  gap: 12px;
+  padding-left: 6px;
+}
+
+.sidebar.collapsed .sb-nav {
+  padding-left: 0;
+  gap: 10px;
+}
+
+.sb-link {
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  text-align: left;
+  font-weight: 750;
+  letter-spacing: 0.6px;
+  cursor: pointer;
+  padding: 6px 0;
+  opacity: 0.95;
+  text-transform: uppercase;
+}
+
+.sb-link:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+.sb-link.active {
+  opacity: 1;
+  text-decoration: none;
+  position: relative;
+}
+
+.sb-link.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 6px;
+  bottom: 6px;
+  width: 4px;
+  border-radius: 999px;
+  background: #22c55e;
+}
+
+.sidebar.collapsed .sb-link {
+  text-align: center;
+  padding: 10px 0;
+}
+
+.sidebar.collapsed .sb-link-text {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+
+/* Floating collapse button */
+.collapse-btn {
+  position: absolute;
+  top: 18px;
+  right: -14px;
+  background: #1e293b;
+  border: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.collapse-btn:hover {
+  background: #334155;
+}
+
+.sb-live-empty {
+  font-size: 13px;
+  font-weight: 800;
+  opacity: 0.85;
+  padding-left: 2px;
+}
