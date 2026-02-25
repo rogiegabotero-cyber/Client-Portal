@@ -1,239 +1,449 @@
-import React, { useMemo } from 'react'
-import './schedule.css'
-import { GRACE_MINUTES, NO_SHOW_MINUTES, createInitialEmployees } from '../data/dummyData.js'
+// src/pages/SchedulePage.jsx
+import React, { useEffect, useMemo, useState } from "react";
+import HyacinthAttendanceAPI from "../api/hyacinthAttendanceApi";
+import "./schedule.css";
 
-/* ---------- Time helpers ---------- */
-const toMinutes = (hhmm) => {
-  const [h, m] = String(hhmm || '00:00').split(':').map(Number)
-  return h * 60 + m
-}
+/* -----------------------------
+   Helpers (aligned w/ Attendance)
+------------------------------ */
 
-const fmtFromMinutes = (mins) => {
-  const h = Math.floor(mins / 60)
-  const m = mins % 60
-  const d = new Date()
-  d.setHours(h, m, 0, 0)
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
+// robust userId detection
+const getUserId = (emp) =>
+  emp?.userId ??
+  emp?.userID ??
+  emp?.user_id ??
+  emp?.UserId ??
+  emp?.uid ??
+  emp?.firebaseUid ??
+  emp?.id ??
+  emp?.employeeId ??
+  emp?._id ??
+  emp?.user?.id ??
+  emp?.user?.uid ??
+  emp?.user?.userId ??
+  null;
 
-const getNowInTZ = (tz) => {
-  // Returns current weekday + minutes in that timezone
-  try {
-    const dtf = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      hour12: false,
-      weekday: 'short',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
+const getDisplayName = (emp) =>
+  emp?.name ??
+  emp?.fullName ??
+  emp?.displayName ??
+  emp?.email ??
+  `User ${getUserId(emp) ?? ""}`.trim();
 
-    const parts = dtf.formatToParts(new Date())
-    const get = (t) => parts.find((p) => p.type === t)?.value
+const safeLower = (v) => String(v ?? "").toLowerCase();
 
-    const weekday = get('weekday')
-    const hour = Number(get('hour'))
-    const minute = Number(get('minute'))
-
-    return { weekday, minutes: hour * 60 + minute }
-  } catch {
-    const d = new Date()
-    const weekday = d.toLocaleDateString('en-US', { weekday: 'short' })
-    return { weekday, minutes: d.getHours() * 60 + d.getMinutes() }
+const pick = (obj, keys, fallback = "") => {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && String(v).length) return v;
   }
-}
+  return fallback;
+};
 
-const weekdayLong = (s) =>
-  ({
-    Mon: 'Monday',
-    Tue: 'Tuesday',
-    Wed: 'Wednesday',
-    Thu: 'Thursday',
-    Fri: 'Friday',
-    Sat: 'Saturday',
-    Sun: 'Sunday'
-  }[s] || s)
+const initials = (name = "") => {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  const a = parts[0]?.[0] ?? "?";
+  const b = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return (a + b).toUpperCase();
+};
 
-const formatScheduledDays = (days) => {
-  if (!Array.isArray(days) || days.length === 0) return '—'
-  const joined = days.join(',')
-  if (joined === 'Mon,Tue,Wed,Thu,Fri') return 'Monday–Friday'
-  if (joined === 'Sat,Sun') return 'Saturday–Sunday'
-  return days.map(weekdayLong).join(', ')
-}
+const pad2 = (n) => String(n).padStart(2, "0");
 
-/* ---------- Trending attendance/shift logic ---------- */
-/**
- * Modern dashboards usually compute:
- * - Scheduled? (based on weekday + tz)
- * - Shift window (start/end)
- * - Punch state (clockIn/clockOut)
- * - Overlays (break/live)
- */
-const getShiftStatus = (e) => {
-  // hard overrides
-  if (e.presence === 'pto') return { label: 'On PTO', tone: 'pto' }
-  if (e.presence === 'sick') return { label: 'Sick / Emergency Leave', tone: 'sick' }
-  if (!e.schedule) return { label: 'Off', tone: 'off' }
+const addHoursToHHMM = (hhmm, hoursToAdd) => {
+  const [hRaw, mRaw] = String(hhmm || "").split(":").map(Number);
+  const hrs = Number(hoursToAdd);
 
-  const { timezone, days, start, end } = e.schedule
-  const { weekday, minutes: now } = getNowInTZ(timezone)
+  if (!Number.isFinite(hRaw) || !Number.isFinite(mRaw) || !Number.isFinite(hrs)) {
+    return { outHHMM: "—", dayOffset: 0 };
+  }
 
-  const scheduledToday = Array.isArray(days) && days.includes(weekday)
-  if (!scheduledToday) return { label: 'Off', tone: 'off' }
+  const startMin = hRaw * 60 + mRaw;
+  const addMin = Math.round(hrs * 60);
+  const total = startMin + addMin;
 
-  const startM = toMinutes(start)
-  const endM = toMinutes(end)
+  // handle wrap past midnight
+  const dayOffset = Math.floor(total / (24 * 60));
+  const mod = ((total % (24 * 60)) + (24 * 60)) % (24 * 60);
 
-  const hasIn = !!e.clockIn
-  const hasOut = !!e.clockOut
+  const outH = Math.floor(mod / 60);
+  const outM = mod % 60;
 
-  // ended shift (clocked out)
-  if (hasIn && hasOut) return { label: 'Shift Ended', tone: 'off' }
+  return { outHHMM: `${pad2(outH)}:${pad2(outM)}`, dayOffset };
+};
 
-  // before shift
-  if (now < startM) return { label: 'Upcoming', tone: 'clockedout' }
+const tzChip = (tz) => (!tz || tz === "—" ? "—" : tz);
 
-  // during shift window
-  if (now >= startM && now <= endM) {
-    // clocked in
-    if (hasIn) {
-      // break overlay
-      if (e.onBreak) return { label: 'On Break', tone: 'break' }
+/* -----------------------------
+   Day-range formatting
+------------------------------ */
 
-      // late check (compare clock-in time to start + grace)
-      const clockInM =
-        e.clockIn instanceof Date
-          ? e.clockIn.getHours() * 60 + e.clockIn.getMinutes()
-          : null
+const DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const DAY_ABBR = {
+  monday: "Mon",
+  tuesday: "Tue",
+  wednesday: "Wed",
+  thursday: "Thu",
+  friday: "Fri",
+  saturday: "Sat",
+  sunday: "Sun",
+};
 
-      if (clockInM != null && clockInM > startM + GRACE_MINUTES) {
-        return { label: 'On Shift (Late)', tone: 'late' }
-      }
+const normalizeDayKey = (v) => {
+  const s = safeLower(v).trim();
+  if (!s) return null;
+  if (s.startsWith("mon")) return "monday";
+  if (s.startsWith("tue")) return "tuesday";
+  if (s.startsWith("wed")) return "wednesday";
+  if (s.startsWith("thu")) return "thursday";
+  if (s.startsWith("fri")) return "friday";
+  if (s.startsWith("sat")) return "saturday";
+  if (s.startsWith("sun")) return "sunday";
+  return null;
+};
 
-      return { label: 'On Shift', tone: 'onShift' }
+const formatDayRanges = (dayKeys) => {
+  const set = new Set((dayKeys || []).filter(Boolean));
+  const ordered = DAY_KEYS.filter((d) => set.has(d));
+  if (ordered.length === 0) return "No Schedule";
+
+  const parts = [];
+  let start = ordered[0];
+  let prev = ordered[0];
+
+  const pushRange = (a, b) => {
+    if (a === b) parts.push(DAY_ABBR[a]);
+    else parts.push(`${DAY_ABBR[a]}–${DAY_ABBR[b]}`);
+  };
+
+  for (let i = 1; i < ordered.length; i++) {
+    const cur = ordered[i];
+    const prevIdx = DAY_KEYS.indexOf(prev);
+    const curIdx = DAY_KEYS.indexOf(cur);
+
+    if (curIdx === prevIdx + 1) {
+      prev = cur; // continue streak
+    } else {
+      pushRange(start, prev);
+      start = cur;
+      prev = cur;
+    }
+  }
+  pushRange(start, prev);
+
+  return parts.join(", ");
+};
+
+const pickPrimarySchedule = (scheduleArr) => {
+  if (!Array.isArray(scheduleArr) || scheduleArr.length === 0) return null;
+
+  // Prefer Monday; else take first
+  const monday = scheduleArr.find(
+    (s) => normalizeDayKey(pick(s, ["dayOfWeek", "day", "weekday"], "")) === "monday"
+  );
+  return monday || scheduleArr[0];
+};
+
+/* -----------------------------
+   Page
+------------------------------ */
+
+export default function SchedulePage({ employees = [] }) {
+  const apiKey = import.meta.env.VITE_HYACINTH_API_KEY;
+
+  const api = useMemo(() => {
+    if (!apiKey) return null;
+    return new HyacinthAttendanceAPI(apiKey);
+  }, [apiKey]);
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const [schedulesByUserId, setSchedulesByUserId] = useState({});
+  const [errorsByUserId, setErrorsByUserId] = useState({});
+
+  const [query, setQuery] = useState("");
+
+  const validEmployees = (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e));
+  const perUserErrorCount = Object.keys(errorsByUserId || {}).length;
+
+  useEffect(() => {
+    if (!apiKey) {
+      setError("Missing VITE_HYACINTH_API_KEY in .env");
+      return;
+    }
+    if (!api) return;
+
+    if (validEmployees.length === 0) {
+      setSchedulesByUserId({});
+      setErrorsByUserId({});
+      setError("");
+      return;
     }
 
-    // not clocked in yet
-    if (now <= startM + GRACE_MINUTES) return { label: 'Scheduled', tone: 'clockedout' }
-    if (now >= startM + NO_SHOW_MINUTES) return { label: 'No-show', tone: 'absent' }
-    return { label: 'Late (No clock-in)', tone: 'late' }
-  }
+    let cancelled = false;
 
-  // after scheduled end
-  if (now > endM) {
-    if (hasIn) return { label: 'Overtime', tone: 'onShift' }
-    return { label: 'Missed Shift', tone: 'absent' }
-  }
+    const loadAllSchedules = async () => {
+      setLoading(true);
+      setError("");
+      setErrorsByUserId({});
 
-  return { label: 'Off', tone: 'off' }
-}
+      try {
+        const results = await Promise.all(
+          validEmployees.map(async (emp) => {
+            const userId = String(getUserId(emp));
+            try {
+              const schedule = await api.getUserSchedule(userId);
+              return {
+                userId,
+                schedule: Array.isArray(schedule) ? schedule : [],
+                err: null,
+              };
+            } catch (e) {
+              return { userId, schedule: [], err: e?.message || "Failed to load schedule" };
+            }
+          })
+        );
 
-const statusClass = (tone) => {
-  // Uses your existing CSS classes when possible:
-  // onShift, absent, pto, sick, clockedout, off
-  // plus adds "late" and "break" (if not styled, it will still render)
-  switch (tone) {
-    case 'onShift':
-      return 'onShift'
-    case 'absent':
-      return 'absent'
-    case 'pto':
-      return 'pto'
-    case 'sick':
-      return 'sick'
-    case 'clockedout':
-      return 'clockedout'
-    case 'late':
-      return 'late'
-    case 'break':
-      return 'break'
-    default:
-      return 'off'
-  }
-}
+        if (cancelled) return;
 
-const SchedulePage = ({ employees }) => {
-  // ✅ fallback: if no prop passed, use dummy data
-  const data = employees?.length ? employees : createInitialEmployees()
+        const nextSchedules = {};
+        const nextErrors = {};
 
-  const rows = useMemo(() => {
-    return data.map((e) => {
-      const status = getShiftStatus(e)
+        for (const r of results) {
+          nextSchedules[r.userId] = r.schedule;
+          if (r.err) nextErrors[r.userId] = r.err;
+        }
 
-      return {
-        ...e,
-        _statusLabel: status.label,
-        _statusTone: status.tone,
-        _scheduledDays: formatScheduledDays(e.schedule?.days)
+        setSchedulesByUserId(nextSchedules);
+        setErrorsByUserId(nextErrors);
+      } catch (e) {
+        if (!cancelled) setError(e?.message || "Failed to load schedules");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    })
-  }, [data])
+    };
+
+    loadAllSchedules();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, apiKey, validEmployees.length]);
+
+  // ✅ 1 row per employee
+  const rows = useMemo(() => {
+    const out = [];
+
+    for (const emp of validEmployees) {
+      const userId = String(getUserId(emp));
+      const name = getDisplayName(emp);
+      const email = pick(emp || {}, ["email"], "");
+
+      const scheduleArr = schedulesByUserId?.[userId] || [];
+      const hasSchedule = Array.isArray(scheduleArr) && scheduleArr.length > 0;
+
+      const tz = hasSchedule ? scheduleArr?.[0]?.timeRegion || "—" : "—";
+
+      // Day label: "Mon–Fri"
+      const dayKeys = (hasSchedule ? scheduleArr : [])
+        .map((s) => normalizeDayKey(pick(s, ["dayOfWeek", "day", "weekday"], "")))
+        .filter(Boolean);
+
+      const dayLabel = formatDayRanges(dayKeys);
+
+      // Primary schedule: use Monday else first entry
+      const primary = hasSchedule ? pickPrimarySchedule(scheduleArr) : null;
+
+      const timeIn = primary ? pick(primary, ["timeIn", "time_in", "startTime", "start"], "—") : "—";
+      const duration = primary ? Number(pick(primary, ["shiftDuration", "hours", "durationHours"], null)) : null;
+
+      const { outHHMM, dayOffset } = hasSchedule ? addHoursToHHMM(timeIn, duration) : { outHHMM: "—", dayOffset: 0 };
+
+      out.push({
+        key: userId,
+        userId,
+        name,
+        email,
+
+        hasSchedule,
+        dayLabel,
+        timeIn: hasSchedule ? timeIn : "—",
+        duration: hasSchedule && Number.isFinite(duration) ? duration : null,
+        timeOut: hasSchedule ? outHHMM : "—",
+        dayOffset: hasSchedule ? dayOffset : 0,
+        tz,
+
+        perUserError: errorsByUserId?.[userId] || "",
+        raw: scheduleArr,
+      });
+    }
+
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  }, [validEmployees, schedulesByUserId, errorsByUserId]);
+
+  const filtered = useMemo(() => {
+    const q = safeLower(query).trim();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        safeLower(r.name).includes(q) ||
+        safeLower(r.email).includes(q) ||
+        safeLower(r.userId).includes(q) ||
+        safeLower(r.dayLabel).includes(q)
+    );
+  }, [rows, query]);
+
+  const kpis = useMemo(() => {
+    const totalUsers = validEmployees.length;
+    const withSchedule = rows.filter((r) => r.hasSchedule).length;
+    const noSchedule = totalUsers - withSchedule;
+    return { totalUsers, withSchedule, noSchedule };
+  }, [validEmployees.length, rows]);
 
   return (
-    <div className="scPage">
-      <div className="scHeader">
-        <div>
-          <div className="scTitle">Schedule</div>
-          <div className="scSub">Modern shift + attendance view (timezone-aware)</div>
+    <div className="schx">
+      <div className="schxTop">
+        <div className="schxTitleWrap">
+          <div className="schxTitle">Schedules</div>
+          <div className="schxSub">
+            Users: {validEmployees.length}
+            {perUserErrorCount ? ` • Errors: ${perUserErrorCount}` : ""}
+          </div>
+        </div>
+
+        <div className="schxControls">
+          <div className="schxField" style={{ minWidth: 260 }}>
+            <div className="schxLabel">Search</div>
+            <input
+              className="schxInput"
+              placeholder="Search name / email / userId / days…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+
+          <div className="schxPill">
+            Rows: <span style={{ color: "var(--text)" }}>{filtered.length}</span>
+          </div>
         </div>
       </div>
 
-      <div className="scTableWrap">
-        <div className="scTableHead">All Agents Schedule</div>
+      {error && <div className="schxAlert">{error}</div>}
 
-        <table className="scTable">
-          <thead>
-            <tr>
-              <th>Agent</th>
-              <th>Role</th>
-              <th>Scheduled Days</th>
-              <th>Shift</th>
-              <th>Status</th>
-              <th>Live</th>
-            </tr>
-          </thead>
+      <div className="schxKpis">
+        <div className="schxTile">
+          <div className="schxTileLabel">Users</div>
+          <div className="schxTileValue">{kpis.totalUsers}</div>
+          <div className="schxTileHint">Valid userId detected</div>
+        </div>
 
-          <tbody>
-            {rows.map((e) => {
-              const shiftLabel = e.schedule
-                ? `${fmtFromMinutes(toMinutes(e.schedule.start))} - ${fmtFromMinutes(
-                    toMinutes(e.schedule.end)
-                  )}`
-                : '—'
+        <div className="schxTile">
+          <div className="schxTileLabel">With Schedule</div>
+          <div className="schxTileValue">{kpis.withSchedule}</div>
+          <div className="schxTileHint">Non-empty schedule array</div>
+        </div>
 
-              return (
-                <tr key={e.id}>
-                  <td className="tdName">{e.name}</td>
-                  <td>{e.role}</td>
-                  <td>{e._scheduledDays}</td>
-                  <td>{shiftLabel}</td>
-                  <td>
-                    <span className={`pill ${statusClass(e._statusTone)}`}>
-                      {e._statusLabel}
-                    </span>
-                  </td>
-                  <td>{e.isLive ? '🟢' : '⚪️'}</td>
-                </tr>
-              )
-            })}
+        <div className="schxTile">
+          <div className="schxTileLabel">No Schedule</div>
+          <div className="schxTileValue">{kpis.noSchedule}</div>
+          <div className="schxTileHint">Needs assignment</div>
+        </div>
+      </div>
 
-            {rows.length === 0 && (
+      <div className="schxCard">
+        <div className="schxCardHead">
+          <div className="schxCardTitle">Schedule Table</div>
+          <div style={{ color: "rgba(255,255,255,.65)", fontWeight: 900, fontSize: 12 }}>
+            Showing {filtered.length} of {rows.length}
+          </div>
+        </div>
+
+        <div className="schxTableWrap">
+          <table className="schxTable">
+            <thead>
               <tr>
-                <td colSpan={6} className="scEmpty">
-                  No agents found.
-                </td>
+                <th>User</th>
+                <th>Days</th>
+                <th>Time In</th>
+                <th>Time Out</th>
+                <th>Hours</th>
+                <th>Timezone</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
 
-        {/* Optional hint if you want to add CSS */}
-        <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-          Tip: Add CSS for <code>.pill.late</code> and <code>.pill.break</code> if you want custom colors.
+            <tbody>
+              {validEmployees.length === 0 && !loading && !error ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: 16, color: "rgba(255,255,255,.70)", fontWeight: 900 }}>
+                    No employees found (or userId not detected).
+                  </td>
+                </tr>
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: 16, color: "rgba(255,255,255,.70)", fontWeight: 900 }}>
+                    No schedules match your search.
+                  </td>
+                </tr>
+              ) : (
+                filtered.slice(0, 400).map((r) => (
+                  <tr className="schxTr" key={r.key}>
+                    <td>
+                      <div className="schxPerson">
+                        <div className="schxAvatar">{initials(r.name)}</div>
+                        <div>
+                          <div className="schxName">{r.name}</div>
+                          <div className="schxEmail">{r.email || r.userId}</div>
+                        </div>
+                      </div>
+
+                      {r.perUserError && <div className="schxErrMini">{r.perUserError}</div>}
+                    </td>
+
+                    <td>
+                      {r.hasSchedule ? (
+                        <span className="schxChip">{r.dayLabel}</span>
+                      ) : (
+                        <span className="schxChip schxChipNoSched">No Schedule</span>
+                      )}
+                    </td>
+
+                    <td>
+                      <span className="schxTime">{r.timeIn}</span>
+                    </td>
+
+                    <td>
+                      <div className="schxTimeWrap">
+                        <span className="schxTime">{r.timeOut}</span>
+                        {r.dayOffset > 0 && <span className="schxMiniPill">{`+${r.dayOffset}d`}</span>}
+                      </div>
+                    </td>
+
+                    <td>
+                      <span className="schxChip schxChipGood">
+                        {r.duration == null ? "—" : `${r.duration}h`}
+                      </span>
+                    </td>
+
+                    <td>
+                      <span className="schxChip schxChipTz">{tzChip(r.tz)}</span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
-    </div>
-  )
-}
 
-export default SchedulePage
+      {loading && (
+        <div className="schxLoadingOverlay" role="status" aria-live="polite">
+          <div className="schxLoadingModal">
+            <div className="schxSpinner" />
+            <div className="schxLoadingText">Fetching schedules…</div>
+            <div className="schxLoadingSub">Users: {validEmployees.length}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
