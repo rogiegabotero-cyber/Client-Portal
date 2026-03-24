@@ -16,6 +16,7 @@ import {
 import {
   getDaysUntilDeadline,
 } from "../services/assignmentService";
+import ConfirmModal from "./ConfirmModal";
 
 const normalize = (s) => String(s || "").toLowerCase().trim();
 
@@ -162,6 +163,8 @@ export default function AssignmentPage({
   const [selectedTask, setSelectedTask] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [saving, setSaving] = useState(false);
+  const [deletingTaskId, setDeletingTaskId] = useState("");
+  const [deleteConfirmTask, setDeleteConfirmTask] = useState(null);
   const [form, setForm] = useState({
     title: "",
     instructions: "",
@@ -466,9 +469,19 @@ export default function AssignmentPage({
       return;
     }
 
-    const ok = window.confirm(`Delete task "${task.title}"?`);
-    if (!ok) return;
+    setDeleteConfirmTask(task);
+  };
 
+  const closeDeleteConfirm = () => {
+    if (deletingTaskId) return;
+    setDeleteConfirmTask(null);
+  };
+
+  const confirmDeleteTask = async () => {
+    const task = deleteConfirmTask;
+    if (!task) return;
+
+    setDeletingTaskId(String(task.id));
     try {
       if (!onDeleteAssignment) {
         throw new Error("Delete action is unavailable");
@@ -488,6 +501,9 @@ export default function AssignmentPage({
         title: "Delete Failed",
         message: "Could not delete assignment.",
       });
+    } finally {
+      setDeletingTaskId("");
+      setDeleteConfirmTask(null);
     }
   };
 
@@ -1025,9 +1041,14 @@ export default function AssignmentPage({
                         type="button"
                         className="assignment-action-btn danger"
                         onClick={() => handleDeleteTask(selectedTask)}
+                        disabled={deletingTaskId === String(selectedTask?.id || "")}
                       >
                         <Trash2 size={16} />
-                        <span>Delete</span>
+                        <span>
+                          {deletingTaskId === String(selectedTask?.id || "")
+                            ? "Deleting..."
+                            : "Delete"}
+                        </span>
                       </button>
                     </>
                   ) : null}
@@ -1078,6 +1099,17 @@ export default function AssignmentPage({
           ) : null}
         </div>
       </div>
+
+      <ConfirmModal
+        open={!!deleteConfirmTask}
+        title="Delete Assignment?"
+        message={`Delete task "${deleteConfirmTask?.title || ""}"?`}
+        confirmText="Delete Task"
+        tone="danger"
+        busy={!!deletingTaskId}
+        onCancel={closeDeleteConfirm}
+        onConfirm={confirmDeleteTask}
+      />
     </div>
   );
 }

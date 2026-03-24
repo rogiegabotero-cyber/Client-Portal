@@ -83,19 +83,11 @@ export default function LoginPage() {
             </button>
 
           </form>
-
-          <div className="login-note">
-            <strong>Login guide:</strong>
-            <p>
-              Super Admin, Admin, and Visitor must log in using their Firebase email and password.
-              Employees may use either their email or employee ID.
-            </p>
-          </div>
         </div>
 
         <div className="login-right">
           <div className="login-brand-box">
-            <h2>Welcome Back</h2>
+            <h2>Welcome</h2>
             <p>
               This portal supports Employee, Admin, Visitor, and Super Admin access with page restrictions based on role.
             </p>

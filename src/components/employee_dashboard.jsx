@@ -1,6 +1,7 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./employee_dashboard.css";
 import { startBreak, endBreak, DAILY_BREAK_LIMIT_MINUTES } from "../services/breakService";
+import ConfirmModal from "./ConfirmModal";
 import {
   resolveScheduledDurationMinutes,
   resolveScheduledEndUtcMsForDayKey,
@@ -177,6 +178,7 @@ export default function EmployeeDashboard({
   const [localSelectedId, setLocalSelectedId] = useState("");
   const [breakLoading, setBreakLoading] = useState(false);
   const [breakError, setBreakError] = useState("");
+  const [breakConfirmAction, setBreakConfirmAction] = useState("");
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
   const [selectedAnnouncement, setSelectedAnnouncement] = useState(null);
 
@@ -328,10 +330,9 @@ export default function EmployeeDashboard({
   }, [nowMs]);
 
   useEffect(() => {
-    if (!isOnBreak) return undefined;
     const id = setInterval(() => setLiveNowMs(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [isOnBreak]);
+  }, []);
 
   const breakLimitMinutes = DAILY_BREAK_LIMIT_MINUTES;
   const savedTotalMinutes = Math.max(0, Number(breakUsage.totalMinutes || 0));
@@ -364,6 +365,13 @@ export default function EmployeeDashboard({
   const breakUsedLabel = isOnBreak
     ? effectiveUsedMinutes.toFixed(1)
     : String(Math.round(effectiveUsedMinutes));
+  const breakConfirmClockLabel = new Date(
+    Number.isFinite(liveNowMs) ? liveNowMs : Date.now()
+  ).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 
   const canStartBreak = !isOnBreak && breakMinutesLeft > 0;
 
@@ -400,6 +408,25 @@ export default function EmployeeDashboard({
       setBreakLoading(false);
     }
   }
+
+
+  const requestBreakToggle = () => {
+    if (!employee) return;
+    if (breakLoading) return;
+    if (!isOnBreak && !canStartBreak) return;
+    setBreakError("");
+    setBreakConfirmAction(isOnBreak ? "end" : "start");
+  };
+
+  const cancelBreakConfirm = () => {
+    if (breakLoading) return;
+    setBreakConfirmAction("");
+  };
+
+  const confirmBreakToggle = async () => {
+    await handleBreakToggle();
+    setBreakConfirmAction("");
+  };
 
   const visitorAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcementRows) ? announcementRows : [];
@@ -638,7 +665,7 @@ export default function EmployeeDashboard({
 
                     <button
                       className={`breakBtn ${isOnBreak ? "back" : "break"}`}
-                      onClick={handleBreakToggle}
+                      onClick={requestBreakToggle}
                       disabled={breakLoading || (!isOnBreak && !canStartBreak)}
                     >
                       {breakLoading ? "Please wait..." : isOnBreak ? "BACK" : "BREAK"}
@@ -741,6 +768,22 @@ export default function EmployeeDashboard({
               </div>
             </div>
           ) : null}
+
+          <ConfirmModal
+            open={!!breakConfirmAction}
+            title={breakConfirmAction === "end" ? "End Break?" : "Start Break?"}
+            message={
+              breakConfirmAction === "end"
+                ? "This will record your break end time. Continue?"
+                : "This will record your break start time. Continue?"
+            }
+            meta={`Current device time: ${breakConfirmClockLabel}`}
+            confirmText={breakConfirmAction === "end" ? "End Break" : "Start Break"}
+            tone="primary"
+            busy={breakLoading}
+            onCancel={cancelBreakConfirm}
+            onConfirm={confirmBreakToggle}
+          />
         </>
       )}
     </div>
@@ -755,5 +798,6 @@ function StatCard({ value, label }) {
     </div>
   );
 }
+
 
 

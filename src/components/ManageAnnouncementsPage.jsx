@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Archive, Clock3, Pencil, PlayCircle, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react";
 import "./manageAnnouncementsPage.css";
+import ConfirmModal from "./ConfirmModal";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -107,6 +108,12 @@ export default function ManageAnnouncementsPage({
   const [repostingId, setRepostingId] = useState("");
   const [restoringId, setRestoringId] = useState("");
   const [hardDeletingId, setHardDeletingId] = useState("");
+  const [confirmState, setConfirmState] = useState({
+    open: false,
+    mode: "",
+    row: null,
+  });
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const announcementRows = useMemo(() => {
     if (Array.isArray(announcements)) return announcements;
@@ -256,10 +263,7 @@ export default function ManageAnnouncementsPage({
     }
   };
 
-  const removeAnnouncement = async (row) => {
-    const ok = window.confirm("Move this announcement to recycle bin?");
-    if (!ok) return;
-
+  const moveAnnouncementToRecycleBin = async (row) => {
     setDeletingId(row.id);
     try {
       if (typeof onDeleteAnnouncement !== "function") {
@@ -283,6 +287,14 @@ export default function ManageAnnouncementsPage({
     } finally {
       setDeletingId("");
     }
+  };
+
+  const requestMoveToRecycleBin = (row) => {
+    setConfirmState({
+      open: true,
+      mode: "move_to_bin",
+      row,
+    });
   };
 
   const repostAnnouncement = async (row) => {
@@ -342,10 +354,7 @@ export default function ManageAnnouncementsPage({
     }
   };
 
-  const deleteForeverFromRecycleBin = async (row) => {
-    const ok = window.confirm("Permanently delete this announcement? This cannot be undone.");
-    if (!ok) return;
-
+  const permanentlyDeleteFromRecycleBin = async (row) => {
     setHardDeletingId(row.id);
     try {
       if (typeof onPermanentDeleteAnnouncement !== "function") {
@@ -367,6 +376,71 @@ export default function ManageAnnouncementsPage({
       });
     } finally {
       setHardDeletingId("");
+    }
+  };
+
+  const requestDeleteForeverFromRecycleBin = (row) => {
+    setConfirmState({
+      open: true,
+      mode: "delete_forever",
+      row,
+    });
+  };
+
+  const closeConfirmDialog = () => {
+    if (confirmBusy) return;
+    setConfirmState({
+      open: false,
+      mode: "",
+      row: null,
+    });
+  };
+
+  const confirmDialogContent = useMemo(() => {
+    if (confirmState.mode === "move_to_bin") {
+      return {
+        title: "Move To Recycle Bin?",
+        message: "This announcement will be moved to recycle bin and can be restored later.",
+        confirmText: "Move to Bin",
+        tone: "primary",
+      };
+    }
+
+    if (confirmState.mode === "delete_forever") {
+      return {
+        title: "Delete Forever?",
+        message: "This will permanently remove the announcement. This action cannot be undone.",
+        confirmText: "Delete Forever",
+        tone: "danger",
+      };
+    }
+
+    return {
+      title: "Confirm Action",
+      message: "Are you sure you want to continue?",
+      confirmText: "Confirm",
+      tone: "primary",
+    };
+  }, [confirmState.mode]);
+
+  const handleConfirmDialog = async () => {
+    const row = confirmState.row;
+    if (!row) return;
+
+    setConfirmBusy(true);
+    try {
+      if (confirmState.mode === "move_to_bin") {
+        await moveAnnouncementToRecycleBin(row);
+      } else if (confirmState.mode === "delete_forever") {
+        await permanentlyDeleteFromRecycleBin(row);
+      }
+    } finally {
+      setConfirmBusy(false);
+      setConfirmState({
+        open: false,
+        mode: "",
+        row: null,
+      });
     }
   };
 
@@ -498,7 +572,7 @@ export default function ManageAnnouncementsPage({
                       <button
                         type="button"
                         className="ma-btn danger"
-                        onClick={() => removeAnnouncement(row)}
+                        onClick={() => requestMoveToRecycleBin(row)}
                         disabled={isDeleting || isReposting || isRestoring || isHardDeleting}
                       >
                         <Trash2 size={15} />
@@ -563,7 +637,7 @@ export default function ManageAnnouncementsPage({
                   <button
                     type="button"
                     className="ma-btn danger"
-                    onClick={() => deleteForeverFromRecycleBin(row)}
+                    onClick={() => requestDeleteForeverFromRecycleBin(row)}
                     disabled={isRestoring || isHardDeleting}
                   >
                     <Trash2 size={15} />
@@ -622,6 +696,17 @@ export default function ManageAnnouncementsPage({
       {renderSection("Posted Announcements", <PlayCircle size={16} />, activeRows, "No active announcements.")}
       {renderSection("Expired Announcements", <Archive size={16} />, expiredRows, "No expired announcements.")}
       {renderRecycleBinSection(recycleRows)}
+
+      <ConfirmModal
+        open={confirmState.open}
+        title={confirmDialogContent.title}
+        message={confirmDialogContent.message}
+        confirmText={confirmDialogContent.confirmText}
+        tone={confirmDialogContent.tone}
+        busy={confirmBusy}
+        onCancel={closeConfirmDialog}
+        onConfirm={handleConfirmDialog}
+      />
     </div>
   );
 }
