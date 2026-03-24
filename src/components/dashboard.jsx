@@ -1,251 +1,363 @@
 import React, { useMemo } from 'react'
 import './dashboard.css'
-import { dashboardData } from '../data/dummyData'
 
-const clamp = (n, min, max) => Math.max(min, Math.min(max, n))
+const clamp01 = (n) => Math.max(0, Math.min(1, n))
 
+const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const fmtDays = (days) => {
+  if (!Array.isArray(days) || days.length === 0) return '—'
+  const unique = Array.from(new Set(days)).sort((a, b) => a - b)
+  return unique.map((d) => dayNames[d] ?? d).join(', ')
+}
+
+// Basic parsing for "HH:mm"
 const toMinutes = (hhmm) => {
-  const [h, m] = (hhmm || '00:00').split(':').map(Number)
-  return h * 60 + m
+  if (!hhmm || typeof hhmm !== 'string') return null
+  const m = hhmm.match(/(\d{1,2}):(\d{2})/)
+  if (!m) return null
+  const h = Number(m[1])
+  const mm = Number(m[2])
+  if (!Number.isFinite(h) || !Number.isFinite(mm)) return null
+  return h * 60 + mm
 }
 
-const isAgentLive = (e) => e.presence !== 'absent' && e.isLive === true
+const computePlannedMinutes = (emp) => {
+  const s = emp?.schedule
+  const start = toMinutes(s?.start)
+  const end = toMinutes(s?.end)
+  if (start !== null && end !== null && end > start) return end - start
+  return 8 * 60
+}
 
-const computeAttendance = (employees, graceMinutes) => {
-  let absent = 0
-  let present = 0
-  let late = 0
+const computeWorkedMinutes = (emp) => {
+  const cin = toMinutes(emp?.clockIn)
+  const cout = toMinutes(emp?.clockOut)
+  if (cin !== null && cout !== null && cout > cin) return cout - cin
+  // fallback: if clocked in but no out, assume half shift for visuals
+  if (cin !== null && (cout === null || cout <= cin)) return Math.floor(computePlannedMinutes(emp) * 0.5)
+  return 0
+}
 
-  for (const e of employees) {
-    if (e.presence === 'absent') {
-      absent++
-      continue
+const Dashboard = ({ employees = [], loading = false, error = '' }) => {
+  const data = useMemo(() => {
+    const list = Array.isArray(employees) ? employees : []
+
+    const total = list.length
+    const absentList = list.filter((e) => (e?.presence || '').toLowerCase() === 'absent')
+    const presentList = list.filter((e) => (e?.presence || '').toLowerCase() !== 'absent')
+    const liveList = list.filter((e) => !!e?.isLive)
+
+    const absent = absentList.length
+    const present = presentList.length
+    const live = liveList.length
+
+    // attendance pie percentages
+    const pctAbsent = total ? absent / total : 0
+    const pctPresent = total ? present / total : 0
+
+    // performance bars: use top 10 by worked minutes
+    const perf = list
+      .map((e) => ({
+        id: e.id,
+        name: e.name || '—',
+        role: e.role || '—',
+        department: e.department || '—',
+        workedMin: computeWorkedMinutes(e),
+        plannedMin: computePlannedMinutes(e),
+      }))
+      .sort((a, b) => b.workedMin - a.workedMin)
+      .slice(0, 10)
+
+    const maxWorked = perf.reduce((m, x) => Math.max(m, x.workedMin), 1)
+
+    // heatmap table: use live agents first, else everyone, cap 20 rows
+    const heatRows = (liveList.length ? liveList : list).slice(0, 20).map((e) => {
+      const worked = computeWorkedMinutes(e)
+      const planned = computePlannedMinutes(e)
+      const pct = planned ? clamp01(worked / planned) : 0
+      return {
+        id: e.id,
+        role: e.role || e.name || '—',
+        department: e.department || '—',
+        scheduleDays: fmtDays(e?.schedule?.days),
+        time: e?.schedule?.start && e?.schedule?.end ? `${e.schedule.start}-${e.schedule.end}` : '—',
+        presence: e?.presence || '—',
+        pct,
+      }
+    })
+
+    // mini bars: totals by department (top 6)
+    const byDept = new Map()
+    for (const e of list) {
+      const dept = e?.department || 'Unassigned'
+      byDept.set(dept, (byDept.get(dept) || 0) + 1)
     }
+    const deptBars = Array.from(byDept.entries())
+      .map(([dept, count]) => ({ dept, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6)
 
-    if (!e.clockIn) {
-      // treat "present but no clock-in" as absent-like for dashboard rollup
-      absent++
-      continue
+    const deptMax = deptBars.reduce((m, x) => Math.max(m, x.count), 1)
+
+    // donutRow: show up to 5 live agents (or first 5 employees)
+    const donutPeople = (liveList.length ? liveList : list).slice(0, 5).map((e) => {
+      const planned = computePlannedMinutes(e)
+      const worked = computeWorkedMinutes(e)
+      const pct = planned ? clamp01(worked / planned) : 0
+      return {
+        id: e.id,
+        name: e.name || '—',
+        sub: e.role || e.department || '—',
+        pct,
+        workedMin: worked,
+        plannedMin: planned,
+      }
+    })
+
+    return {
+      total,
+      present,
+      absent,
+      live,
+      pctAbsent,
+      pctPresent,
+      perf,
+      maxWorked,
+      heatRows,
+      deptBars,
+      deptMax,
+      donutPeople,
     }
+  }, [employees])
 
-    const shiftStartM = toMinutes(e.shiftStart || '09:00')
-    const clockInM = e.clockIn.getHours() * 60 + e.clockIn.getMinutes()
-    const isLate = clockInM > shiftStartM + graceMinutes
-
-    if (isLate) late++
-    else present++
-  }
-
-  return { absent, present, late }
-}
-
-const Donut = ({ value = 50, label = '', sub = '' }) => {
-  const v = clamp(value, 0, 100)
-  return (
-    <div className="donutCard">
-      <div className="donut" style={{ background: `conic-gradient(#f59e0b ${v}%, #a855f7 0)` }}>
-        <div className="donutInner">
-          <div className="donutValue">{value}</div>
-        </div>
-      </div>
-      <div className="donutMeta">
-        <div className="donutLabel">{label}</div>
-        <div className="donutSub">{sub}</div>
-      </div>
-    </div>
-  )
-}
-
-const MiniBars = ({ items = [] }) => {
-  const max = Math.max(...items.map((i) => i.value), 1)
-  return (
-    <div className="miniBars">
-      {items.map((i) => (
-        <div className="miniBarRow" key={i.label}>
-          <div className="miniBarLabel">{i.label}</div>
-          <div className="miniBarTrack">
-            <div className="miniBarFill" style={{ width: `${(i.value / max) * 100}%` }} />
-          </div>
-          <div className="miniBarValue">{i.value}</div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-const HeatmapTable = ({ data = [], cols = [] }) => {
-  const flat = data.flatMap((row) => row.values)
-  const max = Math.max(...flat, 1)
-
-  const cellBg = (v) => {
-    const t = v / max
-    const alpha = 0.15 + t * 0.55
-    return `rgba(56, 189, 248, ${alpha})`
-  }
-
-  return (
-    <div className="heatWrap">
-      <table className="heatTable">
-        <thead>
-          <tr>
-            <th>Job Role</th>
-            {cols.map((c) => (
-              <th key={c}>{c}</th>
-            ))}
-            <th>Grand Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row) => {
-            const total = row.values.reduce((a, b) => a + b, 0)
-            return (
-              <tr key={row.role}>
-                <td className="heatRole">{row.role}</td>
-                {row.values.map((v, idx) => (
-                  <td key={idx} style={{ background: cellBg(v) }}>
-                    {v}
-                  </td>
-                ))}
-                <td className="heatTotal">{total}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-const PerformanceBars = ({ items = [] }) => {
-  const max = Math.max(...items.map((i) => i.value), 1)
-  return (
-    <div className="perfBarsWrap">
-      <div className="perfBars perfBarsFull">
-        {items.map((i) => (
-          <div className="perfBar perfBarFull" key={i.label} title={`${i.label}: ${i.value}`}>
-            <div className="perfBarFill" style={{ height: `${(i.value / max) * 100}%` }} />
-            <div className="perfBarTick">{i.value}</div>
-            <div className="perfBarLabel">{i.label}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-const AttendancePie = ({ a = 0, b = 0, c = 0 }) => {
-  const total = a + b + c || 1
-  const pa = (a / total) * 100
-  const pb = (b / total) * 100
-
-  const bg = `conic-gradient(
-    #ef4444 0 ${pa}%,
-    #f59e0b ${pa}% ${pa + pb}%,
-    #60a5fa ${pa + pb}% 100%
-  )`
-
-  return (
-    <div className="attWrap">
-      <div className="attPie" style={{ background: bg }}>
-        <div className="attHole" />
-      </div>
-
-      <div className="attLegend">
-        <div className="attLegendRow">
-          <span className="dot red" /> <span>Absent</span>
-          <span className="attNum">{a}</span>
-        </div>
-        <div className="attLegendRow">
-          <span className="dot orange" /> <span>Present</span>
-          <span className="attNum">{b}</span>
-        </div>
-        <div className="attLegendRow">
-          <span className="dot blue" /> <span>Late</span>
-          <span className="attNum">{c}</span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const Dashboard = ({ employees = [], graceMinutes = 10 }) => {
-  const liveAgents = useMemo(() => employees.filter(isAgentLive).length, [employees])
-  const att = useMemo(() => computeAttendance(employees, graceMinutes), [employees, graceMinutes])
+  // Pie gradient: absent red, present blue (using CSS dot colors)
+  const pieStyle = useMemo(() => {
+    const redDeg = Math.round(data.pctAbsent * 360)
+    // order: absent (red) then present (blue)
+    return {
+      background: `conic-gradient(#ef4444 0deg ${redDeg}deg, #60a5fa ${redDeg}deg 360deg)`,
+    }
+  }, [data.pctAbsent])
 
   return (
     <div className="dashX">
-      <div className="topBar">
-        <div className="kpi">
-          <div className="kpiLabel">LIVE AGENTS</div>
-          <div className="kpiValue">{liveAgents}</div>
-        </div>
-        <div className="kpi">
-          <div className="kpiLabel">CLIENT ENGAGEMENT</div>
-          <div className="kpiValue">{dashboardData.kpis.clientEngagement.toLocaleString()}</div>
-        </div>
-        <div className="kpi">
-          <div className="kpiLabel">APPOINTMENT SET</div>
-          <div className="kpiValue">{dashboardData.kpis.appointmentSet}</div>
-        </div>
-        <div className="kpi">
-          <div className="kpiLabel">BILLABLE HOURS</div>
-          <div className="kpiValue">{dashboardData.kpis.billableHours}</div>
+      {/* Top title + state */}
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+        <h2 style={{ margin: 0 }}>Dashboard</h2>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          {loading && <div style={{ opacity: 0.75 }}>Loading from Hyacinth API…</div>}
+          {!loading && error && <div style={{ color: '#ef4444', fontWeight: 800 }}>{error}</div>}
         </div>
       </div>
 
       <div className="dashLayout">
         <div className="dashMain">
-          <div className="grid gridNoUpdate">
-            <section className="panel p-att">
-              <div className="panelHead">ATTENDANCE</div>
-              <div className="panelBody panelBodyFill">
-                <AttendancePie a={att.absent} b={att.present} c={att.late} />
-              </div>
-            </section>
+          {/* KPI BAR */}
+          <div className="topBar">
+            <div className="kpi">
+              <div className="kpiLabel">TOTAL EMPLOYEES</div>
+              <div className="kpiValue">{data.total}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpiLabel">PRESENT</div>
+              <div className="kpiValue">{data.present}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpiLabel">ABSENT</div>
+              <div className="kpiValue">{data.absent}</div>
+            </div>
+            <div className="kpi">
+              <div className="kpiLabel">LIVE AGENTS</div>
+              <div className="kpiValue">{data.live}</div>
+            </div>
+          </div>
 
-            <section className="panel p-perf">
-              <div className="panelHead">PERFORMANCE</div>
-              <div className="panelBody panelBodyFill">
-                <PerformanceBars items={dashboardData.performance} />
-              </div>
-            </section>
+          {/* MAIN GRID */}
+          <div className="grid">
+            {/* Attendance Panel */}
+            <div className="panel p-att">
+              <div className="panelHead">Attendance</div>
+              <div className="panelBody">
+                <div className="attWrap">
+                  <div className="attPie" style={pieStyle}>
+                    <div className="attHole" />
+                  </div>
 
-            <section className="panel p-heat">
-              <div className="panelHead">JOB SATISFACTION</div>
-              <div className="panelBody panelBodyFill">
-                <HeatmapTable data={dashboardData.heatData} cols={dashboardData.heatCols} />
-              </div>
-            </section>
-
-            <section className="panel p-mini">
-              <div className="panelHead">&nbsp;</div>
-              <div className="panelBody panelBodyFill">
-                <MiniBars items={dashboardData.mini} />
-              </div>
-            </section>
-
-            <section className="panel p-stats">
-              <div className="panelHead center">AGENT STATS</div>
-              <div className="panelBody panelBodyFill">
-                <div className="donutRow">
-                  {dashboardData.agentStats.map((a) => (
-                    <Donut key={a.name} value={a.value} label={a.name} sub={a.sub} />
-                  ))}
+                  <div className="attLegend">
+                    <div className="attLegendRow">
+                      <span className="dot blue" />
+                      <span>Present</span>
+                      <span className="attNum">{data.present}</span>
+                    </div>
+                    <div className="attLegendRow">
+                      <span className="dot red" />
+                      <span>Absent</span>
+                      <span className="attNum">{data.absent}</span>
+                    </div>
+                    <div className="attLegendRow">
+                      <span className="dot orange" />
+                      <span>Live</span>
+                      <span className="attNum">{data.live}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </section>
+            </div>
+
+            {/* Performance Panel */}
+            <div className="panel p-perf">
+              <div className="panelHead">Performance</div>
+              <div className="panelBody panelBodyFill">
+                <div className="perfBars perfBarsFull">
+                  {data.perf.length === 0 ? (
+                    <div style={{ color: 'rgba(255,255,255,0.75)', fontWeight: 800, fontSize: 12, padding: 12 }}>
+                      No data
+                    </div>
+                  ) : (
+                    data.perf.map((p) => {
+                      const pct = data.maxWorked ? clamp01(p.workedMin / data.maxWorked) : 0
+                      const h = Math.round(pct * 100)
+                      return (
+                        <div key={p.id} className="perfBar perfBarFull" title={`${p.name} • ${Math.round(p.workedMin / 60)}h`}>
+                          <div className="perfBarTick">{Math.round(p.workedMin / 60)}h</div>
+                          <div className="perfBarFill" style={{ height: `${h}%` }} />
+                          <div className="perfBarLabel">{p.name}</div>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Heatmap Panel */}
+            <div className="panel p-heat">
+              <div className="panelHead">Heatmap</div>
+              <div className="panelBody panelBodyFill">
+                <div className="heatWrap">
+                  <table className="heatTable">
+                    <thead>
+                      <tr>
+                        <th>Role / Name</th>
+                        <th>Dept</th>
+                        <th>Days</th>
+                        <th>Shift</th>
+                        <th>Presence</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.heatRows.length === 0 ? (
+                        <tr>
+                          <td className="heatRole" colSpan={5}>
+                            No data
+                          </td>
+                        </tr>
+                      ) : (
+                        data.heatRows.map((r) => (
+                          <tr key={r.id}>
+                            <td className="heatRole">{r.role}</td>
+                            <td>{r.department}</td>
+                            <td>{r.scheduleDays}</td>
+                            <td>{r.time}</td>
+                            <td>{r.presence}</td>
+                          </tr>
+                        ))
+                      )}
+                      {data.heatRows.length > 0 && (
+                        <tr>
+                          <td className="heatTotal">Total</td>
+                          <td className="heatTotal" colSpan={4} style={{ textAlign: 'right' }}>
+                            {data.total}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom mini bars */}
+            <div className="panel p-mini">
+              <div className="panelHead">Departments</div>
+              <div className="panelBody">
+                <div className="miniBars">
+                  {data.deptBars.length === 0 ? (
+                    <div style={{ color: 'rgba(255,255,255,0.75)', fontWeight: 800, fontSize: 12 }}>No data</div>
+                  ) : (
+                    data.deptBars.map((d) => {
+                      const pct = data.deptMax ? clamp01(d.count / data.deptMax) : 0
+                      return (
+                        <div key={d.dept} className="miniBarRow">
+                          <div>{d.dept}</div>
+                          <div className="miniBarTrack">
+                            <div className="miniBarFill" style={{ width: `${Math.round(pct * 100)}%` }} />
+                          </div>
+                          <div className="miniBarValue">{d.count}</div>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom agent stats donuts */}
+            <div className="panel p-stats">
+              <div className="panelHead center">Agent Stats</div>
+              <div className="panelBody">
+                <div className="donutRow">
+                  {data.donutPeople.length === 0 ? (
+                    <div style={{ color: 'rgba(255,255,255,0.75)', fontWeight: 800, fontSize: 12 }}>
+                      No data
+                    </div>
+                  ) : (
+                    data.donutPeople.map((p) => {
+                      const deg = Math.round(p.pct * 360)
+                      const donutStyle = {
+                        background: `conic-gradient(#f59e0b 0deg ${deg}deg, rgba(255,255,255,0.10) ${deg}deg 360deg)`,
+                      }
+                      const label = p.name
+                      const sub = p.sub
+                      const value = `${Math.round(p.pct * 100)}%`
+                      return (
+                        <div key={p.id} className="donutCard">
+                          <div className="donut" style={donutStyle}>
+                            <div className="donutInner">
+                              <div className="donutValue">{value}</div>
+                            </div>
+                          </div>
+                          <div className="donutMeta">
+                            <div className="donutLabel">{label}</div>
+                            <div className="donutSub">{sub}</div>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
+        {/* Update sidebar — keep visible 10% */}
         <aside className="updateSidebar">
-          <div className="panelHead">UPDATE</div>
-          <div className="panelBody updateBody">
-            <div className="updateBox">
-              {dashboardData.updates.map((item) => (
-                <div key={item} className="updateItem">
-                  {item}
+          <div className="panelHead center">Updates</div>
+          <div className="panelBody">
+            <div className="updateBody">
+              <div className="updateBox">
+                <div className="updateItem">API Status</div>
+                <div style={{ fontWeight: 800 }}>
+                  {loading ? 'Loading…' : error ? 'Error' : 'Connected'}
                 </div>
-              ))}
+
+                <div className="updateItem">Live Agents</div>
+                <div style={{ fontWeight: 800 }}>{data.live}</div>
+
+                <div className="updateItem">Last Refresh</div>
+                <div style={{ fontWeight: 800 }}>{new Date().toLocaleString()}</div>
+              </div>
             </div>
           </div>
         </aside>

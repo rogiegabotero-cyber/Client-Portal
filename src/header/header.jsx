@@ -1,26 +1,23 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react'
 import './header.css'
 import { Bell } from 'lucide-react'
-import { uiData } from '../data/dummyData'
 
 const Header = () => {
   const [notifOpen, setNotifOpen] = useState(false)
   const notifRef = useRef(null)
 
-  // Defensive: prevents runtime crashes if uiData/notifications isn't available for any reason
+  // Replace uiData with a safe local notifications list
+  // Later you can fetch/receive this via props if needed.
   const notifications = useMemo(() => {
-    if (!uiData) return []
-    if (!uiData.notifications) return []
-    if (!Array.isArray(uiData.notifications)) return []
-    return uiData.notifications
+    return [] // no notifications for now
   }, [])
 
   const hasNotifications = notifications.length > 0
 
   // Close panel if clicking outside
   useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (notifRef.current && !notifRef.current.contains(e.target)) {
+    const handleClickOutside = (event) => {
+      if (notifRef.current && !notifRef.current.contains(event.target)) {
         setNotifOpen(false)
       }
     }

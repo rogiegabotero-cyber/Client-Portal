@@ -1,138 +1,109 @@
-import { useEffect, useState } from 'react'
-import Header from './header/header'
-import Sidebar from './header/Sidebar'
-import Dashboard from './components/dashboard'
-import ClockIn from './components/ClockIn'
-import AttendancePage from './components/AttendancePage'
-import AssignmentPage from './components/AssignmentPage'
-import SchedulePage from './components/SchedulePage'
-import HoursPage from './components/HoursPage'
-import './App.css'
+// src/App.jsx
+import React, { useEffect, useState } from "react";
 
-import { GRACE_MINUTES, createInitialEmployees } from './data/dummyData'
-import { createHyacinthAttendanceApi } from './api/hyacinthAttendanceApi'
-import { mapHyacinthDataToEmployees } from './lib/hyacinthTransformers'
+import Header from "./header/header";
+import Sidebar from "./header/Sidebar";
 
-const toArray = (value) => {
-  if (Array.isArray(value)) return value
-  if (Array.isArray(value?.items)) return value.items
-  if (Array.isArray(value?.users)) return value.users
-  if (Array.isArray(value?.results)) return value.results
-  return []
-}
+import SchedulePage from "./components/SchedulePage";
+import AttendancePage from "./components/AttendancePage";
+import '../src/app.css'
+// import DashboardPage from "./components/DashboardPage"; // optional
 
-function App() {
-  const [collapsed, setCollapsed] = useState(false)
-  const [activePage, setActivePage] = useState('dashboard')
+export default function App() {
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  // ✅ SINGLE SOURCE OF TRUTH
-  const [employees, setEmployees] = useState(() => createInitialEmployees())
+  // ✅ sidebar state
+  const [collapsed, setCollapsed] = useState(false);
+  const [activePage, setActivePage] = useState("dashboard"); // default
 
   useEffect(() => {
-    const apiKey = import.meta.env.VITE_HYACINTH_API_KEY
-    const departmentId = import.meta.env.VITE_HYACINTH_DEPARTMENT_ID
+    const apiKey = import.meta.env.VITE_HYACINTH_API_KEY;
+    const departmentId = import.meta.env.VITE_HYACINTH_DEPARTMENT_ID;
 
     if (!apiKey || !departmentId) {
-      return
+      setError("Missing VITE_HYACINTH_API_KEY or VITE_HYACINTH_DEPARTMENT_ID in .env");
+      return;
     }
 
-    const api = createHyacinthAttendanceApi({ apiKey })
-    let cancelled = false
+    let cancelled = false;
 
-    const loadEmployees = async () => {
+    const loadUsersByDepartment = async () => {
+      setLoading(true);
+      setError("");
+
       try {
-        const usersResponse = await api.getUsersByDepartment(departmentId)
-        const users = toArray(usersResponse)
+        const response = await fetch(
+          "https://us-central1-hyacinthattendance.cloudfunctions.net/getUsersByDepartment",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+            },
+            body: JSON.stringify({ apiKey, departmentId }),
+          }
+        );
 
-        if (users.length === 0) {
-          return
-        }
+        const result = await response.json();
+        if (!result.success) throw new Error(result.message);
 
-        const schedules = await Promise.allSettled(
-          users.map(async (user) => {
-            const userId = user?.userId || user?.id || user?.uid || user?.employeeId
-            if (!userId) return null
-
-            const schedule = await api.getUserSchedule(userId)
-            return { userId, schedule }
-          })
-        )
-
-        const today = new Date().toISOString().slice(0, 10)
-        const attendanceLogsResponse = await api.getAttendanceLogs({ startDate: today, endDate: today })
-        const attendanceLogs = toArray(attendanceLogsResponse)
-
-        const schedulesByUserId = schedules
-          .filter((result) => result.status === 'fulfilled' && result.value)
-          .reduce((acc, result) => {
-            acc[result.value.userId] = result.value.schedule
-            return acc
-          }, {})
-
-        const logsByUserId = Array.isArray(attendanceLogs)
-          ? attendanceLogs.reduce((acc, log) => {
-              const logUserId = log?.userId || log?.id || log?.uid || log?.employeeId
-              if (logUserId) acc[logUserId] = log
-              return acc
-            }, {})
-          : {}
-
-        const mappedEmployees = mapHyacinthDataToEmployees({
-          users,
-          schedulesByUserId,
-          logsByUserId
-        })
-
-        if (!cancelled && mappedEmployees.length > 0) {
-          setEmployees(mappedEmployees)
-        }
-      } catch (error) {
-        console.error('Failed to load Hyacinth Attendance API data:', error)
+        if (!cancelled) setEmployees(Array.isArray(result.data) ? result.data : []);
+      } catch (e) {
+        if (!cancelled) setError(e?.message || "Failed to load users by department");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    }
+    };
 
-    loadEmployees()
-
+    loadUsersByDepartment();
     return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const renderPage = () => {
-    switch (activePage) {
-      case 'dashboard':
-        return <Dashboard employees={employees} graceMinutes={GRACE_MINUTES} />
-      case 'clockin':
-        return <ClockIn employees={employees} setEmployees={setEmployees} />
-      case 'attendance':
-        return <AttendancePage employees={employees} graceMinutes={GRACE_MINUTES} />
-      case 'assignment':
-        return <AssignmentPage employees={employees} />
-      case 'schedule':
-        return <SchedulePage employees={employees} />
-      case 'hours':
-        return <HoursPage employees={employees} graceMinutes={GRACE_MINUTES} />
-      default:
-        return <Dashboard employees={employees} graceMinutes={GRACE_MINUTES} />
-    }
-  }
-
+      cancelled = true;
+    };
+  }, []);
+  
   return (
-    <div className={`app-layout ${collapsed ? 'collapsed' : ''}`}>
+    <div style={{ display: "flex", minHeight: "100vh" }}>
+      {/* ✅ Sidebar always visible */}
       <Sidebar
         collapsed={collapsed}
         setCollapsed={setCollapsed}
         activePage={activePage}
         setActivePage={setActivePage}
-        employees={employees} // ✅ sidebar must derive live agents from employees
+        employees={employees}
       />
 
-      <div className="app-content">
-        <Header collapsed={collapsed} />
-        <main className="main-content">{renderPage()}</main>
+      {/* ✅ Main area */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        {/* ✅ Header always visible */}
+        <Header />
+
+        {/* Status */}
+        {loading && <p style={{ padding: 16 }}>Loading users…</p>}
+        {error && <p style={{ padding: 16, color: "red" }}>{error}</p>}
+
+        {/* ✅ Page content changes */}
+        <main style={{ flex: 1 }}>
+          <div style={{ display: activePage === "dashboard" ? "block" : "none", padding: 16 }}>
+            <h1>Dashboard</h1>
+            <p>Select Attendance or Schedule from the sidebar.</p>
+          </div>
+
+          <div style={{ display: activePage === "attendance" ? "block" : "none" }}>
+            <AttendancePage employees={employees} />
+          </div>
+
+          <div style={{ display: activePage === "schedule" ? "block" : "none" }}>
+            <SchedulePage employees={employees} />
+          </div>
+
+          <div style={{ display: ["assignment","hours","perf_daily","perf_weekly","perf_monthly","invoices"].includes(activePage) ? "block" : "none", padding: 16 }}>
+            <h1>{activePage}</h1>
+            <p>Page not implemented yet.</p>
+          </div>
+        </main>
       </div>
     </div>
-  )
+  );
 }
-
-export default App

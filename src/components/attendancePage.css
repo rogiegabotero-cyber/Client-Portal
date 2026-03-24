@@ -1,0 +1,674 @@
+/* src/components/attendancePage.css */
+
+/* ---------- Theme ---------- */
+:root{
+  --bg0:#0b1020;
+  --bg1:#0f1730;
+  --card:rgba(255,255,255,.06);
+  --card2:rgba(255,255,255,.08);
+  --border:rgba(255,255,255,.12);
+  --text:rgba(255,255,255,.92);
+  --muted:rgba(255,255,255,.65);
+  --muted2:rgba(255,255,255,.48);
+
+  --blue:#60a5fa;
+  --cyan:#22d3ee;
+  --green:#34d399;
+  --amber:#fbbf24;
+  --red:#fb7185;
+  --purple:#a78bfa;
+
+  --shadow: 0 18px 60px rgba(0,0,0,.45);
+  --shadow2: 0 12px 30px rgba(0,0,0,.35);
+}
+
+/* ---------- Page Shell ---------- */
+.attx{
+  min-width:0;
+  padding:18px;
+  color:var(--text);
+  background:
+    radial-gradient(1200px 800px at 20% 10%, rgba(96,165,250,.20), transparent 55%),
+    radial-gradient(900px 600px at 90% 20%, rgba(167,139,250,.18), transparent 50%),
+    radial-gradient(1000px 700px at 30% 90%, rgba(34,211,238,.14), transparent 55%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ---------- Topbar ---------- */
+.attxTop{
+  display:flex;
+  flex-direction: row;
+  justify-content: space-between;
+  gap:14px;
+}
+
+.attxTopRight{
+  display:flex;
+  flex-direction: column;
+}
+
+/* was grid, now flex */
+.attxTitleWrap{
+  display:flex;
+  flex-direction: column;
+  gap:6px;
+}
+
+/* keep existing */
+.attxTitle{
+  font-weight: 950;
+  letter-spacing:.8px;
+  text-transform:uppercase;
+  font-size:18px;
+}
+
+.attxSub{
+  font-size:12px;
+  color:var(--muted);
+  font-weight:800;
+  min-height: 16px;
+}
+
+/* ---------- Controls ---------- */
+.attxControls{
+  display:flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+
+}
+
+/* ✅ Fullscreen overlay with blur */
+.attxLoadingOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+
+  /* dark glass overlay */
+  background: rgba(0, 0, 0, 0.35);
+
+  /* blur everything behind */
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  /* subtle fade-in */
+  animation: attxFadeIn 120ms ease-out;
+}
+
+@keyframes attxFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ✅ Center modal */
+.attxLoadingModal {
+  width: min(420px, calc(100vw - 32px));
+  padding: 18px 18px;
+  border-radius: 14px;
+
+  background: rgba(15, 15, 18, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+
+  text-align: center;
+}
+
+/* ✅ Spinner */
+.attxSpinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(255, 255, 255, 0.9);
+  animation: attxSpin 0.9s linear infinite;
+}
+
+@keyframes attxSpin {
+  to { transform: rotate(360deg); }
+}
+
+.attxLoadingText {
+  font-weight: 900;
+  letter-spacing: 0.2px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.attxLoadingSub {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.attxField{ 
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.attxLabel{
+  font-size:11px;
+  font-weight:950;
+  text-transform:uppercase;
+  letter-spacing:.45px;
+  color:var(--muted);
+}
+
+
+.attxInput{
+  height:38px;
+  padding:0 12px;
+  border-radius:12px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,.06);
+  color:var(--text);
+  font-weight:900;
+  font-size:12px;
+  outline:none;
+  backdrop-filter: blur(10px);
+}
+.attxInput::placeholder{ color: rgba(255,255,255,.45); }
+
+.attxInput:focus{
+  border-color: rgba(96,165,250,.55);
+  box-shadow: 0 0 0 4px rgba(96,165,250,.18);
+}
+
+.attxBtn{
+  height:38px;
+  padding:0 14px;
+  border-radius:12px;
+  border:1px solid rgba(96,165,250,.35);
+  background: linear-gradient(180deg, rgba(96,165,250,.20), rgba(96,165,250,.10));
+  color:var(--text);
+  font-weight:950;
+  letter-spacing:.3px;
+  cursor:pointer;
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  margin:0 5px;
+}
+.attxBtn:hover{ transform: translateY(-1px); box-shadow: var(--shadow2); filter: brightness(1.05); }
+.attxBtn:disabled{ opacity:.6; cursor:not-allowed; transform:none; box-shadow:none; }
+
+/* ✅ keeps Reload vs Loading… from changing layout */
+.attxBtnReload{
+  min-width: 110px;
+  text-align: center;
+}
+
+.attxBtn.active {
+  outline: 2px solid rgba(255,255,255,.4);
+  transform: translateY(-1px);
+}
+
+.attxPill{
+  height:38px;
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:0 12px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,.05);
+  font-weight:950;
+  font-size:12px;
+  color:var(--muted);
+
+  /* ✅ prevent width changes from causing reflow */
+  min-width: 90px;
+  justify-content: center;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* ---------- Alerts ---------- */
+.attxAlert{
+  margin-top:12px;
+  border:1px solid rgba(251,113,133,.35);
+  background: rgba(251,113,133,.10);
+  color: rgba(255,255,255,.92);
+  border-radius:14px;
+  padding:12px 14px;
+  font-weight:900;
+  box-shadow: var(--shadow2);
+}
+
+/* ---------- KPI Tiles ---------- */
+.attxKpis{
+  margin-top:14px;
+  display:grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap:12px;
+}
+
+.attxTile{
+  border:1px solid var(--border);
+  background: rgba(255,255,255,.06);
+  border-radius:16px;
+  padding:14px;
+  box-shadow: var(--shadow2);
+  backdrop-filter: blur(10px);
+  position:relative;
+  overflow:hidden;
+}
+.attxTile::before{
+  content:"";
+  position:absolute;
+  inset:-60px -60px auto auto;
+  width:180px; height:180px;
+  background: radial-gradient(circle at 30% 30%, rgba(96,165,250,.30), transparent 55%);
+  transform: rotate(12deg);
+  pointer-events:none;
+}
+
+.attxTileLabel{
+  font-size:11px;
+  font-weight:950;
+  text-transform:uppercase;
+  letter-spacing:.55px;
+  color:var(--muted);
+}
+.attxTileValue{
+  margin-top:10px;
+  font-size:30px;
+  font-weight:950;
+  letter-spacing:.3px;
+}
+.attxTileHint{
+  margin-top:8px;
+  font-size:12px;
+  font-weight:800;
+  color:var(--muted2);
+}
+
+/* ---------- Table Card ---------- */
+.attxCard{
+  margin-top:14px;
+  border:1px solid var(--border);
+  background: rgba(255,255,255,.06);
+  border-radius:16px;
+  overflow:hidden;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+}
+
+.attxCardHead{
+  padding:12px 14px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  border-bottom:1px solid rgba(255,255,255,.10);
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+}
+
+.attxCardTitle{
+  font-size:11px;
+  font-weight:950;
+  letter-spacing:.65px;
+  text-transform:uppercase;
+  color:var(--muted);
+}
+
+.attxTableWrap{
+  overflow:auto;
+}
+
+.attxTable{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  min-width: 980px;
+}
+
+.attxTable th{
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  text-align:left;
+  padding:12px 14px;
+  font-size:11px;
+  font-weight:950;
+  text-transform:uppercase;
+  letter-spacing:.5px;
+  color: rgba(255,255,255,.72);
+  background: rgba(10,16,32,.85);
+  border-bottom:1px solid rgba(255,255,255,.12);
+}
+
+.attxTable td{
+  padding:12px 14px;
+  border-bottom:1px solid rgba(255,255,255,.08);
+  font-size:12px;
+  font-weight:850;
+  color: rgba(255,255,255,.88);
+  vertical-align:top;
+}
+
+.attxTr:hover td{
+  background: rgba(96,165,250,.06);
+}
+
+/* ---------- Person cell ---------- */
+.attxPerson{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width: 260px;
+}
+.attxAvatar{
+  width:38px; height:38px;
+  border-radius:14px;
+  display:grid;
+  place-items:center;
+  font-weight:950;
+  letter-spacing:.4px;
+  color: rgba(255,255,255,.92);
+  border:1px solid rgba(255,255,255,.14);
+  background: linear-gradient(135deg, rgba(96,165,250,.28), rgba(167,139,250,.18));
+}
+.attxName{ font-weight:950; letter-spacing:.2px; }
+.attxEmail{ margin-top:2px; font-size:11px; color: var(--muted); font-weight:850;}
+#attxEmail{ display: none;}
+/* ---------- Badges ---------- */
+/* ---------- Badges ---------- */
+/* ✅ Status badge (renamed to avoid global .badge collisions) */
+.attxBadge{
+  all: unset;                 /* HARD reset - kills bootstrap/admin badge rules */
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  font-size:11px;
+  font-weight:950;
+  text-transform:uppercase;
+  letter-spacing:.35px;
+  white-space:nowrap;
+  color: rgba(255,255,255,.92);
+}
+
+.attxDot{
+  width:8px;
+  height:8px;
+  border-radius:999px;
+  background: currentColor;
+  opacity:.9;
+}
+
+/* variants from your statusBadgeClass() */
+.attxBadge.early{ background: rgba(59,130,246,.14); border-color: rgba(59,130,246,.26); }
+.attxBadge.ontime{ background: rgba(34,197,94,.14); border-color: rgba(34,197,94,.26); }
+.attxBadge.late{ background: rgba(245,158,11,.14); border-color: rgba(245,158,11,.26); }
+.attxBadge.done{ background: rgba(168,85,247,.14); border-color: rgba(168,85,247,.26); }
+.attxBadge.notimeout{ background: rgba(239,68,68,.14); border-color: rgba(239,68,68,.26); }
+.attxBadge.nosched{ background: rgba(148,163,184,.14); border-color: rgba(148,163,184,.26); }
+.attxBadge.warn{ background: rgba(251,191,36,.14); border-color: rgba(251,191,36,.26); }
+/* ---------- timeDiff chip ---------- */
+.chip{
+  display:inline-flex;
+  align-items:center;
+  padding:6px 10px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:950;
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  white-space:nowrap;
+}
+.chip.good{ border-color: rgba(52,211,153,.25); background: rgba(52,211,153,.10); }
+.chip.mid{ border-color: rgba(251,191,36,.25); background: rgba(251,191,36,.10); }
+.chip.bad{ border-color: rgba(251,113,133,.28); background: rgba(251,113,133,.10); }
+
+/* ---------- Expand ---------- */
+.attxExpand{
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.88);
+  border-radius:12px;
+  padding:8px 10px;
+  font-size:11px;
+  font-weight:950;
+  cursor:pointer;
+  transition: transform .12s ease, background .12s ease;
+}
+.attxExpand:hover{ transform: translateY(-1px); background: rgba(255,255,255,.10); }
+
+.attxJson{
+  margin:0;
+  padding:12px 14px;
+  background: rgba(0,0,0,.45);
+  border-top:1px solid rgba(255,255,255,.10);
+  color: rgba(167,243,208,.95);
+  font-size:12px;
+  font-weight:850;
+  overflow:auto;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 1200px){
+  .attxKpis{ grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (max-width: 720px){
+  .attx{ padding:14px; border-radius:14px; }
+  .attxTable{ min-width: 860px; }
+}
+
+.attxDrawerBackdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 999;
+}
+
+.attxDrawer{
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: min(520px, 92vw);
+  background: #0f1218;
+  border-left: 1px solid rgba(255,255,255,.08);
+  z-index: 1000;
+
+  transform: translateX(100%);
+  transition: transform 220ms ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.attxDrawer.open{
+  transform: translateX(0);
+}
+
+.attxDrawerHead{
+  padding: 14px 16px;
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+
+.attxDrawerTitle{
+  font-weight: 900;
+  font-size: 14px;
+}
+
+.attxDrawerSub{
+  margin-top: 2px;
+  font-size: 12px;
+  opacity: .75;
+  font-weight: 700;
+}
+
+.attxDrawerClose{
+  background: transparent;
+  border: 0;
+  color: rgba(255,255,255,.8);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.attxDrawerBody{
+  padding: 14px 16px;
+  overflow: auto;
+  flex: 1;
+}
+
+.attxDrawerJsonTitle{
+  font-size: 12px;
+  font-weight: 900;
+  opacity: .75;
+  margin-bottom: 8px;
+}
+
+.attxDrawerJson{
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* === Drawer details UI === */
+.attxDetailChips{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:12px;
+}
+
+.attxChip{
+  display:inline-flex;
+  align-items:center;
+  padding:6px 10px;
+  border-radius:999px;
+  font-weight:900;
+  font-size:12px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.10);
+  color: rgba(255,255,255,.85);
+}
+
+.attxChipGood{
+  background: rgba(34,197,94,.12);
+  border-color: rgba(34,197,94,.22);
+  color: rgba(220,255,235,.95);
+}
+
+.attxDetailGrid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:10px;
+}
+
+@media (max-width: 520px){
+  .attxDetailGrid{ grid-template-columns: 1fr; }
+}
+
+.attxDetailCard{
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.attxDetailCard.full{
+  grid-column: 1 / -1;
+}
+
+.attxDetailLabel{
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+  opacity: .65;
+}
+
+.attxDetailValue{
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 900;
+  color: rgba(255,255,255,.92);
+  word-break: break-word;
+}
+
+.attxDetailValue.mono{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  opacity: .9;
+}
+
+/* Collapsible raw JSON */
+.attxRawDetails{
+  margin-top: 14px;
+  background: rgba(255,255,255,.04);
+  border: 1px dashed rgba(255,255,255,.14);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.attxRawSummary{
+  cursor: pointer;
+  font-weight: 950;
+  font-size: 12px;
+  opacity: .8;
+}
+
+.attxRawJson{
+  margin-top: 10px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.badge.early{
+  background: rgba(59,130,246,.14);
+  border: 1px solid rgba(59,130,246,.26);
+}
+.badge.ontime{
+  background: rgba(34,197,94,.14);
+  border: 1px solid rgba(34,197,94,.26);
+}
+.badge.late{
+  background: rgba(245,158,11,.14);
+  border: 1px solid rgba(245,158,11,.26);
+}
+.badge.done{
+  background: rgba(168,85,247,.14);
+  border: 1px solid rgba(168,85,247,.26);
+}
+.badge.notimeout{
+  background: rgba(239,68,68,.14);
+  border: 1px solid rgba(239,68,68,.26);
+}
+.badge.nosched{
+  background: rgba(148,163,184,.14);
+  border: 1px solid rgba(148,163,184,.26);
+}

@@ -6,7 +6,7 @@
   padding: 18px 18px 60px;
   display: flex;
   flex-direction: column;
-  position: fixed;
+  position: sticky;
   left: 0;
   top: 0;
   transition: width 0.25s ease;

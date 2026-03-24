@@ -1,190 +1,127 @@
 import React, { useMemo, useState } from 'react'
 import './hours.css'
-import { DUMMY_SHIFT_HOURS } from '../data/dummyData'
 
-/** ---------- helpers ---------- */
 const toMinutes = (hhmm) => {
-  const [h, m] = (hhmm || '00:00').split(':').map(Number)
+  if (!hhmm || typeof hhmm !== 'string') return null
+  const match = hhmm.match(/(\d{1,2}):(\d{2})/)
+  if (!match) return null
+  const h = Number(match[1])
+  const m = Number(match[2])
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null
   return h * 60 + m
 }
 
-const nowMinutes = () => {
-  const d = new Date()
-  return d.getHours() * 60 + d.getMinutes()
+const fmtHM = (mins) => {
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return `${h}h ${String(m).padStart(2, '0')}m`
 }
 
-const minutesToHHMM = (mins) => {
-  const safe = Math.max(0, mins || 0)
-  const h = Math.floor(safe / 60)
-  const m = safe % 60
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+const clamp01 = (n) => Math.max(0, Math.min(1, n))
+
+const computePlannedMinutes = (e) => {
+  const s = e?.schedule
+  const sIn = toMinutes(s?.start)
+  const sOut = toMinutes(s?.end)
+  if (sIn !== null && sOut !== null && sOut > sIn) return sOut - sIn
+  return 8 * 60
 }
 
-// Dummy shift end = start + DUMMY_SHIFT_HOURS
-const shiftEndFromStart = (startHHMM) => {
-  const start = toMinutes(startHHMM || '09:00')
-  const end = start + DUMMY_SHIFT_HOURS * 60
-  const h = Math.floor((end % (24 * 60)) / 60)
-  const m = end % 60
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+const computeWorkedMinutes = (e) => {
+  const inMin = toMinutes(e?.clockIn)
+  const outMin = toMinutes(e?.clockOut)
+
+  // If both exist, use real worked time.
+  if (inMin !== null && outMin !== null && outMin > inMin) return outMin - inMin
+
+  // If clocked in but not out, use "so far" if same day time style; else approximate.
+  if (inMin !== null && (outMin === null || outMin <= inMin)) {
+    // minutes since midnight now
+    const now = new Date()
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    if (nowMin > inMin) return nowMin - inMin
+    return Math.floor(computePlannedMinutes(e) * 0.5)
+  }
+
+  // no clock
+  return 0
 }
 
-// display HH:MM like Schedule
-const fmtHHMM = (hhmm) => {
-  const [h, m] = (hhmm || '00:00').split(':').map(Number)
-  const d = new Date()
-  d.setHours(h, m, 0, 0)
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+const statusFor = (e) => {
+  const hasIn = !!e?.clockIn
+  const hasOut = !!e?.clockOut
+
+  if (hasIn && !hasOut) return { dot: 'working', pill: 'live', label: 'Working' }
+  if (hasIn && hasOut) return { dot: 'complete', pill: 'off', label: 'Complete' }
+
+  // If explicitly absent
+  if ((e?.presence || '').toLowerCase() === 'absent') return { dot: 'noclock', pill: 'absent', label: 'Absent' }
+
+  return { dot: 'noclock', pill: 'off', label: 'No Clock' }
 }
 
-const fmtTime = (d) => {
-  if (!d) return '—'
-  const dd = d instanceof Date ? d : new Date(d)
-  if (Number.isNaN(dd.getTime())) return '—'
-  return dd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
+const HoursPage = ({ employees = [], loading = false, error = '' }) => {
+  // Filters: all | working | complete | noclock
+  const [filter, setFilter] = useState('all')
 
-const clamp = (n, min, max) => Math.max(min, Math.min(max, n))
+  const model = useMemo(() => {
+    const list = Array.isArray(employees) ? employees : []
 
-const isAgentLive = (e) => e.presence !== 'absent' && e.isLive === true
-const isAgentOnBreak = (e) => isAgentLive(e) && e.onBreak === true
+    const rows = list.map((e) => {
+      const planned = computePlannedMinutes(e)
+      const worked = computeWorkedMinutes(e)
+      const pct = planned ? clamp01(worked / planned) : 0
 
-/** ---------- period helpers (UI only; data is still "today") ---------- */
-const PERIODS = [
-  { key: 'day', label: 'Today' },
-  { key: 'week', label: 'Week' },
-  { key: 'month', label: 'Month' },
-  { key: 'year', label: 'Year' }
-]
-
-// since we only have today data in `employees`, we can only "project" totals.
-// If later you add real historical logs, replace these multipliers with real aggregation.
-const periodMultiplier = (periodKey) => {
-  if (periodKey === 'week') return 5 // assume 5 workdays
-  if (periodKey === 'month') return 22 // rough workdays/month
-  if (periodKey === 'year') return 260 // rough workdays/year
-  return 1
-}
-
-const statusLabel = (b) => {
-  if (b === 'onShift') return 'On Shift'
-  if (b === 'later') return 'Later Today'
-  return 'Off'
-}
-
-const HoursPage = ({ employees = [], graceMinutes = 10 }) => {
-  // emphasize time period
-  const [period, setPeriod] = useState('day') // day | week | month | year
-  // keep Schedule-like bucket filter
-  const [bucketFilter, setBucketFilter] = useState('all') // all | onShift | later | off
-
-  /**
-   * rows: focus on worked minutes TODAY.
-   * - If agent is LIVE => worked = now - clockIn
-   * - If agent is NOT live (clocked out) => worked = shiftEnd - clockIn (dummy end)
-   * - If later or no clock-in => 0
-   *
-   * Bucket logic:
-   * - ABSENT => off
-   * - LIVE => onShift (always)
-   * - else => schedule-time based (onShift / later / off)
-   */
-  const rows = useMemo(() => {
-    const now = nowMinutes()
-
-    return employees.map((e) => {
-      const startHHMM = e.shiftStart || '09:00'
-      const start = toMinutes(startHHMM)
-      const endHHMM = shiftEndFromStart(startHHMM)
-      const end = toMinutes(endHHMM)
-      const isOvernight = end < start
-
-      // --- bucket logic (with LIVE override) ---
-      let bucket = 'off'
-
-      if (e.presence === 'absent') {
-        bucket = 'off'
-      } else if (isAgentLive(e)) {
-        bucket = 'onShift'
-      } else {
-        let isOn = false
-        if (!isOvernight) isOn = now >= start && now <= end
-        else isOn = now >= start || now <= end
-
-        if (isOn) bucket = 'onShift'
-        else if (now < start) bucket = 'later'
-        else bucket = 'off'
-      }
-
-      // clock-in mins (supports Date or ISO string)
-      const clockInDate = e.clockIn instanceof Date ? e.clockIn : e.clockIn ? new Date(e.clockIn) : null
-      const clockInM =
-        clockInDate && !Number.isNaN(clockInDate.getTime())
-          ? clockInDate.getHours() * 60 + clockInDate.getMinutes()
-          : null
-
-      // late minutes (only if not absent + has clock-in)
-      const lateMins =
-        e.presence !== 'absent' && clockInM !== null ? clamp(clockInM - (start + graceMinutes), 0, 24 * 60) : 0
-
-      // WORKED TODAY (the main KPI)
-      let workedMins = 0
-      if (e.presence !== 'absent' && clockInM !== null) {
-        if (isAgentLive(e)) {
-          // still working now
-          workedMins = clamp(now - clockInM, 0, 24 * 60)
-        } else {
-          // not live anymore: show final total (dummy shift end)
-          // NOTE: if overnight, this simplistic model will be imperfect; keep for now.
-          workedMins = clamp(end - clockInM, 0, 24 * 60)
-        }
-      }
-
-      const nominalShiftMins = DUMMY_SHIFT_HOURS * 60
-      const overtimeMins = clamp(workedMins - nominalShiftMins, 0, 24 * 60)
-
-      // "final total after client clocked out"
-      const isClockedOut = e.presence !== 'absent' && !isAgentLive(e) && clockInM !== null
-      const finalWorkedMins = isClockedOut ? workedMins : workedMins // kept explicit for clarity
+      const s = statusFor(e)
 
       return {
-        ...e,
-        _bucket: bucket,
-        _shiftEnd: endHHMM,
-        _clockInM: clockInM,
-        _workedMins: workedMins,
-        _finalWorkedMins: finalWorkedMins,
-        _lateMins: lateMins,
-        _overtimeMins: overtimeMins,
-        _clockedOut: isClockedOut
+        id: e.id,
+        name: e.name || '—',
+        role: e.role || '—',
+        department: e.department || '—',
+        clockIn: e.clockIn || '',
+        clockOut: e.clockOut || '',
+        planned,
+        worked,
+        pct,
+        status: s,
+        note: e.absentReason || '',
       }
     })
-  }, [employees, graceMinutes])
 
-  const grouped = useMemo(() => {
-    const g = { onShift: [], later: [], off: [] }
-    for (const r of rows) g[r._bucket].push(r)
-    return g
-  }, [rows])
+    const working = rows.filter((r) => r.status.dot === 'working')
+    const complete = rows.filter((r) => r.status.dot === 'complete')
+    const noclock = rows.filter((r) => r.status.dot === 'noclock')
 
-  const filtered = useMemo(() => {
-    if (bucketFilter === 'all') return rows
-    return rows.filter((r) => r._bucket === bucketFilter)
-  }, [rows, bucketFilter])
+    const filtered =
+      filter === 'working'
+        ? working
+        : filter === 'complete'
+          ? complete
+          : filter === 'noclock'
+            ? noclock
+            : rows
 
-  // totals based on selected period (projected)
-  const totals = useMemo(() => {
-    const mult = periodMultiplier(period)
-    const totalWorked = rows.reduce((sum, r) => sum + r._workedMins, 0) * mult
-    const totalLate = rows.reduce((sum, r) => sum + r._lateMins, 0) * mult
-    const totalOT = rows.reduce((sum, r) => sum + r._overtimeMins, 0) * mult
-    return { totalWorked, totalLate, totalOT }
-  }, [rows, period])
+    const totalWorked = rows.reduce((sum, r) => sum + r.worked, 0)
+    const totalPlanned = rows.reduce((sum, r) => sum + r.planned, 0)
+    const avgPct = totalPlanned ? Math.round((totalWorked / totalPlanned) * 100) : 0
 
-  // show per-agent value based on selected period (projected)
-  const rowWorkedForPeriod = (r) => r._workedMins * periodMultiplier(period)
-  const rowLateForPeriod = (r) => r._lateMins * periodMultiplier(period)
-  const rowOTForPeriod = (r) => r._overtimeMins * periodMultiplier(period)
+    return {
+      rows,
+      filtered,
+      counts: {
+        all: rows.length,
+        working: working.length,
+        complete: complete.length,
+        noclock: noclock.length,
+      },
+      totals: {
+        totalWorked,
+        totalPlanned,
+        avgPct,
+      },
+    }
+  }, [employees, filter])
 
   return (
     <div className="hrPage">
@@ -193,220 +130,208 @@ const HoursPage = ({ employees = [], graceMinutes = 10 }) => {
         <div>
           <div className="hrTitle">Hours</div>
           <div className="hrSub">
-            Emphasis: hours worked {period === 'day' ? 'today' : `this ${period}`} • Shift end is dummy (start + {DUMMY_SHIFT_HOURS} hrs)
+            {loading ? 'Loading from Hyacinth API…' : error ? `Error: ${error}` : 'Live from Hyacinth API'}
           </div>
         </div>
 
-        {/* Period filter */}
         <div className="hrFilters">
-          {PERIODS.map((p) => (
-            <button key={p.key} className={`hrChip ${period === p.key ? 'on' : ''}`} onClick={() => setPeriod(p.key)}>
-              {p.label}
-            </button>
-          ))}
+          <button
+            type="button"
+            className={`hrChip ${filter === 'all' ? 'on' : ''}`}
+            onClick={() => setFilter('all')}
+          >
+            All <span className="num">{model.counts.all}</span>
+          </button>
+
+          <button
+            type="button"
+            className={`hrChip ${filter === 'working' ? 'on' : ''}`}
+            onClick={() => setFilter('working')}
+          >
+            Working <span className="num">{model.counts.working}</span>
+          </button>
+
+          <button
+            type="button"
+            className={`hrChip ${filter === 'complete' ? 'on' : ''}`}
+            onClick={() => setFilter('complete')}
+          >
+            Complete <span className="num">{model.counts.complete}</span>
+          </button>
+
+          <button
+            type="button"
+            className={`hrChip ${filter === 'noclock' ? 'on' : ''}`}
+            onClick={() => setFilter('noclock')}
+          >
+            No Clock <span className="num">{model.counts.noclock}</span>
+          </button>
         </div>
       </div>
 
-      {/* Bucket filters */}
-      <div className="hrHeader" style={{ marginTop: 10 }}>
-        <div className="hrFilters">
-          <button className={`hrChip ${bucketFilter === 'all' ? 'on' : ''}`} onClick={() => setBucketFilter('all')}>
-            All <span className="num">{rows.length}</span>
-          </button>
-          <button className={`hrChip ${bucketFilter === 'onShift' ? 'on' : ''}`} onClick={() => setBucketFilter('onShift')}>
-            On Shift <span className="num">{grouped.onShift.length}</span>
-          </button>
-          <button className={`hrChip ${bucketFilter === 'later' ? 'on' : ''}`} onClick={() => setBucketFilter('later')}>
-            Later <span className="num">{grouped.later.length}</span>
-          </button>
-          <button className={`hrChip ${bucketFilter === 'off' ? 'on' : ''}`} onClick={() => setBucketFilter('off')}>
-            Off <span className="num">{grouped.off.length}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Summary (HH:MM) */}
+      {/* Summary */}
       <div className="hrSummary">
         <div className="hrCard">
           <div className="hrCardLabel">Total Worked</div>
-          <div className="hrCardValue">{minutesToHHMM(totals.totalWorked)}</div>
-          <div className="hrCardHint">Projected from today (no historical logs yet)</div>
+          <div className="hrCardValue">{fmtHM(model.totals.totalWorked)}</div>
+          <div className="hrCardHint">Sum of worked time (based on clocks)</div>
         </div>
+
         <div className="hrCard">
-          <div className="hrCardLabel">Total Late</div>
-          <div className="hrCardValue">{minutesToHHMM(totals.totalLate)}</div>
-          <div className="hrCardHint">Beyond {graceMinutes}-minute grace</div>
+          <div className="hrCardLabel">Planned</div>
+          <div className="hrCardValue">{fmtHM(model.totals.totalPlanned)}</div>
+          <div className="hrCardHint">Sum of scheduled shift durations</div>
         </div>
+
         <div className="hrCard">
-          <div className="hrCardLabel">Total Overtime</div>
-          <div className="hrCardValue">{minutesToHHMM(totals.totalOT)}</div>
-          <div className="hrCardHint">Beyond {DUMMY_SHIFT_HOURS}-hour nominal shift</div>
+          <div className="hrCardLabel">Utilization</div>
+          <div className="hrCardValue">{model.totals.avgPct}%</div>
+          <div className="hrCardHint">Worked ÷ Planned (approx)</div>
         </div>
       </div>
 
-      {/* Lists */}
+      {/* 3 Panels */}
       <div className="hrGrid">
-        {/* On Shift */}
-        <section className="hrPanel">
+        {/* Working */}
+        <div className="hrPanel">
           <div className="hrPanelHead">
-            On Shift <span className="count">{grouped.onShift.length}</span>
+            <span>Working</span>
+            <span className="count">{model.counts.working}</span>
           </div>
           <div className="hrPanelBody">
-            {grouped.onShift.map((r) => (
-              <div key={r.id} className="hrRow">
-                <span className="dot working" />
-                <div className="hrRowMain">
-                  <div className="hrRowName">{r.name}</div>
-                  <div className="hrRowMeta">
-                    {r.role} • {fmtHHMM(r.shiftStart)} - {fmtHHMM(r._shiftEnd)}
+            {model.rows.filter((r) => r.status.dot === 'working').length === 0 ? (
+              <div className="hrEmpty">No one currently working</div>
+            ) : (
+              model.rows
+                .filter((r) => r.status.dot === 'working')
+                .map((r) => (
+                  <div className="hrRow" key={r.id}>
+                    <span className="dot working" />
+                    <div>
+                      <div className="hrRowName">{r.name}</div>
+                      <div className="hrRowMeta">
+                        {r.role} • {r.department}
+                      </div>
+                      <div className="hrRowKpi">
+                        Clocked in: <b>{r.clockIn || '—'}</b>
+                      </div>
+                    </div>
+                    <div className="hrRowRight">
+                      <span className="pill live">Working</span>
+                    </div>
                   </div>
-                  <div className="hrRowKpi">
-                    Worked {period === 'day' ? 'today' : `(${period})`}:{' '}
-                    <b>{minutesToHHMM(rowWorkedForPeriod(r))}</b> • Late: <b>{minutesToHHMM(rowLateForPeriod(r))}</b> • OT:{' '}
-                    <b>{minutesToHHMM(rowOTForPeriod(r))}</b>
-                  </div>
-                </div>
-                <div className="hrRowRight">
-                  <span className={`pill ${isAgentLive(r) ? 'live' : 'off'}`}>{isAgentLive(r) ? 'Live' : 'Offline'}</span>
-                  {isAgentOnBreak(r) && <span className="pill break">Break</span>}
-                </div>
-              </div>
-            ))}
-            {grouped.onShift.length === 0 && <div className="hrEmpty">No agents currently on shift.</div>}
+                ))
+            )}
           </div>
-        </section>
+        </div>
 
-        {/* Later */}
-        <section className="hrPanel">
+        {/* Complete */}
+        <div className="hrPanel">
           <div className="hrPanelHead">
-            Later Today <span className="count">{grouped.later.length}</span>
+            <span>Complete</span>
+            <span className="count">{model.counts.complete}</span>
           </div>
           <div className="hrPanelBody">
-            {grouped.later.map((r) => (
-              <div key={r.id} className="hrRow">
-                <span className="dot later" />
-                <div className="hrRowMain">
-                  <div className="hrRowName">{r.name}</div>
-                  <div className="hrRowMeta">
-                    {r.role} • {fmtHHMM(r.shiftStart)} - {fmtHHMM(r._shiftEnd)}
+            {model.rows.filter((r) => r.status.dot === 'complete').length === 0 ? (
+              <div className="hrEmpty">No completed shifts</div>
+            ) : (
+              model.rows
+                .filter((r) => r.status.dot === 'complete')
+                .map((r) => (
+                  <div className="hrRow" key={r.id}>
+                    <span className="dot complete" />
+                    <div>
+                      <div className="hrRowName">{r.name}</div>
+                      <div className="hrRowMeta">
+                        {r.clockIn || '—'} → {r.clockOut || '—'}
+                      </div>
+                      <div className="hrRowKpi">
+                        Worked: <b>{fmtHM(r.worked)}</b>
+                      </div>
+                    </div>
+                    <div className="hrRowRight">
+                      <span className="pill off">Complete</span>
+                    </div>
                   </div>
-                  <div className="hrRowKpi">
-                    Starts: <b>{fmtHHMM(r.shiftStart)}</b> • Worked today: <b>{minutesToHHMM(r._workedMins)}</b>
-                  </div>
-                </div>
-                <div className="hrRowRight">
-                  <span className="pill later">Later</span>
-                </div>
-              </div>
-            ))}
-            {grouped.later.length === 0 && <div className="hrEmpty">No upcoming shifts.</div>}
+                ))
+            )}
           </div>
-        </section>
+        </div>
 
-        {/* Off */}
-        <section className="hrPanel">
+        {/* No Clock */}
+        <div className="hrPanel">
           <div className="hrPanelHead">
-            Off <span className="count">{grouped.off.length}</span>
+            <span>No Clock</span>
+            <span className="count">{model.counts.noclock}</span>
           </div>
           <div className="hrPanelBody">
-            {grouped.off.map((r) => (
-              <div key={r.id} className="hrRow">
-                <span className="dot complete" />
-                <div className="hrRowMain">
-                  <div className="hrRowName">{r.name}</div>
-                  <div className="hrRowMeta">
-                    {r.role} • {fmtHHMM(r.shiftStart)} - {fmtHHMM(r._shiftEnd)}
-                    {r.presence === 'absent' && r.absentReason ? ` • ${r.absentReason}` : ''}
+            {model.rows.filter((r) => r.status.dot === 'noclock').length === 0 ? (
+              <div className="hrEmpty">Everyone has time logs</div>
+            ) : (
+              model.rows
+                .filter((r) => r.status.dot === 'noclock')
+                .map((r) => (
+                  <div className="hrRow" key={r.id}>
+                    <span className="dot noclock" />
+                    <div>
+                      <div className="hrRowName">{r.name}</div>
+                      <div className="hrRowMeta">
+                        {r.role} • {r.department}
+                      </div>
+                      <div className="hrRowKpi">
+                        Planned: <b>{fmtHM(r.planned)}</b>
+                      </div>
+                    </div>
+                    <div className="hrRowRight">
+                      <span className={`pill ${(r.note || '').trim() ? 'absent' : 'off'}`}>
+                        {(r.note || '').trim() ? 'Absent' : 'No Clock'}
+                      </span>
+                    </div>
                   </div>
-                  <div className="hrRowKpi">
-                    {/* ✅ show final total clearly after clocked out */}
-                    {r._clockedOut ? (
-                      <>
-                        Final total today: <b>{minutesToHHMM(r._finalWorkedMins)}</b> • Clock-in: <b>{fmtTime(r.clockIn)}</b>
-                      </>
-                    ) : (
-                      <>
-                        Worked today: <b>{minutesToHHMM(r._workedMins)}</b> • Clock-in: <b>{fmtTime(r.clockIn)}</b>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="hrRowRight">
-                  <span className={`pill ${r.presence === 'absent' ? 'absent' : 'off'}`}>{r.presence === 'absent' ? 'Absent' : 'Off'}</span>
-                </div>
-              </div>
-            ))}
-            {grouped.off.length === 0 && <div className="hrEmpty">No off agents.</div>}
+                ))
+            )}
           </div>
-        </section>
+        </div>
       </div>
 
       {/* Table */}
       <div className="hrTableWrap">
-        <div className="hrTableHead">
-          Hours ({period === 'day' ? 'Today' : period.charAt(0).toUpperCase() + period.slice(1)} • Filtered)
-        </div>
-        <table className="hrTable">
-          <thead>
-            <tr>
-              <th>Agent</th>
-              <th>Role</th>
-              <th>Shift</th>
-              <th>Clock-in</th>
-              <th>Worked</th>
-              <th>Final Total</th>
-              <th>Late</th>
-              <th>OT</th>
-              <th>Status</th>
-              <th>Live</th>
-              <th>Break</th>
-              <th>Presence</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((r) => (
-              <tr key={r.id}>
-                <td className="tdName">{r.name}</td>
-                <td>{r.role}</td>
-                <td>
-                  {fmtHHMM(r.shiftStart)} - {fmtHHMM(r._shiftEnd)}
-                </td>
-                <td>{fmtTime(r.clockIn)}</td>
+        <div className="hrTableHead">All Hours</div>
 
-                {/* Emphasize hours for chosen period */}
-                <td>
-                  <b>{minutesToHHMM(rowWorkedForPeriod(r))}</b>
-                </td>
-
-                {/* ✅ after clocked out show "final" total; otherwise show dash */}
-                <td>{r._clockedOut ? <b>{minutesToHHMM(r._finalWorkedMins)}</b> : '—'}</td>
-
-                <td>{minutesToHHMM(rowLateForPeriod(r))}</td>
-                <td>{minutesToHHMM(rowOTForPeriod(r))}</td>
-
-                <td>
-                  <span className={`pill ${r._bucket}`}>{statusLabel(r._bucket)}</span>
-                </td>
-                <td>{isAgentLive(r) ? 'Yes' : 'No'}</td>
-                <td>{isAgentOnBreak(r) ? 'Yes' : 'No'}</td>
-                <td>{r.presence}</td>
-              </tr>
-            ))}
-
-            {filtered.length === 0 && (
+        {model.filtered.length === 0 ? (
+          <div className="hrNoRows">{loading ? 'Loading…' : 'No rows match this filter.'}</div>
+        ) : (
+          <table className="hrTable">
+            <thead>
               <tr>
-                <td colSpan={12} className="hrNoRows">
-                  No results.
-                </td>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Department</th>
+                <th>Status</th>
+                <th>Clock In</th>
+                <th>Clock Out</th>
+                <th>Worked</th>
+                <th>Planned</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-
-        {/* footer note (important!) */}
-        <div className="hrFootNote" style={{ marginTop: 10, opacity: 0.8 }}>
-          Note: Week/Month/Year are <b>projected</b> from today’s data. To make them accurate, you’ll need historical time logs per agent.
-        </div>
+            </thead>
+            <tbody>
+              {model.filtered.map((r) => (
+                <tr key={r.id}>
+                  <td className="tdName">{r.name}</td>
+                  <td>{r.role}</td>
+                  <td>{r.department}</td>
+                  <td>
+                    <span className={`pill ${r.status.pill}`}>{r.status.label}</span>
+                  </td>
+                  <td>{r.clockIn || '—'}</td>
+                  <td>{r.clockOut || '—'}</td>
+                  <td>{fmtHM(r.worked)}</td>
+                  <td>{fmtHM(r.planned)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   )
