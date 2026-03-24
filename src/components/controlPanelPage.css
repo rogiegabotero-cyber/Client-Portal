@@ -1,0 +1,315 @@
+.control-panel-page {
+  padding: 16px;
+}
+
+.control-panel-header {
+  margin-bottom: 20px;
+}
+
+.control-panel-header h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  color: #111827;
+}
+
+.control-panel-header p {
+  margin: 0;
+  color: #9b9b9b;
+  font-size: 15px;
+}
+
+.control-panel-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 20px;
+}
+
+.control-panel-users,
+.control-panel-permissions {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+}
+
+.control-panel-users h2,
+.control-panel-permissions h2 {
+  margin: 16px 0 16px;
+  font-size: 20px;
+  color: #111827;
+}
+
+.control-panel-user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.control-panel-user-card {
+  text-align: left;
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  border-radius: 14px;
+  padding: 14px;
+  cursor: pointer;
+}
+
+.control-panel-user-card.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.control-panel-user-name {
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 4px;
+}
+
+.control-panel-user-email {
+  color: #64748b;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.control-panel-user-role {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.control-panel-selected-user {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 18px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  color: #111827;
+}
+
+.control-panel-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  color: #111827;
+}
+
+.control-panel-permission-group + .control-panel-permission-group {
+  margin-top: 16px;
+}
+
+.control-panel-permission-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #334155;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.control-panel-checkbox-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+}
+
+.control-panel-checkbox-card input {
+  width: 16px;
+  height: 16px;
+}
+
+.control-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.control-panel-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  color: white;
+  font-weight: 700;
+}
+
+.control-panel-btn.primary {
+  background: #2563eb;
+}
+
+.control-panel-btn.secondary {
+  background: #475569;
+}
+
+.control-panel-state,
+.control-panel-error,
+.control-panel-success {
+  padding: 14px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.control-panel-state {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.control-panel-error {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  margin-bottom: 16px;
+}
+
+.control-panel-success {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+  margin-bottom: 16px;
+}
+
+.control-panel-section-title {
+  padding-top: 1rem;
+}
+
+.control-panel-attendance-settings {
+  margin-bottom: 20px;
+}
+
+.control-panel-attendance-help {
+  margin-top: 0;
+  color: #475569;
+}
+
+.control-panel-attendance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.control-panel-attendance-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.control-panel-attendance-card h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.control-panel-attendance-card p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.control-panel-device-tz {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.control-panel-attendance-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+
+.control-panel-attendance-example {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+@media (max-width: 1100px) {
+  .control-panel-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .control-panel-checkbox-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .control-panel-attendance-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.input-divv{
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  margin: 1rem 0;
+  gap: 10px;
+}
+
+.input-div{
+  display: flex;
+  margin-top: 1rem;
+  gap: 5px;
+}
+
+.control-panel-time-input {
+  min-width: 140px;
+  height: 42px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(165, 165, 165, 0.425);
+  color: inherit;
+  font: inherit;
+}
+
+.control-panel-time-input:hover {
+  cursor: pointer;
+  
+}
+
+.control-panel-btn{
+  height: 42px;
+}
+
+.control-panel-btn:hover{
+  background-color: #111827;
+  color: #ffffff;
+}
+
+.control-panel-time-select {
+  min-width: 280px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+}
+
+.time-reset{
+  background: #1118272a;
+  padding: 1rem;
+  border-radius: 10px;
+}

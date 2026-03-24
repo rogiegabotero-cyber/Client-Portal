@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+﻿import React, { useMemo, useState } from 'react'
 import './hours.css'
 
 const toMinutes = (hhmm) => {
@@ -76,9 +76,9 @@ const HoursPage = ({ employees = [], loading = false, error = '' }) => {
 
       return {
         id: e.id,
-        name: e.name || '—',
-        role: e.role || '—',
-        department: e.department || '—',
+        name: e.name || '-',
+        role: e.role || '-',
+        department: e.department || '-',
         clockIn: e.clockIn || '',
         clockOut: e.clockOut || '',
         planned,
@@ -130,7 +130,7 @@ const HoursPage = ({ employees = [], loading = false, error = '' }) => {
         <div>
           <div className="hrTitle">Hours</div>
           <div className="hrSub">
-            {loading ? 'Loading from Hyacinth API…' : error ? `Error: ${error}` : 'Live from Hyacinth API'}
+            {loading ? 'Loading from Hyacinth API...' : error ? `Error: ${error}` : 'Live from Hyacinth API'}
           </div>
         </div>
 
@@ -186,7 +186,7 @@ const HoursPage = ({ employees = [], loading = false, error = '' }) => {
         <div className="hrCard">
           <div className="hrCardLabel">Utilization</div>
           <div className="hrCardValue">{model.totals.avgPct}%</div>
-          <div className="hrCardHint">Worked ÷ Planned (approx)</div>
+          <div className="hrCardHint">Worked Ã· Planned (approx)</div>
         </div>
       </div>
 
@@ -210,10 +210,10 @@ const HoursPage = ({ employees = [], loading = false, error = '' }) => {
                     <div>
                       <div className="hrRowName">{r.name}</div>
                       <div className="hrRowMeta">
-                        {r.role} • {r.department}
+                        {r.role}  |  {r.department}
                       </div>
                       <div className="hrRowKpi">
-                        Clocked in: <b>{r.clockIn || '—'}</b>
+                        Clocked in: <b>{r.clockIn || '-'}</b>
                       </div>
                     </div>
                     <div className="hrRowRight">
@@ -243,7 +243,7 @@ const HoursPage = ({ employees = [], loading = false, error = '' }) => {
                     <div>
                       <div className="hrRowName">{r.name}</div>
                       <div className="hrRowMeta">
-                        {r.clockIn || '—'} → {r.clockOut || '—'}
+                        {r.clockIn || '-'} -&gt; {r.clockOut || '-'}
                       </div>
                       <div className="hrRowKpi">
                         Worked: <b>{fmtHM(r.worked)}</b>
@@ -276,7 +276,7 @@ const HoursPage = ({ employees = [], loading = false, error = '' }) => {
                     <div>
                       <div className="hrRowName">{r.name}</div>
                       <div className="hrRowMeta">
-                        {r.role} • {r.department}
+                        {r.role}  |  {r.department}
                       </div>
                       <div className="hrRowKpi">
                         Planned: <b>{fmtHM(r.planned)}</b>
@@ -299,7 +299,7 @@ const HoursPage = ({ employees = [], loading = false, error = '' }) => {
         <div className="hrTableHead">All Hours</div>
 
         {model.filtered.length === 0 ? (
-          <div className="hrNoRows">{loading ? 'Loading…' : 'No rows match this filter.'}</div>
+          <div className="hrNoRows">{loading ? 'Loading...' : 'No rows match this filter.'}</div>
         ) : (
           <table className="hrTable">
             <thead>
@@ -323,8 +323,8 @@ const HoursPage = ({ employees = [], loading = false, error = '' }) => {
                   <td>
                     <span className={`pill ${r.status.pill}`}>{r.status.label}</span>
                   </td>
-                  <td>{r.clockIn || '—'}</td>
-                  <td>{r.clockOut || '—'}</td>
+                  <td>{r.clockIn || '-'}</td>
+                  <td>{r.clockOut || '-'}</td>
                   <td>{fmtHM(r.worked)}</td>
                   <td>{fmtHM(r.planned)}</td>
                 </tr>

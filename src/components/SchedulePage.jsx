@@ -1,11 +1,6 @@
-// src/pages/SchedulePage.jsx
-import React, { useEffect, useMemo, useState } from "react";
-import HyacinthAttendanceAPI from "../api/hyacinthAttendanceApi";
+﻿// src/components/SchedulePage.jsx
+import React, { useMemo, useState } from "react";
 import "./schedule.css";
-
-/* -----------------------------
-   Helpers (aligned w/ Attendance)
------------------------------- */
 
 // robust userId detection
 const getUserId = (emp) =>
@@ -24,11 +19,7 @@ const getUserId = (emp) =>
   null;
 
 const getDisplayName = (emp) =>
-  emp?.name ??
-  emp?.fullName ??
-  emp?.displayName ??
-  emp?.email ??
-  `User ${getUserId(emp) ?? ""}`.trim();
+  emp?.name ?? emp?.fullName ?? emp?.displayName ?? emp?.email ?? `User ${getUserId(emp) ?? ""}`.trim();
 
 const safeLower = (v) => String(v ?? "").toLowerCase();
 
@@ -54,14 +45,13 @@ const addHoursToHHMM = (hhmm, hoursToAdd) => {
   const hrs = Number(hoursToAdd);
 
   if (!Number.isFinite(hRaw) || !Number.isFinite(mRaw) || !Number.isFinite(hrs)) {
-    return { outHHMM: "—", dayOffset: 0 };
+    return { outHHMM: "-", dayOffset: 0 };
   }
 
   const startMin = hRaw * 60 + mRaw;
   const addMin = Math.round(hrs * 60);
   const total = startMin + addMin;
 
-  // handle wrap past midnight
   const dayOffset = Math.floor(total / (24 * 60));
   const mod = ((total % (24 * 60)) + (24 * 60)) % (24 * 60);
 
@@ -71,12 +61,9 @@ const addHoursToHHMM = (hhmm, hoursToAdd) => {
   return { outHHMM: `${pad2(outH)}:${pad2(outM)}`, dayOffset };
 };
 
-const tzChip = (tz) => (!tz || tz === "—" ? "—" : tz);
+const tzChip = (tz) => (!tz || tz === "-" ? "-" : tz);
 
-/* -----------------------------
-   Day-range formatting
------------------------------- */
-
+// Day-range formatting
 const DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 const DAY_ABBR = {
   monday: "Mon",
@@ -112,7 +99,7 @@ const formatDayRanges = (dayKeys) => {
 
   const pushRange = (a, b) => {
     if (a === b) parts.push(DAY_ABBR[a]);
-    else parts.push(`${DAY_ABBR[a]}–${DAY_ABBR[b]}`);
+    else parts.push(`${DAY_ABBR[a]}-${DAY_ABBR[b]}`);
   };
 
   for (let i = 1; i < ordered.length; i++) {
@@ -121,7 +108,7 @@ const formatDayRanges = (dayKeys) => {
     const curIdx = DAY_KEYS.indexOf(cur);
 
     if (curIdx === prevIdx + 1) {
-      prev = cur; // continue streak
+      prev = cur;
     } else {
       pushRange(start, prev);
       start = cur;
@@ -133,103 +120,104 @@ const formatDayRanges = (dayKeys) => {
   return parts.join(", ");
 };
 
-const pickPrimarySchedule = (scheduleArr) => {
-  if (!Array.isArray(scheduleArr) || scheduleArr.length === 0) return null;
+const getScheduleTimeIn = (item) =>
+  pick(item, ["timeIn", "time_in", "startTime", "shiftStart", "start"], "-");
 
-  // Prefer Monday; else take first
-  const monday = scheduleArr.find(
-    (s) => normalizeDayKey(pick(s, ["dayOfWeek", "day", "weekday"], "")) === "monday"
-  );
-  return monday || scheduleArr[0];
+const getScheduleDuration = (item) => {
+  const value = Number(pick(item, ["shiftDuration", "hours", "durationHours"], null));
+  return Number.isFinite(value) ? value : null;
 };
 
-/* -----------------------------
-   Page
------------------------------- */
+const getScheduleTimezone = (item) =>
+  pick(item, ["timeRegion", "timezone", "tz", "scheduleTimezone"], "-");
 
-export default function SchedulePage({ employees = [] }) {
-  const apiKey = import.meta.env.VITE_HYACINTH_API_KEY;
+const formatUtcIsoToHHMM = (utcIso, timeZone) => {
+  const d = new Date(utcIso);
+  if (Number.isNaN(d.getTime())) return "";
 
-  const api = useMemo(() => {
-    if (!apiKey) return null;
-    return new HyacinthAttendanceAPI(apiKey);
-  }, [apiKey]);
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+};
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+const buildScheduleGroups = (scheduleArr = [], businessTimeZone = "America/Chicago") => {
+  if (!Array.isArray(scheduleArr) || scheduleArr.length === 0) return [];
 
-  const [schedulesByUserId, setSchedulesByUserId] = useState({});
-  const [errorsByUserId, setErrorsByUserId] = useState({});
+  const groupsMap = new Map();
 
+  for (const item of scheduleArr) {
+    const dayKey = normalizeDayKey(pick(item, ["dayOfWeek", "day", "weekday"], ""));
+    if (!dayKey) continue;
+
+    const utcTimeIn = pick(item, ["utcTimeIn", "utcStart", "startUtc", "utcTimeStart"], "");
+    const utcTimeOut = pick(item, ["utcTimeOut", "utcEnd", "endUtc", "utcTimeEnd"], "");
+
+    const convertedIn = utcTimeIn ? formatUtcIsoToHHMM(utcTimeIn, businessTimeZone) : "";
+    const timeIn = convertedIn || getScheduleTimeIn(item);
+    const duration = getScheduleDuration(item);
+    const tz = String(businessTimeZone || "").trim() || getScheduleTimezone(item);
+
+    const convertedOut = utcTimeOut ? formatUtcIsoToHHMM(utcTimeOut, businessTimeZone) : "";
+    const { outHHMM, dayOffset } = convertedOut
+      ? { outHHMM: convertedOut, dayOffset: 0 }
+      : timeIn !== "-" && duration != null
+        ? addHoursToHHMM(timeIn, duration)
+        : { outHHMM: "-", dayOffset: 0 };
+
+    const groupKey = JSON.stringify({
+      timeIn,
+      duration,
+      timeOut: outHHMM,
+      dayOffset,
+      tz,
+    });
+
+    if (!groupsMap.has(groupKey)) {
+      groupsMap.set(groupKey, {
+        key: groupKey,
+        dayKeys: [],
+        timeIn,
+        duration,
+        timeOut: outHHMM,
+        dayOffset,
+        tz,
+      });
+    }
+
+    groupsMap.get(groupKey).dayKeys.push(dayKey);
+  }
+
+  const groups = Array.from(groupsMap.values()).map((group) => ({
+    ...group,
+    dayLabel: formatDayRanges(group.dayKeys),
+  }));
+
+  groups.sort((a, b) => {
+    const aIdx = Math.min(...a.dayKeys.map((d) => DAY_KEYS.indexOf(d)).filter((n) => n >= 0));
+    const bIdx = Math.min(...b.dayKeys.map((d) => DAY_KEYS.indexOf(d)).filter((n) => n >= 0));
+    return aIdx - bIdx;
+  });
+
+  return groups;
+};
+
+export default function SchedulePage({
+  employees = [],
+  schedulesByUserId = {},
+  errorsByUserId = {},
+  businessTimeZone = "America/Chicago",
+  loading = false,
+  error = "",
+  onReload,
+}) {
   const [query, setQuery] = useState("");
 
   const validEmployees = (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e));
   const perUserErrorCount = Object.keys(errorsByUserId || {}).length;
 
-  useEffect(() => {
-    if (!apiKey) {
-      setError("Missing VITE_HYACINTH_API_KEY in .env");
-      return;
-    }
-    if (!api) return;
-
-    if (validEmployees.length === 0) {
-      setSchedulesByUserId({});
-      setErrorsByUserId({});
-      setError("");
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadAllSchedules = async () => {
-      setLoading(true);
-      setError("");
-      setErrorsByUserId({});
-
-      try {
-        const results = await Promise.all(
-          validEmployees.map(async (emp) => {
-            const userId = String(getUserId(emp));
-            try {
-              const schedule = await api.getUserSchedule(userId);
-              return {
-                userId,
-                schedule: Array.isArray(schedule) ? schedule : [],
-                err: null,
-              };
-            } catch (e) {
-              return { userId, schedule: [], err: e?.message || "Failed to load schedule" };
-            }
-          })
-        );
-
-        if (cancelled) return;
-
-        const nextSchedules = {};
-        const nextErrors = {};
-
-        for (const r of results) {
-          nextSchedules[r.userId] = r.schedule;
-          if (r.err) nextErrors[r.userId] = r.err;
-        }
-
-        setSchedulesByUserId(nextSchedules);
-        setErrorsByUserId(nextErrors);
-      } catch (e) {
-        if (!cancelled) setError(e?.message || "Failed to load schedules");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    loadAllSchedules();
-    return () => {
-      cancelled = true;
-    };
-  }, [api, apiKey, validEmployees.length]);
-
-  // ✅ 1 row per employee
   const rows = useMemo(() => {
     const out = [];
 
@@ -238,40 +226,23 @@ export default function SchedulePage({ employees = [] }) {
       const name = getDisplayName(emp);
       const email = pick(emp || {}, ["email"], "");
 
-      const scheduleArr = schedulesByUserId?.[userId] || [];
-      const hasSchedule = Array.isArray(scheduleArr) && scheduleArr.length > 0;
-
-      const tz = hasSchedule ? scheduleArr?.[0]?.timeRegion || "—" : "—";
-
-      // Day label: "Mon–Fri"
-      const dayKeys = (hasSchedule ? scheduleArr : [])
-        .map((s) => normalizeDayKey(pick(s, ["dayOfWeek", "day", "weekday"], "")))
-        .filter(Boolean);
-
-      const dayLabel = formatDayRanges(dayKeys);
-
-      // Primary schedule: use Monday else first entry
-      const primary = hasSchedule ? pickPrimarySchedule(scheduleArr) : null;
-
-      const timeIn = primary ? pick(primary, ["timeIn", "time_in", "startTime", "start"], "—") : "—";
-      const duration = primary ? Number(pick(primary, ["shiftDuration", "hours", "durationHours"], null)) : null;
-
-      const { outHHMM, dayOffset } = hasSchedule ? addHoursToHHMM(timeIn, duration) : { outHHMM: "—", dayOffset: 0 };
+      const scheduleArr = Array.isArray(schedulesByUserId?.[userId]) ? schedulesByUserId[userId] : [];
+      const hasSchedule = scheduleArr.length > 0;
+      const scheduleGroups = buildScheduleGroups(scheduleArr, businessTimeZone);
 
       out.push({
         key: userId,
         userId,
         name,
         email,
-
         hasSchedule,
-        dayLabel,
-        timeIn: hasSchedule ? timeIn : "—",
-        duration: hasSchedule && Number.isFinite(duration) ? duration : null,
-        timeOut: hasSchedule ? outHHMM : "—",
-        dayOffset: hasSchedule ? dayOffset : 0,
-        tz,
-
+        scheduleGroups,
+        tz:
+          scheduleGroups.length === 1
+            ? scheduleGroups[0].tz
+            : scheduleGroups.length > 1
+              ? "Multiple"
+              : "-",
         perUserError: errorsByUserId?.[userId] || "",
         raw: scheduleArr,
       });
@@ -279,18 +250,24 @@ export default function SchedulePage({ employees = [] }) {
 
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
-  }, [validEmployees, schedulesByUserId, errorsByUserId]);
+  }, [validEmployees, schedulesByUserId, errorsByUserId, businessTimeZone]);
 
   const filtered = useMemo(() => {
     const q = safeLower(query).trim();
     if (!q) return rows;
-    return rows.filter(
-      (r) =>
+
+    return rows.filter((r) => {
+      const groupText = r.scheduleGroups
+        .map((g) => `${g.dayLabel} ${g.timeIn} ${g.timeOut} ${g.duration ?? ""} ${g.tz}`)
+        .join(" ");
+
+      return (
         safeLower(r.name).includes(q) ||
         safeLower(r.email).includes(q) ||
         safeLower(r.userId).includes(q) ||
-        safeLower(r.dayLabel).includes(q)
-    );
+        safeLower(groupText).includes(q)
+      );
+    });
   }, [rows, query]);
 
   const kpis = useMemo(() => {
@@ -306,24 +283,27 @@ export default function SchedulePage({ employees = [] }) {
         <div className="schxTitleWrap">
           <div className="schxTitle">Schedules</div>
           <div className="schxSub">
-            Users: {validEmployees.length}
-            {perUserErrorCount ? ` • Errors: ${perUserErrorCount}` : ""}
+            {perUserErrorCount ? `  |  Errors: ${perUserErrorCount}` : ""}
           </div>
         </div>
 
         <div className="schxControls">
-          <div className="schxField" style={{ minWidth: 260 }}>
+          <div className="schxField schxFieldSearch">
             <div className="schxLabel">Search</div>
             <input
               className="schxInput"
-              placeholder="Search name / email / userId / days…"
+              placeholder="Search name / email / userId / days / time..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
 
+          <button className="schxBtn" type="button" onClick={onReload} disabled={loading}>
+            {loading ? "Loading..." : "Reload"}
+          </button>
+
           <div className="schxPill">
-            Rows: <span style={{ color: "var(--text)" }}>{filtered.length}</span>
+            Rows: <span className="schxPillValue">{filtered.length}</span>
           </div>
         </div>
       </div>
@@ -353,7 +333,7 @@ export default function SchedulePage({ employees = [] }) {
       <div className="schxCard">
         <div className="schxCardHead">
           <div className="schxCardTitle">Schedule Table</div>
-          <div style={{ color: "rgba(255,255,255,.65)", fontWeight: 900, fontSize: 12 }}>
+          <div className="schxCardMeta">
             Showing {filtered.length} of {rows.length}
           </div>
         </div>
@@ -374,13 +354,13 @@ export default function SchedulePage({ employees = [] }) {
             <tbody>
               {validEmployees.length === 0 && !loading && !error ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: 16, color: "rgba(255,255,255,.70)", fontWeight: 900 }}>
+                  <td colSpan={6} className="schxTableEmpty">
                     No employees found (or userId not detected).
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: 16, color: "rgba(255,255,255,.70)", fontWeight: 900 }}>
+                  <td colSpan={6} className="schxTableEmpty">
                     No schedules match your search.
                   </td>
                 </tr>
@@ -400,32 +380,74 @@ export default function SchedulePage({ employees = [] }) {
                     </td>
 
                     <td>
-                      {r.hasSchedule ? (
-                        <span className="schxChip">{r.dayLabel}</span>
-                      ) : (
+                      {!r.hasSchedule ? (
                         <span className="schxChip schxChipNoSched">No Schedule</span>
+                      ) : (
+                        <div className="schxStack">
+                          {r.scheduleGroups.map((g, idx) => (
+                            <span key={`${r.key}-days-${idx}`} className="schxChip">
+                              {g.dayLabel}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </td>
 
                     <td>
-                      <span className="schxTime">{r.timeIn}</span>
+                      {!r.hasSchedule ? (
+                        <span className="schxTime">-</span>
+                      ) : (
+                        <div className="schxStack">
+                          {r.scheduleGroups.map((g, idx) => (
+                            <span key={`${r.key}-in-${idx}`} className="schxTime">
+                              {g.timeIn}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </td>
 
                     <td>
-                      <div className="schxTimeWrap">
-                        <span className="schxTime">{r.timeOut}</span>
-                        {r.dayOffset > 0 && <span className="schxMiniPill">{`+${r.dayOffset}d`}</span>}
-                      </div>
+                      {!r.hasSchedule ? (
+                        <span className="schxTime">-</span>
+                      ) : (
+                        <div className="schxStack">
+                          {r.scheduleGroups.map((g, idx) => (
+                            <div key={`${r.key}-out-${idx}`} className="schxTimeWrap">
+                              <span className="schxTime">{g.timeOut}</span>
+                              {g.dayOffset > 0 && <span className="schxMiniPill">{`+${g.dayOffset}d`}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </td>
 
                     <td>
-                      <span className="schxChip schxChipGood">
-                        {r.duration == null ? "—" : `${r.duration}h`}
-                      </span>
+                      {!r.hasSchedule ? (
+                        <span className="schxChip schxChipGood">-</span>
+                      ) : (
+                        <div className="schxStack">
+                          {r.scheduleGroups.map((g, idx) => (
+                            <span key={`${r.key}-hrs-${idx}`} className="schxChip schxChipGood">
+                              {g.duration == null ? "-" : `${g.duration}h`}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </td>
 
                     <td>
-                      <span className="schxChip schxChipTz">{tzChip(r.tz)}</span>
+                      {!r.hasSchedule ? (
+                        <span className="schxChip schxChipTz">-</span>
+                      ) : (
+                        <div className="schxStack">
+                          {r.scheduleGroups.map((g, idx) => (
+                            <span key={`${r.key}-tz-${idx}`} className="schxChip schxChipTz">
+                              {tzChip(g.tz)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -439,7 +461,7 @@ export default function SchedulePage({ employees = [] }) {
         <div className="schxLoadingOverlay" role="status" aria-live="polite">
           <div className="schxLoadingModal">
             <div className="schxSpinner" />
-            <div className="schxLoadingText">Fetching schedules…</div>
+            <div className="schxLoadingText">Fetching schedules...</div>
             <div className="schxLoadingSub">Users: {validEmployees.length}</div>
           </div>
         </div>
@@ -447,3 +469,6 @@ export default function SchedulePage({ employees = [] }) {
     </div>
   );
 }
+
+
+

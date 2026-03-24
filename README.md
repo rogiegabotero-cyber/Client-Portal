@@ -2,20 +2,49 @@
 
 This project is a React + Vite client portal UI.
 
-## Hyacinth Attendance API integration
+## Setup after cloning
 
-The app now supports loading employee attendance data from the Hyacinth Attendance API.
-
-### Environment variables
-
-Create a `.env` file with:
+1. Clone and open the project:
 
 ```bash
-VITE_HYACINTH_API_KEY=hk_your_api_key_here
-VITE_HYACINTH_DEPARTMENT_ID=dept_123
+git clone https://github.com/rogiegabotero-cyber/Client-Portal.git
+cd logistcs-portal
 ```
 
-If either variable is missing, the app falls back to the existing local dummy data.
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+3. Create your local environment file:
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+macOS/Linux:
+
+```bash
+cp .env.example .env
+```
+
+4. Open `.env` and set the values for your environment.
+
+5. Run the app:
+
+```bash
+npm run dev
+```
+
+Notes:
+
+- Keep `.env` local only. Do not commit it.
+- `VITE_` variables are bundled into frontend code, so do not place private server secrets in them.
+- `VITE_HYACINTH_API_KEY` and `VITE_HYACINTH_DEPARTMENT_ID` are required to load employee attendance data.
+- If `VITE_INVOICES_EMBED_URL` is omitted, the app will use its built-in default invoices URL.
 
 ### Implemented API endpoints
 

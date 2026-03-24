@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+﻿import React, { useMemo, useState } from 'react'
 import './dashboard.css'
 
 const ClockIn = ({ employees, setEmployees }) => {
@@ -76,13 +76,13 @@ const ClockIn = ({ employees, setEmployees }) => {
       </div>
 
       <div className="dash-table-card">
-        <div className="dash-table-header" style={{ alignItems: 'center' }}>
+        <div className="dash-table-header dash-table-header-centered">
           <h2 className="dash-table-title">Employee Controls</h2>
         </div>
 
-        <div style={{ padding: '18px', display: 'grid', gap: '14px' }}>
-          <div style={{ display: 'grid', gap: '8px' }}>
-            <div style={{ fontWeight: 800, color: '#0f172a' }}>Select Employee</div>
+        <div className="clockin-controls">
+          <div className="clockin-field">
+            <div className="clockin-label">Select Employee</div>
             <select className="status-filter" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
               {employees.map((e) => (
                 <option key={e.id} value={e.id}>
@@ -94,25 +94,16 @@ const ClockIn = ({ employees, setEmployees }) => {
 
           {selected && (
             <>
-              <div
-                style={{
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 14,
-                  padding: 14,
-                  display: 'grid',
-                  gap: 6
-                }}
-              >
-                <div style={{ fontWeight: 900, color: '#0f172a' }}>
-                  {selected.name} • {selected.role}
+              <div className="clockin-summary">
+                <div className="clockin-summary-name">
+                  {selected.name}  |  {selected.role}
                 </div>
-                <div style={{ color: '#64748b', fontSize: 13 }}>
-                  Presence: <b>{selected.presence}</b> • Live: <b>{liveLabel}</b> • Break: <b>{breakLabel}</b>
+                <div className="clockin-summary-meta">
+                  Presence: <b>{selected.presence}</b>  |  Live: <b>{liveLabel}</b>  |  Break: <b>{breakLabel}</b>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div className="clockin-actions">
                 <button className="tf-btn tf-primary" onClick={handleClockIn}>
                   Clock In (Live)
                 </button>
@@ -143,8 +134,8 @@ const ClockIn = ({ employees, setEmployees }) => {
                 </button>
               </div>
 
-              <div style={{ display: 'grid', gap: 8, maxWidth: 520 }}>
-                <div style={{ fontWeight: 800, color: '#0f172a' }}>Absent Reason</div>
+              <div className="clockin-absent-wrap">
+                <div className="clockin-label">Absent Reason</div>
                 <input
                   className="tf-input"
                   value={absentReason}

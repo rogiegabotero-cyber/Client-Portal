@@ -1,9 +1,8 @@
-// src/components/AttendancePage.jsx
-import React, { useEffect, useMemo, useState } from "react";
-import HyacinthAttendanceAPI from "../api/hyacinthAttendanceApi";
+﻿import React, { useMemo, useState, useEffect } from "react";
 import "./attendancePage.css";
+import { getBusinessDayKey } from "../utils/attendanceDate";
 
-// robust userId detection
+/* ------------------------- helpers (ids, strings) ------------------------- */
 const getUserId = (emp) =>
   emp?.userId ??
   emp?.userID ??
@@ -26,37 +25,6 @@ const getDisplayName = (emp) =>
   emp?.email ??
   `User ${getUserId(emp) ?? ""}`.trim();
 
-const toYYYYMMDD = (d) => {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
-
-const todayYYYYMMDD = () => toYYYYMMDD(new Date());
-
-const startFromDays = (daysBack, endDateYYYYMMDD) => {
-  const end = new Date(`${endDateYYYYMMDD}T00:00:00`);
-  end.setDate(end.getDate() - (daysBack - 1)); // 1 => same day
-  return toYYYYMMDD(end);
-};
-
-const initials = (name = "") => {
-  const parts = String(name).trim().split(/\s+/).filter(Boolean);
-  const a = parts[0]?.[0] ?? "?";
-  const b = parts.length > 1 ? parts[parts.length - 1][0] : "";
-  return (a + b).toUpperCase();
-};
-
-const statusBadgeClass = (status) => {
-  const s = safeLower(status);
-  if (s.includes("no schedule")) return "nosched";
-  if (s.includes("early")) return "early";
-  if (s.includes("on time")) return "ontime";
-  if (s.includes("late")) return "late";
-  if (s.includes("completed")) return "done";
-  if (s.includes("no time out")) return "notimeout";
-  return "warn";
-};
-
 const safeLower = (v) => String(v ?? "").toLowerCase();
 
 const pick = (obj, keys, fallback = "") => {
@@ -67,216 +35,748 @@ const pick = (obj, keys, fallback = "") => {
   return fallback;
 };
 
-const formatTs = (ts) => {
-  if (!ts) return "—";
+const initials = (name = "") => {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  const a = parts[0]?.[0] ?? "?";
+  const b = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return (a + b).toUpperCase();
+};
+
+const VIEWER_TIME_ZONE =
+  Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+/* --------------------------- styling helpers ---------------------------- */
+const statusBadgeClass = (status) => {
+  const s = safeLower(status);
+
+  if (s.includes("on break")) return "break";
+
+  if (
+    s.includes("day off") ||
+    s.includes("rest day") ||
+    s.includes("holiday") ||
+    s.includes("leave") ||
+    s.includes("vacation") ||
+    s.includes("no schedule")
+  ) {
+    return "dayoff";
+  }
+
+  if (
+    s.includes("scheduled") ||
+    s.includes("on time") ||
+    s.includes("early") ||
+    s.includes("present") ||
+    s.includes("logged")
+  ) {
+    return "scheduled";
+  }
+
+  if (
+    s.includes("no show") ||
+    s.includes("ncns") ||
+    s.includes("absent") ||
+    s.includes("no log")
+  ) {
+    return "warn";
+  }
+
+  if (s.includes("completed") || s.includes("complete")) return "done";
+  if (s.includes("live") || s.includes("late")) return "notimeout";
+
+  return "warn";
+};
+
+const toTitle = (v = "") =>
+  String(v)
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+
+const getRawStatus = (log) =>
+  pick(log || {}, ["status", "attendanceStatus", "dailyStatus", "remark"], "").trim();
+
+/* --------------------------- time helpers ------------------------------- */
+const tsMs = (ts) => {
+  const d = new Date(ts);
+  const t = d.getTime();
+  return Number.isFinite(t) ? t : NaN;
+};
+
+const pickTs = (log) =>
+  pick(log, ["timestamp", "createdAt", "time", "timeIn", "clockIn", "timestampIn"], "");
+
+const pickOutTs = (log) =>
+  pick(
+    log,
+    [
+      "timeOut",
+      "time_out",
+      "clockOut",
+      "clock_out",
+      "timestampOut",
+      "outTimestamp",
+      "timeout",
+      "outTime",
+      "endTime",
+      "checkedOutAt",
+      "timeEnd",
+      "clockedOutAt",
+    ],
+    ""
+  );
+
+const getEventTs = (log) => {
+  const outTs = pickOutTs(log);
+  const mainTs = pickTs(log);
+
+  if (safeLower(pick(log, ["type", "logType", "eventType"], "")).includes("out")) {
+    return outTs || mainTs || "";
+  }
+
+  if (hasRealTimeOut(log)) {
+    return outTs || mainTs || "";
+  }
+
+  return mainTs || outTs || "";
+};
+
+const isIn = (log) => {
+  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
+  return type.includes("in") || type.includes("clockin") || type.includes("timein");
+};
+
+const isOut = (log) => {
+  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
+  return (
+    type.includes("out") ||
+    type.includes("clockout") ||
+    type.includes("timeout") ||
+    type.includes("checkout")
+  );
+};
+
+const hasRealTimeOut = (raw) => {
+  const v = pickOutTs(raw || {});
+  if (!v) return false;
+  return Number.isFinite(new Date(v).getTime());
+};
+
+const isClockedOutLog = (log) => isOut(log) || hasRealTimeOut(log);
+const isValidTs = (log) => Number.isFinite(tsMs(getEventTs(log)));
+
+const isNcnsInLog = (log) => {
+  if (!isIn(log)) return false;
+  const status = safeLower(pick(log, ["status"], "")).trim();
+  return status === "ncns";
+};
+
+const dayKeyFromTs = (
+  ts,
+  attendanceResetTime = "05:00",
+  businessTimeZone = "America/Chicago"
+) => {
+  return getBusinessDayKey(ts, attendanceResetTime, businessTimeZone);
+};
+
+const getLogDayKey = (
+  log,
+  attendanceResetTime = "05:00",
+  businessTimeZone = "America/Chicago"
+) => {
+  const explicitDayKey = pick(
+    log || {},
+    [
+      "dayKey",
+      "businessDay",
+      "businessDate",
+      "attendanceDate",
+      "logDate",
+      "date",
+      "workDate",
+    ],
+    ""
+  );
+
+  if (explicitDayKey && /^\d{4}-\d{2}-\d{2}$/.test(String(explicitDayKey))) {
+    return String(explicitDayKey);
+  }
+
+  const ts = getEventTs(log);
+  if (ts && Number.isFinite(tsMs(ts))) {
+    return dayKeyFromTs(ts, attendanceResetTime, businessTimeZone);
+  }
+
+  return "";
+};
+
+const groupLogsByBusinessDay = (
+  logs = [],
+  attendanceResetTime = "05:00",
+  businessTimeZone = "America/Chicago"
+) => {
+  const byDay = new Map();
+
+  for (const log of Array.isArray(logs) ? logs : []) {
+    const dk = getLogDayKey(log, attendanceResetTime, businessTimeZone);
+    if (!dk) continue;
+
+    if (!byDay.has(dk)) byDay.set(dk, []);
+    byDay.get(dk).push(log);
+  }
+
+  return byDay;
+};
+
+const formatTs = (ts, timeZone = VIEWER_TIME_ZONE) => {
+  if (!ts) return "-";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return String(ts);
-  return d.toLocaleString();
-}
 
-const addMinutesToTs = (ts, minutesToAdd) => {
-  if (!ts) return "—";
-  const base = new Date(ts);
-  const mins = Number(minutesToAdd);
+  return new Intl.DateTimeFormat([], {
+    timeZone,
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(d);
+};
 
-  if (Number.isNaN(base.getTime()) || !Number.isFinite(mins)) return "—";
+const formatTimeOnly = (ts, timeZone = VIEWER_TIME_ZONE) => {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts);
 
-  // ✅ timeDiff is minutes; divide by 60 (hours) then convert back -> same result,
-  // but keeping your requirement explicit:
-  const hours = mins / 60;
-  const msToAdd = hours * 60 * 60 * 1000; // hours -> ms
-
-  const out = new Date(base.getTime() + msToAdd);
-  return out.toLocaleString();
+  return new Intl.DateTimeFormat([], {
+    timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
 };
 
 const minutesToHrsMinText = (minutes) => {
   const mins = Number(minutes);
-  if (!Number.isFinite(mins)) return "—";
-
+  if (!Number.isFinite(mins)) return "-";
   const totalMinutes = Math.round(mins);
   const hrs = Math.floor(totalMinutes / 60);
-  const remMin = totalMinutes % 60;
-
-  // example format: 8hrs,32min
-  return `${hrs}hrs,${remMin}min`;
+  const remMin = Math.abs(totalMinutes % 60);
+  return `${hrs}h ${String(remMin).padStart(2, "0")}m`;
 };
 
+const prettyDate = (yyyyMmDd, timeZone = VIEWER_TIME_ZONE) => {
+  if (!yyyyMmDd) return "-";
+  const d = new Date(`${yyyyMmDd}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return yyyyMmDd;
+  return new Intl.DateTimeFormat([], {
+    timeZone,
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+  }).format(d);
+};
 
-// --- schedule helpers ---
-
-const getDayNameFromTs = (ts, timeZone = "UTC") => {
-  if (!ts) return null;
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return null;
-
-  return new Intl.DateTimeFormat("en-US", {
+const prettyDayName = (yyyyMmDd, timeZone = VIEWER_TIME_ZONE) => {
+  if (!yyyyMmDd) return "-";
+  const d = new Date(`${yyyyMmDd}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return "-";
+  return new Intl.DateTimeFormat([], {
     timeZone,
     weekday: "long",
   }).format(d);
 };
 
-// Convert a "local wall time" (YYYY-MM-DD + HH:mm) in a given IANA timezone into a UTC Date.
-// This avoids needing moment/luxon.
-const utcFromZoned = (yyyyMmDd, hhmm, timeZone) => {
-  try {
-    const [Y, M, D] = String(yyyyMmDd).split("-").map(Number);
-    const [hh, mm] = String(hhmm).split(":").map(Number);
-
-    // initial guess: interpret desired wall-time as UTC
-    let guess = new Date(Date.UTC(Y, M - 1, D, hh, mm, 0));
-
-    const fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour12: false,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    const partsToObj = (parts) => {
-      const o = {};
-      for (const p of parts) {
-        if (p.type !== "literal") o[p.type] = p.value;
-      }
-      return o;
-    };
-
-    const got1 = partsToObj(fmt.formatToParts(guess));
-    const gotY = Number(got1.year);
-    const gotM = Number(got1.month);
-    const gotD = Number(got1.day);
-    const gotH = Number(got1.hour);
-    const gotMin = Number(got1.minute);
-
-    // minutes since epoch-like for comparing wall times
-    const desiredMinutes =
-      Date.UTC(Y, M - 1, D, hh, mm, 0) / 60000;
-    const gotMinutes =
-      Date.UTC(gotY, gotM - 1, gotD, gotH, gotMin, 0) / 60000;
-
-    // adjust the guess so that in the target TZ it matches the desired wall time
-    const diffMin = gotMinutes - desiredMinutes;
-    guess = new Date(guess.getTime() - diffMin * 60000);
-
-    return guess;
-  } catch {
-    return null;
-  }
+/* ------------------- enumerate YYYY-MM-DD range ------------------- */
+const parseYmdToUtcNoon = (yyyyMmDd) => {
+  const d = new Date(`${yyyyMmDd}T12:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
 };
 
-const getScheduleForLog = (scheduleArr, logTs) => {
-  if (!Array.isArray(scheduleArr) || !logTs) return null;
-  // Schedule uses timeRegion; use that to compute weekday accurately
-  const tz = scheduleArr?.[0]?.timeRegion || "UTC";
-  const dayName = getDayNameFromTs(logTs, tz);
-  if (!dayName) return null;
+const ymdFromDateUtc = (d) => {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+};
 
-  return scheduleArr.find(
-    (s) => String(s?.dayOfWeek || "").toLowerCase() === String(dayName).toLowerCase()
+const enumerateYmdRange = (startYmd, endYmd) => {
+  const start = parseYmdToUtcNoon(startYmd);
+  const end = parseYmdToUtcNoon(endYmd);
+  if (!start || !end) return [];
+
+  const out = [];
+  const cur = new Date(start.getTime());
+  while (cur.getTime() <= end.getTime()) {
+    out.push(ymdFromDateUtc(cur));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+};
+
+const addDaysYmd = (ymd, deltaDays) => {
+  const d = new Date(`${ymd}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  d.setUTCDate(d.getUTCDate() + Number(deltaDays || 0));
+  return d.toISOString().slice(0, 10);
+};
+
+/* ---------------------- timezone helpers ---------------------- */
+const getWeekdayInTimeZoneFromYmd = (yyyyMmDd, timeZone) => {
+  const d = new Date(`${yyyyMmDd}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+
+  return safeLower(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "long",
+    }).format(d)
   );
 };
 
-// Determine if log has an actual timeOut (not computed)
-const hasRealTimeOut = (raw) => {
-  const v = pick(raw || {}, ["timeOut", "time_out", "clockOut", "timestampOut", "outTimestamp"], "");
-  return !!v;
-};
+const getScheduleTimeZone = (scheduleItem, fallbackTimeZone = "UTC") =>
+  pick(scheduleItem || {}, ["timeRegion", "timezone", "timeZone", "tz"], fallbackTimeZone);
 
-// ✅ Main status computation based on Schedule
-const computeStatusFromSchedule = ({ log, scheduleForDay }) => {
-  // Fallback if no schedule
-  if (!scheduleForDay) return "No Schedule";
+const getTimeZoneOffsetMs = (utcMs, timeZone) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(utcMs));
 
-  const ts = pick(log, ["timestamp", "createdAt", "time"], "");
-  const clockIn = new Date(ts);
-  if (!ts || Number.isNaN(clockIn.getTime())) return "No Schedule";
-
-  const dutyTz = scheduleForDay.timeRegion || "UTC";
-  const dutyTime = scheduleForDay.timeIn; // "HH:mm"
-  const shiftDuration = Number(scheduleForDay.shiftDuration); // hours
-
-  // date of the clock-in in the duty timezone
-  const dateStr = (() => {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: dutyTz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(clockIn);
-    const obj = {};
-    for (const p of parts) if (p.type !== "literal") obj[p.type] = p.value;
-    return `${obj.year}-${obj.month}-${obj.day}`;
-  })();
-
-  const scheduledUtc = utcFromZoned(dateStr, dutyTime, dutyTz);
-  if (!scheduledUtc) return "No Schedule";
-
-  const diffMin = Math.round((clockIn.getTime() - scheduledUtc.getTime()) / 60000);
-
-  // worked minutes (your row uses timeDiff for hours/min display)
-  const workedMinutes = Number(pick(log, ["timeDiff", "diff", "workedMinutes"], null));
-  const workedHours = Number.isFinite(workedMinutes) ? workedMinutes / 60 : null;
-
-  const timeOutExists = hasRealTimeOut(log) || String(log?.type || "").toLowerCase() === "out";
-
-  // ✅ 1) Completion statuses (highest priority)
-  // Completed: has timeOut AND workedHours >= shiftDuration
-  if (timeOutExists && Number.isFinite(workedHours) && Number.isFinite(shiftDuration) && workedHours >= shiftDuration) {
-    return "Completed";
+  const map = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
   }
 
-  // No Time out: no timeOut AND workedHours > shiftDuration
-  if (!timeOutExists && Number.isFinite(workedHours) && Number.isFinite(shiftDuration) && workedHours > shiftDuration) {
-    return "No Time out";
-  }
+  const asUtc = Date.UTC(
+    Number(map.year),
+    Number(map.month) - 1,
+    Number(map.day),
+    Number(map.hour),
+    Number(map.minute),
+    Number(map.second)
+  );
 
-  // ✅ 2) Arrival statuses
-  // Early: at least 15 minutes before OR (optional) any earlier than -5
-  if (diffMin <= -15) return "Early";
-
-  // On time: within 5 minutes (early or late)
-  if (diffMin >= -5 && diffMin <= 5) return "On time";
-
-  // Late: more than 5 minutes late
-  if (diffMin > 5) return "Late";
-
-  // Between -15 and -5 => still early (not "On time" per your rules)
-  return "Early";
+  return asUtc - utcMs;
 };
 
-export default function AttendancePage({ employees = [] }) {
-  const apiKey = import.meta.env.VITE_HYACINTH_API_KEY;
-  const [schedulesByUserId, setSchedulesByUserId] = useState({});
-  const api = useMemo(() => {
-    if (!apiKey) return null;
-    return new HyacinthAttendanceAPI(apiKey);
-  }, [apiKey]);
+/* ---------------------- log-first session building ---------------------- */
+const sortLogsByEventTime = (logs = []) =>
+  [...(Array.isArray(logs) ? logs : [])]
+    .filter((l) => Number.isFinite(tsMs(getEventTs(l))))
+    .sort((a, b) => tsMs(getEventTs(a)) - tsMs(getEventTs(b)));
 
-  // Timeline options
-  const RANGE_OPTIONS = [1, 2, 7, 14, 30];
+const buildSessionsFromLogs = (
+  logs = [],
+  attendanceResetTime = "05:00",
+  businessTimeZone = "America/Chicago"
+) => {
+  const sorted = sortLogsByEventTime(logs);
+  const sessions = [];
+  let openSession = null;
 
-  // Default timeline: Today (1 day), end = today
-  const [rangeDays, setRangeDays] = useState(1);
-  const [endDate, setEndDate] = useState(() => todayYYYYMMDD());
-  const [startDate, setStartDate] = useState(() => startFromDays(1, todayYYYYMMDD()));
+  for (const log of sorted) {
+    const eventTs = getEventTs(log);
+    if (!eventTs) continue;
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+    if (isIn(log)) {
+      if (openSession) {
+        sessions.push(openSession);
+      }
 
-  const [logsByUserId, setLogsByUserId] = useState({});
-  const [errorsByUserId, setErrorsByUserId] = useState({});
+      openSession = {
+        dayKey: dayKeyFromTs(eventTs, attendanceResetTime, businessTimeZone),
+        logs: [log],
+        inLog: log,
+        outLog: null,
+      };
+      continue;
+    }
 
+    if (isClockedOutLog(log)) {
+      if (openSession) {
+        openSession.logs.push(log);
+        openSession.outLog = log;
+        sessions.push(openSession);
+        openSession = null;
+      } else {
+        sessions.push({
+          dayKey: dayKeyFromTs(eventTs, attendanceResetTime, businessTimeZone),
+          logs: [log],
+          inLog: null,
+          outLog: log,
+        });
+      }
+    }
+  }
+
+  if (openSession) {
+    sessions.push(openSession);
+  }
+
+  return sessions;
+};
+
+/* ---------------------- best in/out log selection ----------------------- */
+const bestTimeInLog = (sorted) => {
+  const inLog = sorted.find((l) => isValidTs(l) && isIn(l));
+  if (inLog) return inLog;
+  return sorted.find((l) => isValidTs(l)) || null;
+};
+
+const bestTimeOutLog = (sorted) => {
+  const outLog = [...sorted].reverse().find((l) => isClockedOutLog(l));
+  if (outLog) return outLog;
+  return null;
+};
+
+const getDiffRawFromLogs = (sorted = []) => {
+  const inLog = sorted.find((l) => isIn(l)) || null;
+  const outLog = [...sorted].reverse().find((l) => isClockedOutLog(l)) || null;
+
+  return (
+    pick(inLog || {}, ["timeDiff", "diff", "difference"], "") ||
+    pick(outLog || {}, ["timeDiff", "diff", "difference"], "") ||
+    pick(
+      sorted.find((l) => {
+        const v = pick(l || {}, ["timeDiff", "diff", "difference"], "");
+        return String(v).trim() !== "";
+      }) || {},
+      ["timeDiff", "diff", "difference"],
+      ""
+    )
+  );
+};
+
+const normalizeStatusFromLogs = (logs = []) => {
+  const statuses = logs
+    .map((l) => safeLower(getRawStatus(l)).trim())
+    .filter(Boolean);
+
+  if (!statuses.length) return "";
+
+  if (statuses.some((s) => s.includes("no schedule"))) return "No Schedule";
+  if (statuses.some((s) => s === "ncns" || s.includes("no show"))) return "No Show";
+  if (statuses.some((s) => s.includes("day off") || s.includes("rest day"))) return "Day Off";
+  if (statuses.some((s) => s.includes("holiday"))) return "Holiday";
+  if (statuses.some((s) => s.includes("leave"))) return "Leave";
+  if (statuses.some((s) => s.includes("vacation"))) return "Vacation";
+  if (statuses.some((s) => s.includes("absent"))) return "Absent";
+  if (statuses.some((s) => s.includes("on break"))) return "On Break";
+  if (statuses.some((s) => s.includes("completed") || s.includes("complete"))) return "Completed";
+  if (statuses.some((s) => s.includes("late"))) return "Late";
+  if (statuses.some((s) => s.includes("early out"))) return "Early Out";
+  if (statuses.some((s) => s.includes("early in"))) return "Early In";
+  if (statuses.some((s) => s.includes("on time"))) return "On Time";
+  if (statuses.some((s) => s.includes("present"))) return "Present";
+
+  return toTitle(statuses[0]);
+};
+
+/* --------------------------- worked minutes ----------------------------- */
+const computeWorkedMinutes = (logs) => {
+  const arr = Array.isArray(logs) ? logs : [];
+  if (!arr.length) return null;
+
+  const sorted = sortLogsByEventTime(arr);
+
+  const inLog = sorted.find((l) => isIn(l)) || null;
+  const outLog = [...sorted].reverse().find((l) => isClockedOutLog(l)) || null;
+
+  if (!inLog || !outLog) return null;
+
+  const start = tsMs(getEventTs(inLog));
+  const end = tsMs(getEventTs(outLog));
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+
+  const totalMinutesBetweenInOut = Math.round((end - start) / 60000);
+
+  const diffRaw = getDiffRawFromLogs(sorted);
+  const diffMinutes = Number(diffRaw);
+  const hasNoSchedule = sorted.some((l) =>
+    safeLower(pick(l, ["status"], "")).includes("no schedule")
+  );
+
+  if (hasNoSchedule) {
+    return totalMinutesBetweenInOut;
+  }
+
+  if (String(diffRaw).trim() === "" || !Number.isFinite(diffMinutes)) {
+    return totalMinutesBetweenInOut;
+  }
+
+  return Math.max(0, totalMinutesBetweenInOut - Math.abs(diffMinutes));
+};
+
+/* ---------------------- build FULL HISTORY table rows ---------------------- */
+const buildHistoryRows = (
+  logs = [],
+  attendanceResetTime = "05:00",
+  businessTimeZone = "America/Chicago"
+) => {
+  const sessions = buildSessionsFromLogs(logs, attendanceResetTime, businessTimeZone);
+  if (!sessions.length) return [];
+
+  const rows = sessions.map((session) => {
+    const sorted = sortLogsByEventTime(session.logs || []);
+    const inLog = session.inLog || sorted.find((l) => isIn(l)) || null;
+    const outLog = session.outLog || [...sorted].reverse().find((l) => isClockedOutLog(l)) || null;
+
+    const inTs = inLog ? getEventTs(inLog) : "";
+    const outTs = outLog ? getEventTs(outLog) : "";
+
+    const inStatus = inLog ? getRawStatus(inLog) : "";
+    const outStatus = outLog ? "Complete" : "-";
+
+    const diffRaw = getDiffRawFromLogs(sorted);
+    const diffText = String(diffRaw ?? "").trim();
+
+    const difference =
+      diffText !== "" && diffText.startsWith("-")
+        ? `${diffText.slice(1)}m`
+        : diffText !== "" && !Number.isNaN(Number(diffText))
+          ? `${diffText}m`
+          : "-";
+
+    const durationMin = computeWorkedMinutes(sorted);
+    const duration = durationMin == null ? "-" : minutesToHrsMinText(durationMin);
+
+    const notes =
+      pick(inLog || {}, ["notes"], "") ||
+      pick(outLog || {}, ["notes"], "") ||
+      "-";
+
+    return {
+      key: `${session.dayKey}:${pick(inLog || outLog || {}, ["id"], Math.random().toString(36))}`,
+      date: prettyDate(session.dayKey, businessTimeZone),
+      day: prettyDayName(session.dayKey, businessTimeZone),
+      inTime: inTs ? formatTimeOnly(inTs, VIEWER_TIME_ZONE) : "-",
+      inStatus: inStatus || (inTs ? "Logged" : "-"),
+      difference,
+      outTime: outTs ? formatTimeOnly(outTs, VIEWER_TIME_ZONE) : "-",
+      outStatus,
+      duration,
+      notes,
+      dayKey: session.dayKey,
+    };
+  });
+
+  rows.sort((a, b) => String(b.dayKey).localeCompare(String(a.dayKey)));
+  return rows;
+};
+
+/* ------------------------ schedule helpers ------------------------ */
+const getScheduleItemForDay = (
+  schedulesByUserId,
+  userId,
+  dayKey,
+  fallbackTimeZone = "UTC"
+) => {
+  const sched = schedulesByUserId?.[String(userId)];
+  if (!Array.isArray(sched) || sched.length === 0) return null;
+
+  for (const item of sched) {
+    const tz = getScheduleTimeZone(item, fallbackTimeZone);
+    const targetWeekday = getWeekdayInTimeZoneFromYmd(dayKey, tz);
+    const itemWeekday = safeLower(pick(item, ["dayOfWeek", "day", "weekday"], ""));
+    if (itemWeekday === targetWeekday) return item;
+  }
+
+  return null;
+};
+
+const getScheduledStartUtcMsForDayKey = (
+  scheduleItem,
+  dayKey,
+  fallbackTimeZone = "UTC"
+) => {
+  if (!scheduleItem || !dayKey) return NaN;
+
+  const tz = getScheduleTimeZone(scheduleItem, fallbackTimeZone);
+  const hhmm = pick(scheduleItem, ["timeIn", "startTime", "shiftStart"], "");
+
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return NaN;
+
+  const [hourStr, minuteStr] = hhmm.split(":");
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return NaN;
+
+  const [year, month, day] = String(dayKey)
+    .split("-")
+    .map((n) => Number(n));
+
+  if (!year || !month || !day) return NaN;
+
+  const approxUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const offsetMs = getTimeZoneOffsetMs(approxUtcMs, tz);
+
+  return Date.UTC(year, month - 1, day, hour, minute, 0) - offsetMs;
+};
+
+const getScheduleDurationMinutes = (scheduleItem) => {
+  const durationHours = Number(
+    pick(scheduleItem || {}, ["shiftDuration", "hours", "durationHours"], NaN)
+  );
+  return Number.isFinite(durationHours) ? Math.round(durationHours * 60) : 600;
+};
+
+const getApplicableScheduleCandidates = (
+  schedulesByUserId,
+  userId,
+  dayKey,
+  fallbackTimeZone = "UTC"
+) => {
+  const candidates = [];
+  const prevDayKey = addDaysYmd(dayKey, -1);
+
+  const sameDayItem = getScheduleItemForDay(
+    schedulesByUserId,
+    userId,
+    dayKey,
+    fallbackTimeZone
+  );
+  const prevDayItem = getScheduleItemForDay(
+    schedulesByUserId,
+    userId,
+    prevDayKey,
+    fallbackTimeZone
+  );
+
+  if (sameDayItem) {
+    const startMs = getScheduledStartUtcMsForDayKey(
+      sameDayItem,
+      dayKey,
+      fallbackTimeZone
+    );
+    const durationMinutes = getScheduleDurationMinutes(sameDayItem);
+
+    candidates.push({
+      scheduleItem: sameDayItem,
+      sourceDayKey: dayKey,
+      startMs,
+      endMs: Number.isFinite(startMs)
+        ? startMs + durationMinutes * 60_000
+        : NaN,
+    });
+  }
+
+  if (prevDayItem) {
+    const startMs = getScheduledStartUtcMsForDayKey(
+      prevDayItem,
+      prevDayKey,
+      fallbackTimeZone
+    );
+    const durationMinutes = getScheduleDurationMinutes(prevDayItem);
+
+    candidates.push({
+      scheduleItem: prevDayItem,
+      sourceDayKey: prevDayKey,
+      startMs,
+      endMs: Number.isFinite(startMs)
+        ? startMs + durationMinutes * 60_000
+        : NaN,
+    });
+  }
+
+  return candidates;
+};
+
+const resolveDailyStatus = ({
+  userId,
+  dayKey,
+  dayLogs,
+  schedulesByUserId,
+  endDate,
+  businessTimeZone = "UTC",
+}) => {
+  const logs = Array.isArray(dayLogs) ? dayLogs : [];
+  const hasLogs = logs.length > 0;
+
+  if (hasLogs) {
+    const rawStatus = normalizeStatusFromLogs(logs);
+    if (rawStatus) return rawStatus;
+
+    if (logs.some((l) => isNcnsInLog(l))) {
+      return "No Show";
+    }
+
+    const hasIn = logs.some((l) => isIn(l));
+    const hasOut = logs.some((l) => isClockedOutLog(l));
+
+    if (hasOut) return "Completed";
+    if (hasIn) return "Live";
+
+    return "Logged";
+  }
+
+  /* schedule fallback only when there are zero logs */
+  const schedArr = schedulesByUserId?.[String(userId)];
+  const hasAnySchedule = Array.isArray(schedArr) && schedArr.length > 0;
+
+  if (!hasAnySchedule) return "No Schedule";
+
+  const candidates = getApplicableScheduleCandidates(
+    schedulesByUserId,
+    userId,
+    dayKey,
+    businessTimeZone
+  );
+
+  if (!candidates.length) return "Day Off";
+
+  const sameDayCandidate = candidates.find((c) => c.sourceDayKey === dayKey) || null;
+
+  /* Off day: no schedule assigned for this exact day */
+  if (!sameDayCandidate) return "Day Off";
+  if (!Number.isFinite(sameDayCandidate.startMs)) return "Day Off";
+
+  /* Scheduled only applies to the current business day */
+  if (String(dayKey) === String(endDate || "")) {
+    return "Scheduled";
+  }
+
+  return "No Log";
+};
+
+export default function AttendancePage({
+  employees = [],
+  rangeOptions = [1, 2, 7, 14, 30],
+  rangeDays = 1,
+  setRangeDays,
+  startDate,
+  endDate,
+  logsByUserId = {},
+  errorsByUserId = {},
+  schedulesByUserId = {},
+  loading = false,
+  error = "",
+  onReload,
+  onFetchFullHistory,
+  historyByUserId = {},
+  loadingHistoryByUserId = {},
+  historyErrorByUserId = {},
+  activeBreaksByUserId = {},
+  attendanceResetTime = "05:00",
+  businessTimeZone = "America/Chicago",
+}) {
   const [query, setQuery] = useState("");
-
-    // ✅ Drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerRow, setDrawerRow] = useState(null);
 
+  const [historyLimit, setHistoryLimit] = useState(30);
+
   const openDrawer = (row) => {
     setDrawerRow(row);
+    setHistoryLimit(30);
     setDrawerOpen(true);
   };
 
@@ -285,166 +785,156 @@ export default function AttendancePage({ employees = [] }) {
     setTimeout(() => setDrawerRow(null), 220);
   };
 
-  const validEmployees = (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e));
+  const validEmployees = useMemo(
+    () => (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e)),
+    [employees]
+  );
 
-  // Keep endDate always "today" BUT only update state when the date changes (prevents refetch every minute)
-  useEffect(() => {
-    const id = setInterval(() => {
-      const t = todayYYYYMMDD();
-      setEndDate((prev) => (prev === t ? prev : t));
-    }, 60 * 1000);
+  const dateKeys = useMemo(() => enumerateYmdRange(startDate, endDate), [startDate, endDate]);
+  const perUserErrorCount = Object.keys(errorsByUserId || {}).length;
 
-    // also run once immediately
-    const t = todayYYYYMMDD();
-    setEndDate((prev) => (prev === t ? prev : t));
-
-    return () => clearInterval(id);
-  }, []);
-
-  // Recompute startDate whenever endDate or rangeDays changes
-  useEffect(() => {
-    setStartDate(startFromDays(rangeDays, endDate));
-  }, [rangeDays, endDate]);
-
-  const loadLogs = async () => {
-    if (!apiKey) {
-      setError("Missing VITE_HYACINTH_API_KEY in .env");
-      return;
-    }
-    if (!api) return;
-
-    if (validEmployees.length === 0) {
-      setLogsByUserId({});
-      setErrorsByUserId({});
-      setError("");
-      return;
-    }
-
-    setLoading(true);
-    setError("");
-    setErrorsByUserId({});
-
-    try {
-      const nextLogs = {};
-      const nextErrors = {};
-      const nextSchedules = {};
-
-      for (const emp of validEmployees) {
-        const userId = getUserId(emp);
-
-        // 1) logs
-        try {
-          const logs = await api.getAttendanceLogs({ userId, startDate, endDate });
-          nextLogs[userId] = Array.isArray(logs) ? logs : [];
-        } catch (e) {
-          nextErrors[userId] = e?.message || "Failed to load attendance logs";
-          nextLogs[userId] = [];
-        }
-
-        // 2) schedule
-        try {
-          const sched = await api.getUserSchedule(userId);
-          nextSchedules[userId] = Array.isArray(sched) ? sched : [];
-        } catch {
-          nextSchedules[userId] = [];
-        }
-      }
-
-      setLogsByUserId(nextLogs);
-      setErrorsByUserId(nextErrors);
-      setSchedulesByUserId(nextSchedules);
-    } catch (e) {
-      setError(e?.message || "Failed to load attendance logs");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Auto-load logs whenever dependencies change (range changes, date flips at midnight, employees loaded, etc.)
-  useEffect(() => {
-    loadLogs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, apiKey, startDate, endDate, employees]);
-
-  // Flatten + join employee identity
   const rows = useMemo(() => {
-    // map employees by userId for quick lookup
-    const empByUserId = new Map(validEmployees.map((e) => [String(getUserId(e)), e]));
-
     const out = [];
 
-    for (const [userIdRaw, logs] of Object.entries(logsByUserId || {})) {
-      const userId = String(userIdRaw);
-
-      const emp = empByUserId.get(userId);
-      const name = emp ? getDisplayName(emp) : "Unknown";
+    for (const emp of validEmployees) {
+      const userId = String(getUserId(emp));
+      const name = getDisplayName(emp);
       const email = pick(emp || {}, ["email"], "");
 
-      const userSchedule = schedulesByUserId?.[userId] || [];
+      const logs = Array.isArray(logsByUserId?.[userId]) ? logsByUserId[userId] : [];
+      const byDay = groupLogsByBusinessDay(logs, attendanceResetTime, businessTimeZone);
 
-      for (const log of Array.isArray(logs) ? logs : []) {
-        const ts = pick(log, ["timestamp", "createdAt", "time"], "");
+      for (const dayKey of dateKeys) {
+        const arr = byDay.get(dayKey) || [];
+        const timedLogs = sortLogsByEventTime(arr);
 
-        const scheduleForDay = getScheduleForLog(userSchedule, ts);
-        const computedStatus = computeStatusFromSchedule({ log, scheduleForDay });
+        const timeInLog = timedLogs.length ? bestTimeInLog(timedLogs) : null;
+        const timeOutLog = timedLogs.length ? bestTimeOutLog(timedLogs) : null;
+
+        const timeInTs = timeInLog ? getEventTs(timeInLog) : "";
+        const timeOutTs = timeOutLog ? getEventTs(timeOutLog) : "";
+        const totalMinutes = timedLogs.length ? computeWorkedMinutes(timedLogs) : null;
+
+        const schedItem = getScheduleItemForDay(
+          schedulesByUserId,
+          userId,
+          dayKey,
+          businessTimeZone
+        );
+        const schedTz = getScheduleTimeZone(schedItem, businessTimeZone);
+
+        const tzSource = timeInLog || timeOutLog || timedLogs[0] || arr[0] || {};
+        const logDeviceTz = pick(tzSource, ["deviceTimezone", "deviceTZ"], "");
+        const logSchedTz = pick(tzSource, ["scheduleTimezone", "scheduleTZ"], "");
+
+        const deviceTz = logDeviceTz || VIEWER_TIME_ZONE;
+
+        const baseStatus = resolveDailyStatus({
+          userId,
+          dayKey,
+          dayLogs: arr,
+          schedulesByUserId,
+          endDate,
+          businessTimeZone,
+        });
+
+        const isOnBreak = !!activeBreaksByUserId?.[userId];
+        const status =
+          isOnBreak && dayKey === endDate && safeLower(baseStatus) === "live"
+            ? "On Break"
+            : baseStatus;
 
         out.push({
-          key: `${userId}:${log?.id ?? ts ?? Math.random().toString(16).slice(2)}`,
-          id: log?.id ?? "—",
+          key: `${userId}:${dayKey}`,
           userId,
-          name: log?.name ?? name,
-          email: log?.email ?? email,
-
-          type: pick(log, ["type"], "—"),
-          status: computedStatus,
-
-          timestamp: ts,
-          notes: pick(log, ["notes", "remark", "message"], ""),
-
-          // keep your existing behavior (timeDiff in minutes)
-          timeDiff: pick(log, ["timeDiff", "diff", "minutesLate", "workedMinutes"], null),
-
-          deviceTz: pick(log, ["deviceTimezone", "deviceTZ"], "—"),
-          schedTz: pick(log, ["scheduleTimezone", "scheduleTZ"], scheduleForDay?.timeRegion || "—"),
-
-          // optional: schedule used for that day
-          scheduleForDay,
-
-          raw: log,
+          name,
+          email,
+          dayKey,
+          status,
+          timeInTs,
+          timeOutTs,
+          totalMinutes,
+          deviceTz,
+          schedTz: logSchedTz || schedTz,
+          businessTz: businessTimeZone,
+          rawLogs: arr,
         });
       }
     }
 
-    out.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    out.sort((a, b) => {
+      const d = String(b.dayKey).localeCompare(String(a.dayKey));
+      if (d !== 0) return d;
+      return a.name.localeCompare(b.name);
+    });
+
     return out;
-  }, [logsByUserId, validEmployees, schedulesByUserId]);
+  }, [
+    logsByUserId,
+    validEmployees,
+    schedulesByUserId,
+    dateKeys,
+    activeBreaksByUserId,
+    endDate,
+    attendanceResetTime,
+    businessTimeZone,
+  ]);
+
+  const visibleRows = useMemo(() => {
+    if (Number(rangeDays) === 1) return rows.filter((r) => r.dayKey === endDate);
+    return rows;
+  }, [rows, rangeDays, endDate]);
 
   const filtered = useMemo(() => {
     const q = safeLower(query).trim();
-    if (!q) return rows;
-    return rows.filter(
+    if (!q) return visibleRows;
+    return visibleRows.filter(
       (r) =>
         safeLower(r.name).includes(q) ||
         safeLower(r.email).includes(q) ||
-        safeLower(r.userId).includes(q)
+        safeLower(r.userId).includes(q) ||
+        safeLower(r.dayKey).includes(q) ||
+        safeLower(r.status).includes(q)
     );
-  }, [rows, query]);
+  }, [visibleRows, query]);
 
   const kpis = useMemo(() => {
-    const total = rows.length;
-    const noSched = rows.filter((r) => safeLower(r.status).includes("no schedule")).length;
+    const total = visibleRows.length;
+    const completed = visibleRows.filter((r) => safeLower(r.status) === "completed").length;
+    const live = visibleRows.filter((r) => safeLower(r.status) === "live").length;
+    const onBreak = visibleRows.filter((r) => safeLower(r.status) === "on break").length;
+    const absent = visibleRows.filter((r) => safeLower(r.status) === "no show").length;
+    const noSchedule = visibleRows.filter((r) => safeLower(r.status) === "no schedule").length;
 
-    const diffs = rows
-      .map((r) => Number(r.timeDiff))
-      .filter((n) => Number.isFinite(n));
-    const avgDiff = diffs.length
-      ? Math.round((diffs.reduce((a, b) => a + b, 0) / diffs.length) * 10) / 10
-      : 0;
+    return { total, completed, live, onBreak, absent, noSchedule };
+  }, [visibleRows]);
 
-    return { total, noSched, avgDiff };
-  }, [rows]);
+  useEffect(() => {
+    const uid = drawerRow?.userId ? String(drawerRow.userId) : null;
+    if (!drawerOpen || !uid || !onFetchFullHistory) return;
+    onFetchFullHistory(uid);
+  }, [drawerOpen, drawerRow, onFetchFullHistory]);
 
-  const perUserErrorCount = Object.keys(errorsByUserId).length;
+  const drawerHistoryLogs = useMemo(() => {
+    const uid = drawerRow?.userId ? String(drawerRow.userId) : null;
+    if (!uid) return [];
+    return Array.isArray(historyByUserId?.[uid]) ? historyByUserId[uid] : [];
+  }, [drawerRow, historyByUserId]);
+
+  const drawerHistoryRows = useMemo(
+    () => buildHistoryRows(drawerHistoryLogs, attendanceResetTime, businessTimeZone),
+    [drawerHistoryLogs, attendanceResetTime, businessTimeZone]
+  );
+
+  const drawerHistoryLoading = useMemo(() => {
+    const uid = drawerRow?.userId ? String(drawerRow.userId) : null;
+    return uid ? !!loadingHistoryByUserId?.[uid] : false;
+  }, [drawerRow, loadingHistoryByUserId]);
+
+  const drawerHistoryError = useMemo(() => {
+    const uid = drawerRow?.userId ? String(drawerRow.userId) : null;
+    return uid ? historyErrorByUserId?.[uid] || "" : "";
+  }, [drawerRow, historyErrorByUserId]);
 
   return (
     <div className="attx">
@@ -453,89 +943,21 @@ export default function AttendancePage({ employees = [] }) {
           <div className="attxTitleWrap">
             <div className="attxTitle">Attendance</div>
             <div className="attxSub">
-              Range: {startDate} → {endDate} • Users: {validEmployees.length}
-              {perUserErrorCount ? ` • Errors: ${perUserErrorCount}` : ""}
+              Range: {startDate} -&gt; {endDate}  |  Users: {validEmployees.length}
+              {perUserErrorCount ? `  |  Errors: ${perUserErrorCount}` : ""}
             </div>
           </div>
         </div>
 
         <div className="attxTopRight">
-          {/* Search */}
-            <div  className="attxField">
-              <div className="attxLabel">Search</div>
-              <input
-                className="attxInput"
-                placeholder="Search name / email / userId…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
           <div className="attxControls">
-            {/* Timeline selector */}
-            <div className="attxField">
-              <div className="attxLabel">Timeline</div>
-
-              <div>
-                {RANGE_OPTIONS.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    className={`attxBtn ${rangeDays === n ? "active" : ""}`}
-                    onClick={() => setRangeDays(n)}
-                    disabled={loading}
-                    title={n === 1 ? "Today" : n === 2 ? "Yesterday → Today" : `Last ${n} days`}
-                  >
-                    {n}
-                  </button>
-                ))}
-
-                {/* +/- to move beyond presets */}
-                <button
-                  type="button"
-                  className="attxBtn"
-                  onClick={() => setRangeDays((d) => Math.min(60, d + 1))}
-                  disabled={loading}
-                  title="Increase range"
-                >
-                  +
-                </button>
-
-                <button
-                  type="button"
-                  className="attxBtn"
-                  onClick={() => setRangeDays((d) => Math.max(1, d - 1))}
-                  disabled={loading}
-                  title="Decrease range"
-                >
-                  -
-                </button>
-
-                {/* Display today without a date picker */}
-                <div className="attxPill" style={{ alignSelf: "center" }}>
-                  Today: <span style={{ color: "var(--text)" }}>{endDate}</span>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  marginTop: 6,
-                  color: "rgba(255,255,255,.65)",
-                  fontWeight: 800,
-                  fontSize: 12,
-                }}
-              >
-                Showing: {startDate} → {endDate} ({rangeDays === 1 ? "Today" : `Last ${rangeDays} days`})
-              </div>
-            </div>
-
-            <button className="attxBtn" onClick={loadLogs} disabled={loading}>
-              {loading ? "Loading…" : "Reload"}
+            <button id="badeng" className="attxBtn" onClick={onReload} disabled={loading}>
+              {loading ? "Loading..." : "Reload"}
             </button>
 
             <div className="attxPill">
-              Logs: <span style={{ color: "var(--text)" }}>{filtered.length}</span>
+              Rows: <span className="attxPillValue">{filtered.length}</span>
             </div>
-            
           </div>
         </div>
       </div>
@@ -544,42 +966,95 @@ export default function AttendancePage({ employees = [] }) {
 
       <div className="attxKpis">
         <div className="attxTile">
-          <div className="attxTileLabel">Total Logs</div>
+          <div className="attxTileLabel">Rows</div>
           <div className="attxTileValue">{kpis.total}</div>
-          <div className="attxTileHint">All events in date range</div>
+          <div className="attxTileHint">One per employee per workday</div>
         </div>
 
         <div className="attxTile">
-          <div className="attxTileLabel">Clock In</div>
-          <div className="attxTileValue">{kpis.ins}</div>
-          <div className="attxTileHint">Type = In</div>
+          <div className="attxTileLabel">Absent</div>
+          <div className="attxTileValue">{kpis.absent}</div>
+          <div className="attxTileHint">Only when API IN status is NCNS</div>
         </div>
 
         <div className="attxTile">
-          <div className="attxTileLabel">Clock Out</div>
-          <div className="attxTileValue">{kpis.outs}</div>
-          <div className="attxTileHint">Type = Out</div>
+          <div className="attxTileLabel">Live</div>
+          <div className="attxTileValue">{kpis.live}</div>
+          <div className="attxTileHint">Has time-in, no time-out</div>
         </div>
 
         <div className="attxTile">
-          <div className="attxTileLabel">No Schedule</div>
-          <div className="attxTileValue">{kpis.noSched}</div>
-          <div className="attxTileHint">Status contains “No Schedule”</div>
+          <div className="attxTileLabel">On Break</div>
+          <div className="attxTileValue">{kpis.onBreak}</div>
+          <div className="attxTileHint">Active break override for today</div>
         </div>
 
         <div className="attxTile">
-          <div className="attxTileLabel">Avg timeDiff</div>
-          <div className="attxTileValue">{kpis.avgDiff}</div>
-          <div className="attxTileHint">Average minutes (when present)</div>
+          <div className="attxTileLabel">Completed</div>
+          <div className="attxTileValue">{kpis.completed}</div>
+          <div className="attxTileHint">Has time-out</div>
+        </div>
+      </div>
+
+      <div className="attxField">
+        <div className="attxField1">
+          <div className="attxLabel">Search</div>
+          <input
+            className="attxInput"
+            placeholder="Search name / email / userId / date / status..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <div className="badenggg">
+          Showing: {startDate} -&gt; {endDate} ({rangeDays === 1 ? "Today" : `Last ${rangeDays} days`})
+          <div>
+            {rangeOptions.map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={`attxBtn ${rangeDays === n ? "active" : ""}`}
+                onClick={() => setRangeDays?.(n)}
+                disabled={loading}
+                title={n === 1 ? "Today" : n === 2 ? "Yesterday -> Today" : `Last ${n} days`}
+              >
+                {n}
+              </button>
+            ))}
+
+            <button
+              type="button"
+              className="attxBtn"
+              onClick={() => setRangeDays?.((d) => Math.max(1, d - 1))}
+              disabled={loading}
+              title="Decrease range"
+            >
+              -
+            </button>
+
+            <button
+              type="button"
+              className="attxBtn"
+              onClick={() => setRangeDays?.((d) => Math.min(60, d + 1))}
+              disabled={loading}
+              title="Increase range"
+            >
+              +
+            </button>
+
+            <div className="attxPill attxPillToday">
+              Today: <span className="attxPillValue">{endDate}</span>
+            </div>
+          </div>
         </div>
       </div>
 
       <div className="attxCard">
         <div className="attxCardHead">
-          <div className="attxCardTitle">Log Stream</div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <div style={{ color: "rgba(255,255,255,.65)", fontWeight: 900, fontSize: 12 }}>
-              Showing {filtered.length} of {rows.length}
+          <div className="attxCardTitle">Daily Attendance</div>
+          <div className="attxCardMetaWrap">
+            <div className="attxCardMeta">
+              Showing {filtered.length} of {visibleRows.length}
             </div>
           </div>
         </div>
@@ -589,8 +1064,9 @@ export default function AttendancePage({ employees = [] }) {
             <thead>
               <tr>
                 <th>User</th>
+                <th>Date</th>
                 <th>Status</th>
-                <th>Times In</th>
+                <th>Time In</th>
                 <th>Time Out</th>
                 <th>Total Hours</th>
                 <th>Timezones</th>
@@ -601,100 +1077,82 @@ export default function AttendancePage({ employees = [] }) {
             <tbody>
               {validEmployees.length === 0 && !loading && !error ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: 16, color: "rgba(255,255,255,.70)", fontWeight: 900 }}>
+                  <td colSpan={8} className="attxTableEmpty">
                     No employees found (or userId not detected).
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: 16, color: "rgba(255,255,255,.70)", fontWeight: 900 }}>
-                    No logs match your search/range.
+                  <td colSpan={8} className="attxTableEmpty">
+                    No rows match your search/range.
                   </td>
                 </tr>
               ) : (
-                filtered.slice(0, 300).map((r) => {
-                return (
-                  <React.Fragment key={r.key}>
-                    <tr className="attxTr">
-                      <td>
-                        <div className="attxPerson">
-                          <div className="attxAvatar">{initials(r.name)}</div>
-                          <div>
-                            <div className="attxName">{r.name}</div>
-                            <div className="attxEmail">{r.email || r.userId}</div>
-                          </div>
+                filtered.slice(0, 400).map((r) => (
+                  <tr className="attxTr" key={r.key}>
+                    <td>
+                      <div className="attxPerson">
+                        <div className="attxAvatar">{initials(r.name)}</div>
+                        <div>
+                          <div className="attxName">{r.name}</div>
+                          <div className="attxEmail">{r.email || r.userId}</div>
                         </div>
-                      </td>
+                      </div>
+                    </td>
 
-                      {/* ✅ Status */}
-                      <td>
-                        <span className={`attxBadge ${statusBadgeClass(r.status)}`}>
-                          <span className="attxDot" />
-                          {String(r.status ?? "—")}
-                        </span>
-                      </td>
+                    <td>
+                      <span className="chip mid">{r.dayKey}</span>
+                    </td>
 
-                      {/* ✅ Times In (your timestamp + id) */}
-                      <td>
-                        {formatTs(r.timestamp)}
-                        <div id="attxEmail" className="attxEmail">{r.id}</div>
-                      </td>
+                    <td>
+                      <span className={`attxBadge ${statusBadgeClass(r.status)}`}>
+                        <span className="attxDot" />
+                        {r.status}
+                      </span>
+                    </td>
 
-                      {/* ✅ timeDiff */}
-                      <td>
-                        {r.timeDiff === null || r.timeDiff === undefined ? (
-                          <span className="chip mid">—</span>
-                        ) : (
-                          <>
-                            {addMinutesToTs(r.timestamp, r.timeDiff)}
-                            <div id="attxEmail" className="attxEmail">{r.id}</div>
-                          </>
-                        )}
-                      </td>
+                    <td>{formatTs(r.timeInTs, r.deviceTz)}</td>
+                    <td>{formatTs(r.timeOutTs, r.deviceTz)}</td>
 
-                      {/* ✅ Total Hours */}
-                      <td>
-                        {r.timeDiff === null || r.timeDiff === undefined ? (
-                          <span className="chip mid">—</span>
-                        ) : (
-                          <span className="chip good">{minutesToHrsMinText(r.timeDiff)}</span>
-                        )}
-                      </td>
+                    <td>
+                      {r.totalMinutes == null ? (
+                        <span className="chip mid">-</span>
+                      ) : (
+                        <span className="chip good">{minutesToHrsMinText(r.totalMinutes)}</span>
+                      )}
+                    </td>
 
-                      {/* ✅ Timezones */}
-                      <td>
-                        <div style={{ fontWeight: 950 }}>{r.deviceTz}</div>
-                        <div className="attxEmail">Sched: {r.schedTz}</div>
-                      </td>
+                    <td>
+                      <div className="attxTzView">View: {r.deviceTz}</div>
+                      <div className="attxEmail">Sched: {r.schedTz || "-"}</div>
+                      <div className="attxEmail">Biz: {r.businessTz}</div>
+                    </td>
 
-                      {/* ✅ Details */}
-                      <td>
-                        <button className="attxExpand" type="button" onClick={() => openDrawer(r)}>
-                          View
-                        </button>
-                      </td>
-                    </tr>
-                  </React.Fragment>
-                );
-              })
+                    <td>
+                      <button className="attxExpand" type="button" onClick={() => openDrawer(r)}>
+                        View
+                      </button>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
+
+          {loading && (
+            <div className="attxLoadingOverlay" role="status" aria-live="polite">
+              <div className="attxLoadingModal">
+                <div className="attxSpinner" />
+                <div className="attxLoadingText">Fetching attendance logs...</div>
+                <div className="attxLoadingSub">
+                  Range: {startDate} -&gt; {endDate}  |  Users: {validEmployees.length}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
-      {loading && (
-        <div className="attxLoadingOverlay" role="status" aria-live="polite">
-          <div className="attxLoadingModal">
-            <div className="attxSpinner" />
-            <div className="attxLoadingText">Fetching attendance logs…</div>
-            <div className="attxLoadingSub">
-              Range: {startDate} → {endDate} • Users: {validEmployees.length}
-            </div>
-          </div>
-        </div>
-      )}
 
-            {/* ✅ Drawer Backdrop */}
       {drawerOpen && (
         <div
           className="attxDrawerBackdrop"
@@ -705,98 +1163,106 @@ export default function AttendancePage({ employees = [] }) {
         />
       )}
 
-      {/* ✅ Drawer Panel (slides from right) */}
       <div className={`attxDrawer ${drawerOpen ? "open" : ""}`} role="dialog" aria-modal="true">
         <div className="attxDrawerHead">
           <div>
-            <div className="attxDrawerTitle">Attendance Details</div>
+            <div className="attxDrawerTitle">Attendance Records</div>
             <div className="attxDrawerSub">
-              {drawerRow?.name || "—"} • {drawerRow?.email || drawerRow?.userId || "—"}
+              {drawerRow?.name || "-"}  |  {drawerRow?.email || drawerRow?.userId || "-"}
             </div>
           </div>
 
           <button className="attxDrawerClose" type="button" onClick={closeDrawer}>
-            ✕
+            X
           </button>
         </div>
 
         <div className="attxDrawerBody">
-          {/* Top summary chips */}
-          <div className="attxDetailChips">
-            <span className="attxChip attxChipGood">{String(drawerRow?.status ?? "—")}</span>
-            <span className="attxChip">{String(drawerRow?.type ?? "—")}</span>
-            <span className="attxChip">{drawerRow?.id ? `ID: ${drawerRow.id}` : "ID: —"}</span>
+          <div className="attxHistoryTop">
+            <div className="attxHistoryMeta">
+              {drawerHistoryLoading
+                ? "Loading history..."
+                : `Showing ${Math.min(historyLimit, drawerHistoryRows.length)} of ${drawerHistoryRows.length} records`}
+            </div>
+
+            {drawerHistoryError ? (
+              <div className="attxAlert attxAlertFlat">
+                {drawerHistoryError}
+              </div>
+            ) : null}
           </div>
 
-          {/* Structured details */}
-          <div className="attxDetailGrid">
-            <div className="attxDetailCard">
-              <div className="attxDetailLabel">Name</div>
-              <div className="attxDetailValue">{drawerRow?.name || "—"}</div>
-            </div>
+          <div className="attxHistoryTableWrap">
+            <table className="attxHistoryTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Day</th>
+                  <th colSpan={3}>IN</th>
+                  <th colSpan={3}>OUT</th>
+                  <th>Notes</th>
+                </tr>
+                <tr>
+                  <th />
+                  <th />
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th>Difference</th>
+                  <th>Time</th>
+                  <th>Status</th>
+                  <th>Duration</th>
+                  <th />
+                </tr>
+              </thead>
 
-            <div className="attxDetailCard">
-              <div className="attxDetailLabel">Email</div>
-              <div className="attxDetailValue">{drawerRow?.email || "—"}</div>
-            </div>
-
-            <div className="attxDetailCard">
-              <div className="attxDetailLabel">User ID</div>
-              <div className="attxDetailValue mono">{drawerRow?.userId || "—"}</div>
-            </div>
-
-            <div className="attxDetailCard">
-              <div className="attxDetailLabel">Time In</div>
-              <div className="attxDetailValue">{formatTs(drawerRow?.timestamp)}</div>
-            </div>
-
-            <div className="attxDetailCard">
-              <div className="attxDetailLabel">Time Out</div>
-              <div className="attxDetailValue">
-                {drawerRow?.timeDiff === null || drawerRow?.timeDiff === undefined
-                  ? "—"
-                  : addMinutesToTs(drawerRow?.timestamp, drawerRow?.timeDiff)}
-              </div>
-            </div>
-
-            <div className="attxDetailCard">
-              <div className="attxDetailLabel">Total Hours</div>
-              <div className="attxDetailValue">
-                {drawerRow?.timeDiff === null || drawerRow?.timeDiff === undefined
-                  ? "—"
-                  : minutesToHrsMinText(drawerRow?.timeDiff)}
-              </div>
-            </div>
-
-            <div className="attxDetailCard">
-              <div className="attxDetailLabel">Device Timezone</div>
-              <div className="attxDetailValue">{drawerRow?.deviceTz || "—"}</div>
-            </div>
-
-            <div className="attxDetailCard">
-              <div className="attxDetailLabel">Schedule Timezone</div>
-              <div className="attxDetailValue">{drawerRow?.schedTz || "—"}</div>
-            </div>
-
-            <div className="attxDetailCard full">
-              <div className="attxDetailLabel">Notes</div>
-              <div className="attxDetailValue">
-                {drawerRow?.notes === null || drawerRow?.notes === undefined || String(drawerRow?.notes).trim() === ""
-                  ? "—"
-                  : String(drawerRow?.notes)}
-              </div>
-            </div>
+              <tbody>
+                {drawerHistoryLoading ? (
+                  <tr>
+                    <td colSpan={9} className="attxHistoryEmpty">
+                      Fetching full attendance history...
+                    </td>
+                  </tr>
+                ) : drawerHistoryRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="attxHistoryEmpty">
+                      No attendance records found.
+                    </td>
+                  </tr>
+                ) : (
+                  drawerHistoryRows.slice(0, historyLimit).map((r) => (
+                    <tr key={r.key}>
+                      <td>{r.date}</td>
+                      <td>{r.day}</td>
+                      <td className="attxHistTime">{r.inTime}</td>
+                      <td>
+                        <span className={`attxHistPill ${statusBadgeClass(r.inStatus)}`}>{r.inStatus}</span>
+                      </td>
+                      <td>{r.difference}</td>
+                      <td className="attxHistTime">{r.outTime}</td>
+                      <td>
+                        <span className={`attxHistPill ${r.outStatus === "Complete" ? "done" : "warn"}`}>
+                          {r.outStatus}
+                        </span>
+                      </td>
+                      <td>{r.duration}</td>
+                      <td className="attxHistoryNotes">{r.notes}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
 
-          {/* Raw JSON (optional, collapsible) */}
-          <details className="attxRawDetails">
-            <summary className="attxRawSummary">View raw JSON</summary>
-            <pre className="attxRawJson">{JSON.stringify(drawerRow?.raw ?? {}, null, 2)}</pre>
-          </details>
+          {!drawerHistoryLoading && drawerHistoryRows.length > historyLimit && (
+            <div className="attxHistoryMore">
+              <button className="attxBtn" type="button" onClick={() => setHistoryLimit((n) => n + 30)}>
+                Load more
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
-
-  
 }
+
