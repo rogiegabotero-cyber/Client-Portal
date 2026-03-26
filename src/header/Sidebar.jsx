@@ -18,6 +18,7 @@ import {
   Megaphone,
 } from "lucide-react";
 import { canAccessPage } from "../auth/roleUtils";
+import HHIUHAI from "../assets/hhi-uhai.png";
 
 export default function Sidebar({
   activePage,
@@ -82,7 +83,9 @@ export default function Sidebar({
 
       <div className="navbar">
         <div className="sb-brand">
-          <div className="sb-brand-badge">UH</div>
+          <div className="sb-brand-badge">
+            <img src={HHIUHAI} alt="" />
+          </div>
           <div className="sb-brand-meta">
             <div className="sb-brand-title">UNICORN HAIR</div>
           </div>

@@ -2,6 +2,16 @@
 import "./dashboard.css";
 import { getBusinessDayKey } from "../utils/attendanceDate";
 import { getBreakLogsByUserIdsInRange } from "../services/breakService";
+import { getDisplayName, getUserId, pick, safeLower } from "../utils/common";
+import {
+  hasRealTimeOut,
+  isClockedOutLog,
+  isIn,
+  isOut,
+  pickOutTs,
+  pickTs,
+  tsMs,
+} from "../utils/attendanceLog";
 import {
   resolveScheduledDurationMinutes,
   resolveScheduledEndUtcMsForDayKey,
@@ -20,72 +30,12 @@ import {
 } from "recharts";
 
 /* ------------------------- helpers ------------------------- */
-const safeLower = (v) => String(v ?? "").toLowerCase();
-
-const pick = (obj, keys, fallback = "") => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null && String(v).length) return v;
-  }
-  return fallback;
-};
-
-const getUserId = (emp) =>
-  emp?.userId ??
-  emp?.userID ??
-  emp?.user_id ??
-  emp?.UserId ??
-  emp?.uid ??
-  emp?.firebaseUid ??
-  emp?.id ??
-  emp?.employeeId ??
-  emp?._id ??
-  emp?.user?.id ??
-  emp?.user?.uid ??
-  emp?.user?.userId ??
-  null;
-
-const getDisplayName = (emp) =>
-  emp?.name ??
-  emp?.fullName ??
-  emp?.displayName ??
-  emp?.email ??
-  `User ${String(getUserId(emp) ?? "")}`.trim();
 
 const shortAgentLabel = (name) => {
   const raw = String(name || "").trim();
   if (!raw) return "-";
   const first = raw.split(/\s+/)[0] || raw;
   return first.length > 12 ? `${first.slice(0, 11)}.` : first;
-};
-
-const pickTs = (log) =>
-  pick(log, ["timestamp", "createdAt", "time", "timeIn", "clockIn", "timestampIn"], "");
-
-const pickOutTs = (log) =>
-  pick(
-    log,
-    [
-      "timeOut",
-      "time_out",
-      "clockOut",
-      "clock_out",
-      "timestampOut",
-      "outTimestamp",
-      "timeout",
-      "outTime",
-      "endTime",
-      "checkedOutAt",
-      "timeEnd",
-      "clockedOutAt",
-    ],
-    ""
-  );
-
-const tsMs = (ts) => {
-  const d = new Date(ts);
-  const t = d.getTime();
-  return Number.isFinite(t) ? t : NaN;
 };
 
 const isValidTs = (log) => Number.isFinite(tsMs(pickTs(log))) || Number.isFinite(tsMs(pickOutTs(log)));
@@ -95,29 +45,6 @@ const eventTsMsFromLog = (log) => {
   if (Number.isFinite(inTs)) return inTs;
   return tsMs(pickOutTs(log));
 };
-
-const isIn = (log) => {
-  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
-  return type.includes("in") || type.includes("clockin") || type.includes("timein");
-};
-
-const isOut = (log) => {
-  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
-  return (
-    type.includes("out") ||
-    type.includes("clockout") ||
-    type.includes("timeout") ||
-    type.includes("checkout")
-  );
-};
-
-const hasRealTimeOut = (raw) => {
-  const v = pickOutTs(raw || {});
-  if (!v) return false;
-  return Number.isFinite(new Date(v).getTime());
-};
-
-const isClockedOutLog = (log) => isOut(log) || hasRealTimeOut(log);
 
 const pickPrimaryAttendanceLog = (dayLogs = []) => {
   const arr = Array.isArray(dayLogs) ? dayLogs : [];
@@ -649,16 +576,22 @@ const toMillisFromFirestoreValue = (value) => {
   return Number.isFinite(t) ? t : NaN;
 };
 
-const formatBreakTimestamp = (value) => {
+const formatBreakTimestamp = (value, timeZone = "America/Chicago") => {
   const ms = toMillisFromFirestoreValue(value);
   if (!Number.isFinite(ms)) return "-";
-  return new Date(ms).toLocaleString();
+  return new Date(ms).toLocaleString(undefined, {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+  });
 };
 
-const formatBreakTimeOnly = (value) => {
+const formatBreakTimeOnly = (value, timeZone = "America/Chicago") => {
   const ms = toMillisFromFirestoreValue(value);
   if (!Number.isFinite(ms)) return "-";
-  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+  });
 };
 
 const formatBreakDurationMinutes = (startValue, endValue) => {
@@ -1088,22 +1021,43 @@ export default function Dashboard({
   ]);
 
   useEffect(() => {
+    let active = true;
+    const defer =
+      typeof queueMicrotask === "function"
+        ? queueMicrotask
+        : (fn) => Promise.resolve().then(fn);
+    const scheduleState = (callback) => {
+      defer(() => {
+        if (!active) return;
+        callback();
+      });
+    };
+    const clearRangeBreakLogs = () => {
+      scheduleState(() => {
+        setRangeBreakLogsByUserId({});
+        setLoadingRangeBreakLogs(false);
+      });
+    };
+
     if (!canViewBreakLog) {
-      setRangeBreakLogsByUserId({});
-      setLoadingRangeBreakLogs(false);
-      return;
+      clearRangeBreakLogs();
+      return () => {
+        active = false;
+      };
     }
 
     if (hoursWindow === "today") {
-      setRangeBreakLogsByUserId({});
-      setLoadingRangeBreakLogs(false);
-      return;
+      clearRangeBreakLogs();
+      return () => {
+        active = false;
+      };
     }
 
     if (!dashPeriod.start || !dashPeriod.end) {
-      setRangeBreakLogsByUserId({});
-      setLoadingRangeBreakLogs(false);
-      return;
+      clearRangeBreakLogs();
+      return () => {
+        active = false;
+      };
     }
 
     const userIds = validEmployees
@@ -1112,9 +1066,10 @@ export default function Dashboard({
       .sort();
 
     if (!userIds.length) {
-      setRangeBreakLogsByUserId({});
-      setLoadingRangeBreakLogs(false);
-      return;
+      clearRangeBreakLogs();
+      return () => {
+        active = false;
+      };
     }
 
     const cacheKey = [
@@ -1127,14 +1082,20 @@ export default function Dashboard({
     ].join("|");
     const cached = breakRangeCacheRef.current.get(cacheKey);
     if (cached) {
-      setRangeBreakLogsByUserId(cached);
-      setLoadingRangeBreakLogs(false);
-      return;
+      scheduleState(() => {
+        setRangeBreakLogsByUserId(cached);
+        setLoadingRangeBreakLogs(false);
+      });
+      return () => {
+        active = false;
+      };
     }
 
     breakRangeRequestRef.current += 1;
     const requestId = breakRangeRequestRef.current;
-    setLoadingRangeBreakLogs(true);
+    scheduleState(() => {
+      setLoadingRangeBreakLogs(true);
+    });
 
     getBreakLogsByUserIdsInRange(userIds, {
       startDayKey: dashPeriod.start,
@@ -1143,21 +1104,25 @@ export default function Dashboard({
       businessTimeZone,
     })
       .then((rows) => {
-        if (requestId !== breakRangeRequestRef.current) return;
+        if (!active || requestId !== breakRangeRequestRef.current) return;
         const safeRows = rows && typeof rows === "object" ? rows : {};
         breakRangeCacheRef.current.set(cacheKey, safeRows);
         setRangeBreakLogsByUserId(safeRows);
       })
       .catch((err) => {
-        if (requestId !== breakRangeRequestRef.current) return;
+        if (!active || requestId !== breakRangeRequestRef.current) return;
         console.error("Failed to load break logs for dashboard range:", err);
         setRangeBreakLogsByUserId({});
       })
       .finally(() => {
-        if (requestId === breakRangeRequestRef.current) {
+        if (active && requestId === breakRangeRequestRef.current) {
           setLoadingRangeBreakLogs(false);
         }
       });
+
+    return () => {
+      active = false;
+    };
   }, [
     canViewBreakLog,
     hoursWindow,
@@ -2202,7 +2167,6 @@ export default function Dashboard({
     <div className="dashX">
       <div className="dashHeader">
         <div className="title-div">
-          <h2 className="dashTitle">Dashboard </h2>
           <h3 className="kpiValue"><strong>Total count: </strong> {attendanceBreakdown.total}</h3>
         </div>
 
@@ -2424,9 +2388,9 @@ export default function Dashboard({
                             <td className="payTdName">{agent.name}</td>
                             <td
                               className="payTdHours"
-                              title={formatBreakTimestamp(agent.startedAt)}
+                              title={formatBreakTimestamp(agent.startedAt, businessTimeZone)}
                             >
-                              {formatBreakTimeOnly(agent.startedAt)}
+                              {formatBreakTimeOnly(agent.startedAt, businessTimeZone)}
                             </td>
                           </tr>
                         ))
@@ -2476,9 +2440,9 @@ export default function Dashboard({
                                 <td className="payTdHours">{row.action}</td>
                                 <td
                                   className="payTdHours"
-                                  title={formatBreakTimestamp(row.actionTime)}
+                                  title={formatBreakTimestamp(row.actionTime, businessTimeZone)}
                                 >
-                                  {formatBreakTimeOnly(row.actionTime)}
+                                  {formatBreakTimeOnly(row.actionTime, businessTimeZone)}
                                 </td>
                                 <td className="payTdHours">{row.totalText || "-"}</td>
                               </tr>
@@ -2577,53 +2541,58 @@ export default function Dashboard({
               <div className="updateItem">Daily Payable Hours Graph</div>
 
               <div className="payableWindowBtns">
-                <button
-                  type="button"
-                  className={`windowBtn ${payableGraphWindow === "week" ? "isActive" : ""}`}
-                  onClick={() => setPayableGraphWindow("week")}
-                >
-                  This Week
-                </button>
-                <button
-                  type="button"
-                  className={`windowBtn ${payableGraphWindow === "15" ? "isActive" : ""}`}
-                  onClick={() => setPayableGraphWindow("15")}
-                >
-                  15D
-                </button>
-                <button
-                  type="button"
-                  className={`windowBtn ${payableGraphWindow === "month" ? "isActive" : ""}`}
-                  onClick={() => setPayableGraphWindow("month")}
-                >
-                  Monthly
-                </button>
-                <button
-                  type="button"
-                  className={`windowBtn ${payableGraphWindow === "all" ? "isActive" : ""}`}
-                  onClick={() => setPayableGraphWindow("all")}
-                >
-                  All
-                </button>
+                <div className="buttons-div">
+                  <button
+                    type="button"
+                    className={`windowBtn ${payableGraphWindow === "week" ? "isActive" : ""}`}
+                    onClick={() => setPayableGraphWindow("week")}
+                  >
+                    This Week
+                  </button>
+                  <button
+                    type="button"
+                    className={`windowBtn ${payableGraphWindow === "15" ? "isActive" : ""}`}
+                    onClick={() => setPayableGraphWindow("15")}
+                  >
+                    15D
+                  </button>
+                  <button
+                    type="button"
+                    className={`windowBtn ${payableGraphWindow === "month" ? "isActive" : ""}`}
+                    onClick={() => setPayableGraphWindow("month")}
+                  >
+                    Monthly
+                  </button>
+                  <button
+                    type="button"
+                    className={`windowBtn ${payableGraphWindow === "all" ? "isActive" : ""}`}
+                    onClick={() => setPayableGraphWindow("all")}
+                  >
+                    All
+                  </button>
+                </div>
+                
+
+                <div className="payableAgentSelectWrap">
+                  <select
+                    className="select-emp"
+                    value={payableGraphUserId}
+                    onChange={(e) => setPayableGraphUserId(e.target.value)}
+                  >
+                    <option value="ALL">Whole Team</option>
+                    {validEmployees.map((emp) => {
+                      const uid = String(getUserId(emp));
+                      return (
+                        <option key={uid} value={uid}>
+                          {getDisplayName(emp)}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
               </div>
 
-              <div className="payableAgentSelectWrap">
-                <select
-                  className="select-emp"
-                  value={payableGraphUserId}
-                  onChange={(e) => setPayableGraphUserId(e.target.value)}
-                >
-                  <option value="ALL">Whole Team</option>
-                  {validEmployees.map((emp) => {
-                    const uid = String(getUserId(emp));
-                    return (
-                      <option key={uid} value={uid}>
-                        {getDisplayName(emp)}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
+              
 
               <div className="payableSummaryPanels">
                 <div className="payableSummaryPanel range">

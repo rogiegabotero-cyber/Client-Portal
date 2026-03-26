@@ -1,40 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./manageEmployee.css";
 import { getBusinessDayKey } from "../utils/attendanceDate";
+import {
+  getDisplayName,
+  getProfileImageUrl,
+  getUserId,
+  pick,
+  safeLower,
+} from "../utils/common";
+import {
+  getEventTs,
+  isClockedOutLog,
+  isIn,
+} from "../utils/attendanceLog";
+import { getScheduleTimeZone } from "../utils/scheduleTime";
 
 /* ---------------- helpers ---------------- */
-const getUserId = (emp) =>
-  emp?.userId ??
-  emp?.userID ??
-  emp?.user_id ??
-  emp?.UserId ??
-  emp?.uid ??
-  emp?.firebaseUid ??
-  emp?.id ??
-  emp?.employeeId ??
-  emp?._id ??
-  emp?.user?.id ??
-  emp?.user?.uid ??
-  emp?.user?.userId ??
-  null;
-
-const getDisplayName = (emp) =>
-  emp?.name ??
-  emp?.fullName ??
-  emp?.displayName ??
-  emp?.email ??
-  `User ${String(getUserId(emp) ?? "")}`.trim();
-
-const safeLower = (v) => String(v ?? "").toLowerCase();
-
-const pick = (obj, keys, fallback = "") => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null && String(v).length) return v;
-  }
-  return fallback;
-};
-
 const initials = (name = "") => {
   const parts = String(name).trim().split(/\s+/).filter(Boolean);
   const a = parts[0]?.[0] ?? "?";
@@ -78,70 +59,42 @@ const formatTs = (ts) => {
   }).format(d);
 };
 
-const formatScheduleTime = (item, keys = []) => {
+const formatUtcIsoToHHMM = (utcIso, timeZone = "America/Chicago") => {
+  const d = new Date(utcIso);
+  if (Number.isNaN(d.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+};
+
+const getScheduleTimeZoneRaw = (item) =>
+  String(
+    pick(item, ["timeRegion", "timezone", "timeZone", "tz", "scheduleTimezone", "scheduleTimeZone"], "")
+  ).trim();
+
+const getScheduleDisplayTimeZone = (item) => {
+  return getScheduleTimeZoneRaw(item) || "-";
+};
+
+const formatScheduleTime = (
+  item,
+  keys = [],
+  utcKeys = []
+) => {
   const raw = pick(item, keys, "");
-  return raw || "-";
-};
+  const scheduleTimeZone = getScheduleTimeZone(item);
 
-const pickTs = (log) =>
-  pick(log, ["timestamp", "createdAt", "time", "timeIn", "clockIn", "timestampIn"], "");
+  if (String(raw).trim()) return raw;
 
-const pickOutTs = (log) =>
-  pick(
-    log,
-    [
-      "timeOut",
-      "time_out",
-      "clockOut",
-      "clock_out",
-      "timestampOut",
-      "outTimestamp",
-      "timeout",
-      "outTime",
-      "endTime",
-      "checkedOutAt",
-      "timeEnd",
-      "clockedOutAt",
-    ],
-    ""
-  );
+  const utcRaw = pick(item, utcKeys, "");
+  const utcConverted = utcRaw ? formatUtcIsoToHHMM(utcRaw, scheduleTimeZone) : "";
+  if (utcConverted) return utcConverted;
 
-const hasRealTimeOut = (raw) => {
-  const v = pickOutTs(raw || {});
-  if (!v) return false;
-  return Number.isFinite(new Date(v).getTime());
-};
-
-const isIn = (log) => {
-  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
-  return type.includes("in") || type.includes("clockin") || type.includes("timein");
-};
-
-const isOut = (log) => {
-  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
-  return (
-    type.includes("out") ||
-    type.includes("clockout") ||
-    type.includes("timeout") ||
-    type.includes("checkout")
-  );
-};
-
-const isClockedOutLog = (log) => isOut(log) || hasRealTimeOut(log);
-
-const getEventTs = (log) => {
-  const outTs = pickOutTs(log);
-  const mainTs = pickTs(log);
-
-  if (safeLower(pick(log, ["type", "logType", "eventType"], "")).includes("out")) {
-    return outTs || mainTs || "";
-  }
-
-  if (hasRealTimeOut(log)) {
-    return outTs || mainTs || "";
-  }
-
-  return mainTs || outTs || "";
+  return "-";
 };
 
 const normalizeStatusText = (value = "") => {
@@ -325,8 +278,6 @@ export default function ManageEmployee({
   employeeProfilesByUserId = {},
   loadingEmployeeProfiles = false,
   employeeProfilesError = "",
-  attendanceErrorsByUserId = {},
-  scheduleErrorsByUserId = {},
   attendanceResetTime = "05:00",
   businessTimeZone = "America/Chicago",
   startDate,
@@ -336,6 +287,7 @@ export default function ManageEmployee({
   onToast,
   onSaveEmployeeStartDate,
   onFetchFullHistory,
+  pageData = null,
 }) {
   const requestedHistoryRef = useRef(new Set());
   const [query, setQuery] = useState("");
@@ -344,6 +296,10 @@ export default function ManageEmployee({
   const [saveError, setSaveError] = useState("");
   const [startDateDraft, setStartDateDraft] = useState("");
   const [scheduleViewMode, setScheduleViewMode] = useState("cards");
+  const profileImagesByUserId =
+    pageData?.profileImagesByUserId && typeof pageData.profileImagesByUserId === "object"
+      ? pageData.profileImagesByUserId
+      : {};
 
   const validEmployees = useMemo(
     () => (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e)),
@@ -392,6 +348,13 @@ export default function ManageEmployee({
   }, [validEmployees, selectedEmployeeId]);
 
   const selectedUserId = selectedEmployee ? String(getUserId(selectedEmployee)) : "";
+  const selectedEmployeeProfileImg = useMemo(() => {
+    if (!selectedEmployee || !selectedUserId) return "";
+    return (
+      String(profileImagesByUserId?.[selectedUserId] || "").trim() ||
+      getProfileImageUrl(selectedEmployee)
+    );
+  }, [selectedEmployee, selectedUserId, profileImagesByUserId]);
   const selectedSavedProfile = employeeProfilesByUserId?.[selectedUserId] || {};
   const profileError = saveError || employeeProfilesError || "";
 
@@ -434,8 +397,6 @@ export default function ManageEmployee({
 
   const selectedActiveBreak = !!activeBreaksByUserId?.[selectedUserId];
   const selectedBreakUsage = Number(breakUsageByUserId?.[selectedUserId] || 0);
-  const selectedAttendanceError = attendanceErrorsByUserId?.[selectedUserId] || "";
-  const selectedScheduleError = scheduleErrorsByUserId?.[selectedUserId] || "";
   const selectedHistoryLoading = !!loadingHistoryByUserId?.[selectedUserId];
   const selectedHistoryError = historyErrorByUserId?.[selectedUserId] || "";
   const summarySourceLogs = selectedHistory.length ? selectedHistory : selectedLogs;
@@ -593,6 +554,8 @@ export default function ManageEmployee({
                 const email = pick(emp, ["email"], "");
                 const position = pick(emp, ["position", "role", "jobTitle"], "");
                 const department = pick(emp, ["department", "departmentName"], "");
+                const profileImg =
+                  String(profileImagesByUserId?.[uid] || "").trim() || getProfileImageUrl(emp);
 
                 return (
                   <button
@@ -601,7 +564,18 @@ export default function ManageEmployee({
                     className={`mep-list-item ${active ? "active" : ""}`}
                     onClick={() => setSelectedEmployeeId(uid)}
                   >
-                    <div className="mep-avatar-sm">{initials(name)}</div>
+                    <div className="mep-avatar-sm" aria-label={name}>
+                      {profileImg ? (
+                        <img
+                          src={profileImg}
+                          alt={`${name} profile`}
+                          className="mep-avatar-img"
+                          loading="lazy"
+                        />
+                      ) : (
+                        initials(name)
+                      )}
+                    </div>
 
                     <div className="mep-list-body">
                       <div className="mep-list-top">
@@ -632,7 +606,18 @@ export default function ManageEmployee({
             <>
               <div className="mep-hero">
                 <div className="mep-hero-main">
-                  <div className="mep-avatar-lg">{initials(getDisplayName(selectedEmployee))}</div>
+                  <div className="mep-avatar-lg" aria-label={getDisplayName(selectedEmployee)}>
+                    {selectedEmployeeProfileImg ? (
+                      <img
+                        src={selectedEmployeeProfileImg}
+                        alt={`${getDisplayName(selectedEmployee)} profile`}
+                        className="mep-avatar-img"
+                        loading="lazy"
+                      />
+                    ) : (
+                      initials(getDisplayName(selectedEmployee))
+                    )}
+                  </div>
 
                   <div className="mep-hero-copy">
                     <div className="mep-hero-name">{getDisplayName(selectedEmployee)}</div>
@@ -744,21 +729,23 @@ export default function ManageEmployee({
                       </div>
                     </div>
 
-                    <div className="mep-toggle">
-                      <button
-                        type="button"
-                        className={`mep-toggle-btn ${scheduleViewMode === "cards" ? "active" : ""}`}
-                        onClick={() => setScheduleViewMode("cards")}
-                      >
-                        Card View
-                      </button>
-                      <button
-                        type="button"
-                        className={`mep-toggle-btn ${scheduleViewMode === "table" ? "active" : ""}`}
-                        onClick={() => setScheduleViewMode("table")}
-                      >
-                        Table View
-                      </button>
+                    <div className="mep-toggle-stack">
+                      <div className="mep-toggle">
+                        <button
+                          type="button"
+                          className={`mep-toggle-btn ${scheduleViewMode === "cards" ? "active" : ""}`}
+                          onClick={() => setScheduleViewMode("cards")}
+                        >
+                          Card View
+                        </button>
+                        <button
+                          type="button"
+                          className={`mep-toggle-btn ${scheduleViewMode === "table" ? "active" : ""}`}
+                          onClick={() => setScheduleViewMode("table")}
+                        >
+                          Table View
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -773,13 +760,25 @@ export default function ManageEmployee({
                           </div>
 
                           <div className="mep-schedule-line">
-                            <span>Start</span>
-                            <strong>{formatScheduleTime(item, ["timeIn", "startTime", "shiftStart", "start"])}</strong>
+                            <span>Start (API TZ)</span>
+                            <strong>
+                              {formatScheduleTime(
+                                item,
+                                ["timeIn", "startTime", "shiftStart", "start"],
+                                ["utcTimeIn", "utcStart", "startUtc", "utcTimeStart"]
+                              )}
+                            </strong>
                           </div>
 
                           <div className="mep-schedule-line">
-                            <span>End</span>
-                            <strong>{formatScheduleTime(item, ["timeOut", "endTime", "shiftEnd", "end"])}</strong>
+                            <span>End (API TZ)</span>
+                            <strong>
+                              {formatScheduleTime(
+                                item,
+                                ["timeOut", "endTime", "shiftEnd", "end"],
+                                ["utcTimeOut", "utcEnd", "endUtc", "utcTimeEnd"]
+                              )}
+                            </strong>
                           </div>
 
                           <div className="mep-schedule-line">
@@ -789,7 +788,7 @@ export default function ManageEmployee({
 
                           <div className="mep-schedule-line">
                             <span>Timezone</span>
-                            <strong>{pick(item, ["timeRegion", "timezone", "timeZone", "tz"], "-")}</strong>
+                            <strong>{getScheduleDisplayTimeZone(item)}</strong>
                           </div>
                         </div>
                       ))}
@@ -800,20 +799,32 @@ export default function ManageEmployee({
                         <thead>
                           <tr>
                             <th>Day</th>
-                            <th>Start</th>
-                            <th>End</th>
+                            <th>Start (API TZ)</th>
+                            <th>End (API TZ)</th>
                             <th>Hours</th>
-                            <th>Timezone</th>
+                            <th>Timezone (API)</th>
                           </tr>
                         </thead>
                         <tbody>
                           {selectedSchedule.map((item, index) => (
                             <tr key={`${selectedUserId}-sched-row-${index}`}>
                               <td>{pick(item, ["dayOfWeek", "day", "weekday"], `Day ${index + 1}`)}</td>
-                              <td>{formatScheduleTime(item, ["timeIn", "startTime", "shiftStart", "start"])}</td>
-                              <td>{formatScheduleTime(item, ["timeOut", "endTime", "shiftEnd", "end"])}</td>
+                              <td>
+                                {formatScheduleTime(
+                                  item,
+                                  ["timeIn", "startTime", "shiftStart", "start"],
+                                  ["utcTimeIn", "utcStart", "startUtc", "utcTimeStart"]
+                                )}
+                              </td>
+                              <td>
+                                {formatScheduleTime(
+                                  item,
+                                  ["timeOut", "endTime", "shiftEnd", "end"],
+                                  ["utcTimeOut", "utcEnd", "endUtc", "utcTimeEnd"]
+                                )}
+                              </td>
                               <td>{pick(item, ["shiftDuration", "hours", "durationHours"], "-")}</td>
-                              <td>{pick(item, ["timeRegion", "timezone", "timeZone", "tz"], "-")}</td>
+                              <td>{getScheduleDisplayTimeZone(item)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -822,28 +833,6 @@ export default function ManageEmployee({
                   )}
                 </div>
 
-                <div className="mep-card mep-card-span-3">
-                  <div className="mep-card-title">API Data Preview</div>
-                  <pre className="mep-code">
-{JSON.stringify(
-  {
-    employee: selectedEmployee,
-    profile: selectedSavedProfile,
-    rangeLogsCount: selectedLogs.length,
-    todayLogsCount: selectedTodayLogs.length,
-    historyLogsCount: selectedHistory.length,
-    selectedActiveBreak,
-    selectedBreakUsage,
-    attendanceSummary: profileStats.summary,
-    attendanceError: selectedAttendanceError || null,
-    historyError: selectedHistoryError || null,
-    scheduleError: selectedScheduleError || null,
-  },
-  null,
-  2
-)}
-                  </pre>
-                </div>
               </div>
             </>
           )}

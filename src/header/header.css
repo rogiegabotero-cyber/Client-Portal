@@ -149,6 +149,16 @@
   text-transform: uppercase;
 }
 
+.profile-avatar-img {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  object-fit: cover;
+  display: block;
+  flex-shrink: 0;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+}
+
 .profile-box{
   display:flex;
   align-items:center;

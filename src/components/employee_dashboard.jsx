@@ -1,66 +1,135 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./employee_dashboard.css";
 import { startBreak, endBreak, DAILY_BREAK_LIMIT_MINUTES } from "../services/breakService";
 import ConfirmModal from "./ConfirmModal";
 import {
+  getScheduleTimeZone,
   resolveScheduledDurationMinutes,
   resolveScheduledEndUtcMsForDayKey,
   resolveScheduledStartUtcMsForDayKey,
 } from "../utils/scheduleTime";
+import { getDisplayName, getProfileImageUrl, getUserId, pick, toMillis, toText } from "../utils/common";
 
 /* ----------------------------- helpers ----------------------------- */
-const pick = (obj, keys, fallback = "") => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null && String(v).length) return v;
-  }
-  return fallback;
-};
-const toText = (value) => String(value || "").trim();
 const buildFallbackHeadline = (text) => {
   const raw = toText(text);
   if (!raw) return "Announcement";
   return raw.length > 64 ? `${raw.slice(0, 64)}...` : raw;
 };
 
-const getUserId = (emp) =>
-  emp?.userId ??
-  emp?.userID ??
-  emp?.user_id ??
-  emp?.UserId ??
-  emp?.uid ??
-  emp?.firebaseUid ??
-  emp?.id ??
-  emp?.employeeId ??
-  emp?._id ??
-  emp?.user?.id ??
-  emp?.user?.uid ??
-  emp?.user?.userId ??
-  null;
+const normalize = (value = "") => String(value || "").trim().toLowerCase();
 
-const getDisplayName = (emp) =>
-  emp?.name ??
-  emp?.fullName ??
-  emp?.displayName ??
-  emp?.email ??
-  `User ${String(getUserId(emp) ?? "")}`.trim();
+const truncateText = (value = "", maxLen = 120) => {
+  const raw = toText(value);
+  if (!raw) return "";
+  if (raw.length <= maxLen) return raw;
+  return `${raw.slice(0, Math.max(1, maxLen)).trimEnd()}...`;
+};
+
+const initialsFromName = (value = "") => {
+  const parts = toText(value).split(/\s+/).filter(Boolean);
+  const first = parts[0]?.[0] || "?";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return `${first}${last}`.toUpperCase();
+};
+
+const toDateOnly = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().slice(0, 10);
+};
+
+const getTaskDaysUntilDeadline = (deadlineDate) => {
+  const ymd = toDateOnly(deadlineDate);
+  if (!ymd) return null;
+
+  const todayYmd = new Date().toISOString().slice(0, 10);
+  const todayStart = new Date(`${todayYmd}T00:00:00`).getTime();
+  const dueStart = new Date(`${ymd}T00:00:00`).getTime();
+  if (!Number.isFinite(todayStart) || !Number.isFinite(dueStart)) return null;
+
+  return Math.floor((dueStart - todayStart) / 86400000);
+};
+
+const formatTaskStatusLabel = (status = "") => {
+  const raw = String(status || "").trim();
+  if (!raw) return "Pending";
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+};
+
+const getTaskStatusMeta = (task = {}) => {
+  const status = normalize(task?.status).replace(/\s+/g, "_");
+  if (status === "completed") return { label: "Completed", tone: "completed" };
+  if (status === "to_be_check") return { label: "To Be Check", tone: "review" };
+
+  const days = getTaskDaysUntilDeadline(task?.deadlineDate);
+  if (Number.isFinite(days) && days < 0) return { label: "Overdue", tone: "overdue" };
+  if (days === 0) return { label: "Due Today", tone: "today" };
+  if (days === 1) return { label: "Due Tomorrow", tone: "warning" };
+  if (status === "in progress" || status === "in_progress") {
+    return { label: "In Progress", tone: "inprogress" };
+  }
+
+  return { label: formatTaskStatusLabel(task?.status), tone: "pending" };
+};
+
+const getTaskDeadlineSortMs = (task = {}) => {
+  const datePart = toDateOnly(task?.deadlineDate);
+  if (!datePart) return Number.POSITIVE_INFINITY;
+
+  const rawTime = String(task?.deadlineTime || "").trim();
+  const timePart = /^\d{1,2}:\d{2}$/.test(rawTime) ? rawTime.padStart(5, "0") : "00:00";
+  const ms = new Date(`${datePart}T${timePart}:00`).getTime();
+  return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY;
+};
+
+const getTaskAssigneeLabel = (task = {}) => {
+  const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+  const assigneeNames = assignees.map((row) => toText(row?.name)).filter(Boolean);
+  if (assigneeNames.length > 0) return assigneeNames.join(", ");
+
+  const employeeName = toText(task?.employeeName);
+  if (employeeName) return employeeName;
+
+  const assigneeIds = Array.isArray(task?.employeeUserIds)
+    ? task.employeeUserIds.map((id) => toText(id)).filter(Boolean)
+    : [];
+  if (assigneeIds.length > 0) return assigneeIds.join(", ");
+
+  const singleAssigneeId = toText(task?.employeeUserId);
+  if (singleAssigneeId) return singleAssigneeId;
+
+  return "Unassigned";
+};
+
+const formatTaskDeadlineLabel = (task = {}, businessTimeZone = "America/Chicago") => {
+  const datePart = toDateOnly(task?.deadlineDate);
+  if (!datePart) return "No deadline";
+
+  const dueDate = new Date(`${datePart}T12:00:00Z`);
+  const dateLabel = Number.isNaN(dueDate.getTime())
+    ? datePart
+    : dueDate.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
+      });
+  const timeLabel = String(task?.deadlineTime || "").trim();
+  return timeLabel ? `${dateLabel} | ${timeLabel}` : dateLabel;
+};
 
 const pickTs = (log) => pick(log, ["timestamp", "createdAt", "time"], "");
 
 const tsMs = (ts) => {
   const t = new Date(ts).getTime();
-  return Number.isFinite(t) ? t : NaN;
-};
-
-const toMillis = (value) => {
-  if (value == null) return NaN;
-  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
-  if (typeof value?.toMillis === "function") return value.toMillis();
-  if (typeof value?.toDate === "function") {
-    const d = value.toDate();
-    return d instanceof Date && Number.isFinite(d.getTime()) ? d.getTime() : NaN;
-  }
-  const t = new Date(value).getTime();
   return Number.isFinite(t) ? t : NaN;
 };
 
@@ -129,6 +198,14 @@ const addHoursToHHMM = (hhmm, hoursToAdd) => {
 const getScheduleTimeIn = (item) =>
   pick(item, ["timeIn", "time_in", "startTime", "shiftStart", "start"], "-");
 
+const getScheduleTimeOut = (item) =>
+  pick(item, ["timeOut", "time_out", "endTime", "shiftEnd", "end"], "-");
+
+const getScheduleTimeZoneRaw = (item) =>
+  String(
+    pick(item, ["timeRegion", "timezone", "timeZone", "tz", "scheduleTimezone", "scheduleTimeZone"], "")
+  ).trim();
+
 const getScheduleDurationHours = (item) => {
   const value = Number(pick(item, ["shiftDuration", "hours", "durationHours"], null));
   return Number.isFinite(value) ? value : null;
@@ -149,8 +226,11 @@ const formatUtcIsoToHHMM = (utcIso, timeZone) => {
 export default function EmployeeDashboard({
   employees = [],
   announcements = [],
+  assignments = [],
   schedulesByUserId = {},
   logsByUserId = {},
+  loadingAssignments = false,
+  assignmentsError = "",
   onFetchFullHistory,
   historyByUserId = {},
   loadingHistoryByUserId = {},
@@ -163,6 +243,7 @@ export default function EmployeeDashboard({
   activeBreaksByUserId = {},
   breakUsageByUserId = {},
   onBreakStatusChanged,
+  onOpenTaskDetails,
   pageData = null,
 }) {
   const requestedHistoryRef = useRef(new Set());
@@ -179,8 +260,11 @@ export default function EmployeeDashboard({
   const [breakLoading, setBreakLoading] = useState(false);
   const [breakError, setBreakError] = useState("");
   const [breakConfirmAction, setBreakConfirmAction] = useState("");
+  const [taskStatusFilter, setTaskStatusFilter] = useState("all");
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
   const [selectedAnnouncement, setSelectedAnnouncement] = useState(null);
+  const panelRef = useRef(null);
+  const [panelHeightPx, setPanelHeightPx] = useState(null);
 
   const effectiveSelectedId = useMemo(() => {
     const fromParent = String(selectedEmployeeId || "");
@@ -208,6 +292,131 @@ export default function EmployeeDashboard({
     if (Array.isArray(pageData?.announcements)) return pageData.announcements;
     return Array.isArray(announcements) ? announcements : [];
   }, [announcements, pageData]);
+
+  const assignmentRows = useMemo(() => {
+    if (Array.isArray(assignments) && assignments.length) return assignments;
+    if (Array.isArray(pageData?.assignments)) return pageData.assignments;
+    return Array.isArray(assignments) ? assignments : [];
+  }, [assignments, pageData]);
+
+  const tasksLoading = !!loadingAssignments || !!pageData?.loading?.assignments;
+  const tasksError = String(assignmentsError || pageData?.errors?.assignments || "").trim();
+  const profileImagesByUserId =
+    pageData?.profileImagesByUserId && typeof pageData.profileImagesByUserId === "object"
+      ? pageData.profileImagesByUserId
+      : {};
+  const employeesByUserId = useMemo(() => {
+    const map = new Map();
+    for (const row of Array.isArray(employees) ? employees : []) {
+      const userId = toText(getUserId(row));
+      if (!userId) continue;
+      map.set(userId, row);
+    }
+    return map;
+  }, [employees]);
+
+  const getTaskAssignees = (task = {}) => {
+    const out = [];
+    const seen = new Set();
+
+    const pushAssignee = (rawUserId, rawName, rawImg) => {
+      const userId = toText(rawUserId);
+      const dedupeKey = userId || `name:${toText(rawName).toLowerCase()}`;
+      if (dedupeKey && seen.has(dedupeKey)) return;
+      if (dedupeKey) seen.add(dedupeKey);
+
+      const employeeRow = userId ? employeesByUserId.get(userId) : null;
+      const displayName =
+        toText(rawName) || (employeeRow ? toText(getDisplayName(employeeRow)) : "") || userId || "Unassigned";
+      const mappedProfileImg = userId ? toText(profileImagesByUserId?.[userId]) : "";
+      const profileImg =
+        toText(rawImg) ||
+        mappedProfileImg ||
+        (employeeRow ? getProfileImageUrl(employeeRow) : "");
+
+      out.push({
+        userId,
+        name: displayName,
+        profileImg,
+      });
+    };
+
+    const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+    for (const assignee of assignees) {
+      pushAssignee(
+        assignee?.userId || assignee?.employeeUserId || assignee?.uid || assignee?.id,
+        assignee?.name || assignee?.employeeName || assignee?.displayName || assignee?.email,
+        assignee?.profileImg || assignee?.profileImage || assignee?.profileImageUrl
+      );
+    }
+
+    const assigneeIds = Array.isArray(task?.employeeUserIds)
+      ? task.employeeUserIds.map((id) => toText(id)).filter(Boolean)
+      : [];
+    for (const id of assigneeIds) {
+      pushAssignee(id, "", "");
+    }
+
+    const singleAssigneeId = toText(task?.employeeUserId);
+    if (singleAssigneeId) pushAssignee(singleAssigneeId, "", "");
+
+    const taskEmployeeName = toText(task?.employeeName);
+    if (taskEmployeeName && out.length === 0) {
+      pushAssignee("", taskEmployeeName, "");
+    }
+
+    if (out.length === 0) {
+      out.push({
+        userId: "",
+        name: "Unassigned",
+        profileImg: "",
+      });
+    }
+
+    return out;
+  };
+
+  const employeeTasks = useMemo(() => {
+    const rows = (Array.isArray(assignmentRows) ? assignmentRows : [])
+      .slice()
+      .sort((a, b) => {
+        const aCompleted = normalize(a?.status) === "completed";
+        const bCompleted = normalize(b?.status) === "completed";
+        if (aCompleted !== bCompleted) return aCompleted ? 1 : -1;
+
+        const aDue = getTaskDeadlineSortMs(a);
+        const bDue = getTaskDeadlineSortMs(b);
+        if (aDue !== bDue) return aDue - bDue;
+
+        const aUpdated = toMillis(a?.updatedAt) || toMillis(a?.createdAt) || 0;
+        const bUpdated = toMillis(b?.updatedAt) || toMillis(b?.createdAt) || 0;
+        return bUpdated - aUpdated;
+      });
+
+    return rows;
+  }, [assignmentRows]);
+
+  const filteredEmployeeTasks = useMemo(() => {
+    const list = Array.isArray(employeeTasks) ? employeeTasks : [];
+    if (taskStatusFilter === "completed") {
+      return list.filter((task) => normalize(task?.status) === "completed");
+    }
+    if (taskStatusFilter === "active") {
+      return list.filter((task) => normalize(task?.status) !== "completed");
+    }
+    return list;
+  }, [employeeTasks, taskStatusFilter]);
+
+  const taskFilterCounts = useMemo(() => {
+    const list = Array.isArray(employeeTasks) ? employeeTasks : [];
+    const completed = list.filter((task) => normalize(task?.status) === "completed").length;
+    const all = list.length;
+    return {
+      all,
+      active: Math.max(0, all - completed),
+      completed,
+    };
+  }, [employeeTasks]);
 
   useEffect(() => {
     const uid = String(effectiveSelectedId || "");
@@ -249,15 +458,26 @@ export default function EmployeeDashboard({
 
     const utcTimeIn = pick(todayItem, ["utcTimeIn", "utcStart", "startUtc", "utcTimeStart"], "");
     const utcTimeOut = pick(todayItem, ["utcTimeOut", "utcEnd", "endUtc", "utcTimeEnd"], "");
-    const convertedIn = utcTimeIn ? formatUtcIsoToHHMM(utcTimeIn, businessTimeZone) : "";
-    const timeIn = convertedIn || getScheduleTimeIn(todayItem);
+    const apiTimeIn = getScheduleTimeIn(todayItem);
+    const apiTimeOut = getScheduleTimeOut(todayItem);
+    const apiTimeZone = getScheduleTimeZoneRaw(todayItem);
+    const scheduleTimeZone = getScheduleTimeZone(todayItem);
+    const displayTimeZone = scheduleTimeZone;
+    const convertedInFromUtc =
+      utcTimeIn ? formatUtcIsoToHHMM(utcTimeIn, displayTimeZone) : "";
+    const convertedIn = convertedInFromUtc;
+    const timeIn = apiTimeIn !== "-" ? apiTimeIn : convertedIn || "-";
     const durationHours = getScheduleDurationHours(todayItem);
-    const convertedOut = utcTimeOut ? formatUtcIsoToHHMM(utcTimeOut, businessTimeZone) : "";
-    const { outHHMM } = convertedOut
-      ? { outHHMM: convertedOut, dayOffset: 0 }
-      : timeIn !== "-" && durationHours != null
-        ? addHoursToHHMM(timeIn, durationHours)
-        : { outHHMM: "-", dayOffset: 0 };
+    const convertedOutFromUtc =
+      utcTimeOut ? formatUtcIsoToHHMM(utcTimeOut, displayTimeZone) : "";
+    const convertedOut = convertedOutFromUtc;
+    const { outHHMM } = apiTimeOut !== "-"
+      ? { outHHMM: apiTimeOut, dayOffset: 0 }
+      : convertedOut
+        ? { outHHMM: convertedOut, dayOffset: 0 }
+        : timeIn !== "-" && durationHours != null
+          ? addHoursToHHMM(timeIn, durationHours)
+          : { outHHMM: "-", dayOffset: 0 };
 
     const startMs = resolveScheduledStartUtcMsForDayKey(todayItem, endDate);
     const endMs = resolveScheduledEndUtcMsForDayKey(todayItem, endDate);
@@ -268,10 +488,12 @@ export default function EmployeeDashboard({
 
     return {
       raw: todayItem,
-      dayLabel: new Date(`${endDate}T12:00:00Z`).toLocaleDateString(undefined, {
-        weekday: "long",
-        timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
-      }),
+      dayLabel:
+        pick(todayItem, ["dayOfWeek", "day", "weekday"], "") ||
+        new Date(`${endDate}T12:00:00Z`).toLocaleDateString(undefined, {
+          weekday: "long",
+          timeZone: scheduleTimeZone,
+        }),
       startTimeLabel: timeIn || "-",
       endTimeLabel: outHHMM || "-",
       durationLabel: durationHours == null ? "-" : `${durationHours}h`,
@@ -279,8 +501,9 @@ export default function EmployeeDashboard({
       startMs,
       endMs,
       isActive: true,
+      timeZone: apiTimeZone || (convertedIn || convertedOut ? displayTimeZone : ""),
     };
-  }, [schedulesByUserId, effectiveSelectedId, endDate, businessTimeZone]);
+  }, [schedulesByUserId, effectiveSelectedId, endDate]);
 
   const logsToday = useMemo(
     () => logsByUserId?.[String(effectiveSelectedId)] || [],
@@ -334,6 +557,52 @@ export default function EmployeeDashboard({
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const updatePanelHeight = () => {
+      const panelEl = panelRef.current;
+      if (!panelEl) return;
+
+      const rectTop = panelEl.getBoundingClientRect().top;
+      const viewportHeight = window.innerHeight || 0;
+      const bottomGapPx = 16;
+      const minPanelHeightPx = 320;
+      const nextHeight = Math.max(
+        minPanelHeightPx,
+        Math.floor(viewportHeight - rectTop - bottomGapPx)
+      );
+
+      setPanelHeightPx((prev) => (prev === nextHeight ? prev : nextHeight));
+    };
+
+    const rafId = window.requestAnimationFrame(updatePanelHeight);
+    window.addEventListener("resize", updatePanelHeight);
+    window.addEventListener("orientationchange", updatePanelHeight);
+
+    const panelEl = panelRef.current;
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            updatePanelHeight();
+          })
+        : null;
+
+    if (resizeObserver && panelEl) {
+      resizeObserver.observe(panelEl);
+      if (panelEl.parentElement) resizeObserver.observe(panelEl.parentElement);
+      const dashEl = panelEl.closest(".empDash");
+      if (dashEl) resizeObserver.observe(dashEl);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", updatePanelHeight);
+      window.removeEventListener("orientationchange", updatePanelHeight);
+      if (resizeObserver) resizeObserver.disconnect();
+    };
+  }, [employee]);
+
   const breakLimitMinutes = DAILY_BREAK_LIMIT_MINUTES;
   const savedTotalMinutes = Math.max(0, Number(breakUsage.totalMinutes || 0));
   const savedActiveMinutes = Math.max(0, Number(breakUsage.activeBreakMinutes || 0));
@@ -360,8 +629,6 @@ export default function EmployeeDashboard({
   if (breakMinutesLeft <= 10) breakProgressVariant = "danger";
   else if (breakMinutesLeft <= 20) breakProgressVariant = "warning";
   else if (breakMinutesLeft <= 35) breakProgressVariant = "caution";
-
-  const breakLeftLabel = isOnBreak ? breakMinutesLeft.toFixed(1) : String(Math.round(breakMinutesLeft));
   const breakUsedLabel = isOnBreak
     ? effectiveUsedMinutes.toFixed(1)
     : String(Math.round(effectiveUsedMinutes));
@@ -503,6 +770,24 @@ export default function EmployeeDashboard({
   }, [logsToday, monthlyAttendance]);
 
   const now = new Date(Number.isFinite(liveNowMs) ? liveNowMs : nowMs);
+  const clockReferenceTimeZone = String(businessTimeZone || "").trim() || "America/Chicago";
+  const clockReferenceLabel = useMemo(() => {
+    try {
+      const zonePart = new Intl.DateTimeFormat(undefined, {
+        timeZone: clockReferenceTimeZone,
+        timeZoneName: "short",
+      })
+        .formatToParts(now)
+        .find((part) => part.type === "timeZoneName")?.value;
+
+      return zonePart
+        ? `${clockReferenceTimeZone} (${zonePart})`
+        : clockReferenceTimeZone;
+    } catch {
+      return clockReferenceTimeZone;
+    }
+  }, [clockReferenceTimeZone, now]);
+
   const greetingText = useMemo(() => {
     const parts = getPartsInTimeZone(
       Number.isFinite(liveNowMs) ? liveNowMs : nowMs,
@@ -521,13 +806,11 @@ export default function EmployeeDashboard({
 
   return (
     <div className="empDash">
-      {!employee ? (
+          {!employee ? (
         <div>No employee selected</div>
       ) : (
         <>
           <div className="empDashTop">
-            <h2 className="empDashTitle">Dashboard</h2>
-
             <div>
               <select
                 className="employee-select"
@@ -554,10 +837,35 @@ export default function EmployeeDashboard({
             </div>
           </div>
 
-          <div className="empPanel">
+          <div
+            ref={panelRef}
+            className="empPanel"
+            style={panelHeightPx ? { height: `${panelHeightPx}px` } : undefined}
+          >
             <div className="empPanelHead">
               <div className="empPanelHeadLeft">
                 <span>Today's Schedule</span>
+                <div className="scheduleBoxes">
+                    <div className="miniBox">
+                      <div className="miniLabel">Start: </div>
+                      <div className="miniValue">{todaySchedule?.startTimeLabel || "-"}</div>
+                    </div>
+
+                    <div className="miniBox">
+                      <div className="miniLabel">Duration: </div>
+                      <div className="miniValue">{todaySchedule?.durationLabel || "-"}</div>
+                    </div>
+
+                    <div className="miniBox">
+                      <div className="miniLabel">End: </div>
+                      <div className="miniValue">{todaySchedule?.endTimeLabel || "-"}</div>
+                    </div>
+
+                    <div className="miniBox">
+                      <div className="miniLabel">Time Zone: </div>
+                      <div className="miniValue">{todaySchedule?.timeZone || "-"}</div>
+                    </div>
+                  </div>
               </div>
               <div className="empDatePill">
                 {now.toLocaleDateString(undefined, {
@@ -576,23 +884,6 @@ export default function EmployeeDashboard({
                     </div>
                   </div>
 
-                  <div className="scheduleBoxes">
-                    <div className="miniBox">
-                      <div className="miniLabel">Start</div>
-                      <div className="miniValue">{todaySchedule?.startTimeLabel || "-"}</div>
-                    </div>
-
-                    <div className="miniBox">
-                      <div className="miniLabel">Duration</div>
-                      <div className="miniValue">{todaySchedule?.durationLabel || "-"}</div>
-                    </div>
-
-                    <div className="miniBox">
-                      <div className="miniLabel">End</div>
-                      <div className="miniValue">{todaySchedule?.endTimeLabel || "-"}</div>
-                    </div>
-                  </div>
-
                   <div className="progressCard">
                     <div className="progressHead">
                       <span>Break Time Left</span>
@@ -604,11 +895,6 @@ export default function EmployeeDashboard({
                       max={100}
                       value={breakProgressPercent}
                     />
-
-                    <div className="progressMetaRow">
-                      <span>Remaining</span>
-                      <span>{breakLeftLabel} min</span>
-                    </div>
 
                     <div className="progressMetaRow">
                       <span>Used</span>
@@ -627,30 +913,8 @@ export default function EmployeeDashboard({
                       </div>
                     ) : null}
                   </div>
-                </div>
 
-                <div className="empSideColumn">
-                  <div className="clockedCard">
-                    <div className="clockedInner">
-                      <div className="clockedTitle">
-                        {isOnBreak ? "Currently On Break" : "Currently Clocked In"}
-                      </div>
-                      <div className="clockedTimeValue">
-                        {now.toLocaleTimeString(undefined, {
-                          timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
-                        })}
-                      </div>
-                    </div>
-
-                    {isOnBreak ? (
-                      <div className="infoPillRow">
-                        <div className="infoPill">
-                          <span>Current Break</span>
-                          <span>{breakMinutesActive.toFixed(1)} min</span>
-                        </div>
-                      </div>
-                    ) : null}
-
+                  <div className="scheduleBreakActions">
                     {breakError ? (
                       <div className="breakError">
                         {breakError}
@@ -670,6 +934,180 @@ export default function EmployeeDashboard({
                     >
                       {breakLoading ? "Please wait..." : isOnBreak ? "BACK" : "BREAK"}
                     </button>
+                  </div>
+
+                  <div className="greetingPanel">
+                    <div className="greetingTitle">{greetingText}, {employee.name || employee.email}</div>
+
+                    <div className="greetingSub">
+                      {now.toLocaleDateString(undefined, {
+                        weekday: "long",
+                        year: "numeric",
+                        month: "long",
+                        day: "numeric",
+                        timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
+                      })}{" "}
+                      at{" "}
+                      {now.toLocaleTimeString(undefined, {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
+                      })}
+                    </div>
+
+                    <div className="statsRow">
+                      <StatCard value={stats.monthlyAttendance} label="Monthly Attendance" />
+                      <StatCard value={stats.earlyCheckins} label="Early Check-ins" />
+                      <StatCard value={stats.onTimeCheckins} label="On-Time Check-ins" />
+                      <StatCard value={stats.lateCheckins} label="Late Check-ins" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="empSideColumn">
+                  <div className="clockedCard">
+                    <div className="clockedInner">
+                      <div className="clockedTitle">
+                        {isOnBreak ? "Currently On Break" : "Current Time"}
+                      </div>
+                      <div className="clockedTimeValue">
+                        {now.toLocaleTimeString(undefined, {
+                          timeZone: clockReferenceTimeZone,
+                        })}
+                      </div>
+                      <div className="clockedTimeZoneRef">Time Zone: {clockReferenceLabel}</div>
+                    </div>
+
+                    {isOnBreak ? (
+                      <div className="infoPillRow">
+                        <div className="infoPill">
+                          <span>Current Break</span>
+                          <span>{breakMinutesActive.toFixed(1)} min</span>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="taskListCard">
+                    <div className="taskListHead">
+                      <span>Tasks</span>
+                      <div className="taskListHeadRight">
+                        <div className="taskFilterGroup" role="tablist" aria-label="Task status filters">
+                          <button
+                            type="button"
+                            className={`taskFilterBtn ${taskStatusFilter === "all" ? "active" : ""}`}
+                            onClick={() => setTaskStatusFilter("all")}
+                            aria-pressed={taskStatusFilter === "all"}
+                          >
+                            <span>All</span>
+                            <span className="taskFilterBtnCount">{taskFilterCounts.all}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`taskFilterBtn ${taskStatusFilter === "active" ? "active" : ""}`}
+                            onClick={() => setTaskStatusFilter("active")}
+                            aria-pressed={taskStatusFilter === "active"}
+                          >
+                            <span>Active</span>
+                            <span className="taskFilterBtnCount">{taskFilterCounts.active}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`taskFilterBtn ${taskStatusFilter === "completed" ? "active" : ""}`}
+                            onClick={() => setTaskStatusFilter("completed")}
+                            aria-pressed={taskStatusFilter === "completed"}
+                          >
+                            <span>Completed</span>
+                            <span className="taskFilterBtnCount">{taskFilterCounts.completed}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="taskListBody">
+                      {tasksLoading ? (
+                        <div className="taskListEmpty">Loading tasks...</div>
+                      ) : tasksError ? (
+                        <div className="taskListEmpty">{tasksError}</div>
+                      ) : filteredEmployeeTasks.length === 0 ? (
+                        <div className="taskListEmpty">
+                          {employeeTasks.length === 0
+                            ? "No tasks available."
+                            : "No tasks match this filter."}
+                        </div>
+                      ) : (
+                        filteredEmployeeTasks.map((task, index) => {
+                          const meta = getTaskStatusMeta(task);
+                          const taskForLabel = getTaskAssigneeLabel(task);
+                          const taskAssignees = getTaskAssignees(task);
+                          const taskId = toText(task?.id);
+                          const canOpenTaskDetails =
+                            !!taskId && typeof onOpenTaskDetails === "function";
+
+                          return (
+                            <button
+                              type="button"
+                              key={String(task?.id || `${effectiveSelectedId}-task-${index}`)}
+                              className={`taskListItem taskListItemButton ${
+                                canOpenTaskDetails ? "clickable" : ""
+                              }`}
+                              onClick={() => {
+                                if (!canOpenTaskDetails) return;
+                                onOpenTaskDetails(taskId);
+                              }}
+                              disabled={!canOpenTaskDetails}
+                            >
+                              <div className="taskListItemTop">
+                                <div className="taskListTitle">{toText(task?.title) || "Untitled task"}</div>
+                                <span className={`taskListStatus ${meta.tone}`}>{meta.label}</span>
+                              </div>
+
+                              <div className="taskListFor">
+                                <span className="taskListForLabel">For:</span>
+                                <div className="taskAssigneeGroup" aria-label={`Task assignees: ${taskForLabel}`}>
+                                  {taskAssignees.map((assignee, assigneeIndex) => (
+                                    <div
+                                      key={`${toText(task?.id) || index}-${assignee.userId || assignee.name}-${assigneeIndex}`}
+                                      className="taskAssigneeAvatar"
+                                      title={assignee.name}
+                                      aria-label={assignee.name}
+                                    >
+                                      {assignee.profileImg ? (
+                                        <img
+                                          src={assignee.profileImg}
+                                          alt={`${assignee.name} profile`}
+                                          className="taskAssigneeAvatarImg"
+                                          loading="lazy"
+                                        />
+                                      ) : (
+                                        initialsFromName(assignee.name)
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="taskListMeta">
+                                <span>Due: {formatTaskDeadlineLabel(task, businessTimeZone)}</span>
+                                <span>
+                                  Priority:{" "}
+                                  {toText(task?.priority)
+                                    ? toText(task.priority).charAt(0).toUpperCase() +
+                                      toText(task.priority).slice(1)
+                                    : "Medium"}
+                                </span>
+                              </div>
+
+                              {toText(task?.instructions) ? (
+                                <div className="taskListNotes">
+                                  {truncateText(task.instructions, 120)}
+                                </div>
+                              ) : null}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
                   </div>
 
                   <div className="announcementCard">
@@ -703,33 +1141,6 @@ export default function EmployeeDashboard({
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <div className="greetingPanel">
-            <div className="greetingTitle">{greetingText}, {employee.name || employee.email}</div>
-
-            <div className="greetingSub">
-              {now.toLocaleDateString(undefined, {
-                weekday: "long",
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-                timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
-              })}{" "}
-              at{" "}
-              {now.toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-                timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
-              })}
-            </div>
-
-            <div className="statsRow">
-              <StatCard value={stats.monthlyAttendance} label="Monthly Attendance" />
-              <StatCard value={stats.earlyCheckins} label="Early Check-ins" />
-              <StatCard value={stats.onTimeCheckins} label="On-Time Check-ins" />
-              <StatCard value={stats.lateCheckins} label="Late Check-ins" />
             </div>
           </div>
 
@@ -798,6 +1209,3 @@ function StatCard({ value, label }) {
     </div>
   );
 }
-
-
-

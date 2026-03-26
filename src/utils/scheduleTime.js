@@ -1,12 +1,6 @@
-const DEFAULT_SCHEDULE_TIME_ZONE = "America/Chicago";
+import { pick } from "./common";
 
-const pick = (obj, keys, fallback = "") => {
-  for (const key of keys) {
-    const value = obj?.[key];
-    if (value !== undefined && value !== null && String(value).length) return value;
-  }
-  return fallback;
-};
+const DEFAULT_SCHEDULE_TIME_ZONE = "America/Chicago";
 
 const START_UTC_KEYS = [
   "utcTimeIn",

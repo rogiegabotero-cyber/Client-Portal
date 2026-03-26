@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useAuth } from "../auth/useAuth";
 import { Eye, EyeOff } from "lucide-react";
 import "./login.css";
+import HHIUHAI from "../assets/hhi-uhai.png"
 
 export default function LoginPage() {
   const { signIn, loading } = useAuth();
@@ -85,7 +86,10 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <div className="login-right">
+        <div className="login-right"> 
+          <div className="hhiuhai-logo">
+            <img src={HHIUHAI} alt="" />
+          </div>
           <div className="login-brand-box">
             <h2>Welcome</h2>
             <p>

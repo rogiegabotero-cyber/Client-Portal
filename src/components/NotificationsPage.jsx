@@ -1,19 +1,13 @@
-﻿import React, { useMemo } from "react";
+import React, { useMemo } from "react";
 import "./NotificationsPage.css";
+import { toMillis } from "../utils/common";
 
-const toMillis = (value) => {
-  if (!value) return NaN;
-  if (typeof value?.toMillis === "function") return value.toMillis();
-  if (typeof value?.toDate === "function") return value.toDate().getTime();
-
-  const t = new Date(value).getTime();
-  return Number.isFinite(t) ? t : NaN;
-};
-
-const formatDateTime = (value) => {
+const formatDateTime = (value, timeZone = "America/Chicago") => {
   const ms = toMillis(value);
   if (!Number.isFinite(ms)) return "-";
-  return new Date(ms).toLocaleString();
+  return new Date(ms).toLocaleString(undefined, {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+  });
 };
 
 export default function NotificationsPage({
@@ -21,6 +15,7 @@ export default function NotificationsPage({
   overBreakNotes = [],
   onMarkNotificationRead,
   onMarkAllRead,
+  businessTimeZone = "America/Chicago",
 }) {
   const unreadIds = useMemo(
     () =>
@@ -71,7 +66,7 @@ export default function NotificationsPage({
                       {notif?.title || "Notification"}
                     </div>
                     <div className="notif-page-item-date">
-                      {formatDateTime(notif?.createdAt)}
+                      {formatDateTime(notif?.createdAt, businessTimeZone)}
                     </div>
                   </div>
 
@@ -105,7 +100,7 @@ export default function NotificationsPage({
                       {note?.name || note?.email || note?.userId || "Employee"}
                     </div>
                     <div className="notif-page-item-date">
-                      {formatDateTime(note?.updatedAt || note?.createdAt)}
+                      {formatDateTime(note?.updatedAt || note?.createdAt, businessTimeZone)}
                     </div>
                   </div>
 
@@ -126,3 +121,5 @@ export default function NotificationsPage({
     </div>
   );
 }
+
+

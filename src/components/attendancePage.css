@@ -73,6 +73,10 @@
   gap:6px;
 }
 
+.attxTitleWrapCard{
+  gap:4px;
+}
+
 .attxTitle{
   font-weight:700;
   letter-spacing:-.03em;
@@ -81,11 +85,20 @@
   color:var(--text);
 }
 
+.attxTitleCard{
+  font-size:20px;
+  color:#ffffff;
+}
+
 .attxSub{
   font-size:12px;
   color:var(--muted);
   font-weight:500;
   min-height:16px;
+}
+
+.attxSubCard{
+  color:rgba(255,255,255,.78);
 }
 
 /* ---------- Controls ---------- */
@@ -475,14 +488,23 @@
 .attxAvatar{
   width:38px;
   height:38px;
-  border-radius:14px;
-  display:grid;
+  border-radius:50%;
   place-items:center;
+  text-align: center;
+  display: flex;
+  justify-content: center;
   font-weight:700;
   letter-spacing:.02em;
   color: #ffffff;
   border:1px solid rgba(15,23,42,.06);
   background: linear-gradient(180deg, #a11622, #791219);
+}
+
+.attxAvatarImg {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .attxName{
@@ -682,11 +704,35 @@
   color: var(--text);
 }
 
+.attxDrawerIdentity{
+  min-width: 0;
+}
+
+.attxDrawerPerson{
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.attxDrawerMeta{
+  min-width: 0;
+}
+
+.attxDrawerName{
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+}
+
 .attxDrawerSub{
   margin-top: 2px;
   font-size: 12px;
   color: var(--muted);
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .attxDrawerClose{

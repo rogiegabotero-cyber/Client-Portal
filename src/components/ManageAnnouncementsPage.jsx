@@ -2,22 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Archive, Clock3, Pencil, PlayCircle, RefreshCw, RotateCcw, Save, Trash2, X } from "lucide-react";
 import "./manageAnnouncementsPage.css";
 import ConfirmModal from "./ConfirmModal";
+import { toMillis, toText } from "../utils/common";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-const toText = (value) => String(value || "").trim();
-
-const toMillis = (value) => {
-  if (!value) return NaN;
-  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
-  if (typeof value?.toMillis === "function") return value.toMillis();
-  if (typeof value?.toDate === "function") {
-    const d = value.toDate();
-    return d instanceof Date && Number.isFinite(d.getTime()) ? d.getTime() : NaN;
-  }
-  const t = new Date(value).getTime();
-  return Number.isFinite(t) ? t : NaN;
-};
 
 const toDateTimeLocalValue = (ms) => {
   if (!Number.isFinite(ms)) return "";
@@ -26,9 +13,11 @@ const toDateTimeLocalValue = (ms) => {
   return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
 };
 
-const formatDateTime = (ms) => {
+const formatDateTime = (ms, timeZone = "America/Chicago") => {
   if (!Number.isFinite(ms)) return "-";
-  return new Date(ms).toLocaleString();
+  return new Date(ms).toLocaleString(undefined, {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+  });
 };
 
 const buildFallbackHeadline = (note) => {
@@ -93,6 +82,7 @@ export default function ManageAnnouncementsPage({
   onRestoreAnnouncement,
   onPermanentDeleteAnnouncement,
   onToast,
+  businessTimeZone = "America/Chicago",
   pageData = null,
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -474,8 +464,8 @@ export default function ManageAnnouncementsPage({
                     <span>By {row.createdBy}</span>
                   </div>
                   <div className="ma-card-time">
-                    <span>Post: {formatDateTime(row.publishAtMs)}</span>
-                    <span>Expire: {formatDateTime(row.expiresAtMs)}</span>
+                    <span>Post: {formatDateTime(row.publishAtMs, businessTimeZone)}</span>
+                    <span>Expire: {formatDateTime(row.expiresAtMs, businessTimeZone)}</span>
                   </div>
                 </div>
 
@@ -615,7 +605,7 @@ export default function ManageAnnouncementsPage({
                     <span>By {row.createdBy}</span>
                   </div>
                   <div className="ma-card-time">
-                    <span>Deleted: {formatDateTime(row.deletedAtMs)}</span>
+                    <span>Deleted: {formatDateTime(row.deletedAtMs, businessTimeZone)}</span>
                     <span>Deleted by: {row.deletedBy || "-"}</span>
                   </div>
                 </div>

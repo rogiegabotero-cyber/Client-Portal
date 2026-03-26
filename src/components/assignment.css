@@ -117,6 +117,48 @@
   color: #334155;
 }
 
+.assignment-status-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(15, 23, 42, 0.02);
+}
+
+.assignment-status-filter-btn {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #fff;
+  color: #334155;
+  border-radius: 999px;
+  padding: 7px 10px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.25px;
+}
+
+.assignment-status-filter-btn.active {
+  border-color: rgba(245, 158, 11, 0.52);
+  background: rgba(245, 158, 11, 0.14);
+  color: #92400e;
+}
+
+.assignment-status-filter-count {
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: inherit;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 900;
+}
+
 .assignment-count {
   display: inline-flex;
   min-width: 28px;
@@ -350,6 +392,11 @@
   color: #b45309;
 }
 
+.assignment-status-pill.review {
+  background: rgba(217, 119, 6, 0.18);
+  color: #92400e;
+}
+
 .assignment-status-pill.today,
 .assignment-status-pill.overdue {
   background: rgba(239, 68, 68, 0.14);
@@ -453,20 +500,24 @@
 }
 
 .assignment-calendar-items {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-start;
   gap: 6px;
-  overflow: auto;
 }
 
 .assignment-calendar-item {
   position: relative;
   border: none;
-  border-radius: 10px;
-  padding: 7px 8px;
-  text-align: left;
+  border-radius: 999px;
+  width: 30px;
+  height: 30px;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  font-size: 11px;
-  font-weight: 900;
   transition: 0.18s ease;
 }
 
@@ -480,6 +531,11 @@
   color: #b45309;
 }
 
+.assignment-calendar-item.review {
+  background: rgba(217, 119, 6, 0.18);
+  color: #92400e;
+}
+
 .assignment-calendar-item.today,
 .assignment-calendar-item.overdue {
   background: rgba(239, 68, 68, 0.16);
@@ -491,11 +547,45 @@
   color: #15803d;
 }
 
-.assignment-calendar-item-name {
-  display: block;
-  white-space: nowrap;
+.assignment-calendar-item-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  background: rgba(15, 23, 42, 0.36);
+  color: #ffffff;
+}
+
+.assignment-calendar-item-avatar-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.assignment-calendar-more {
+  min-width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  color: rgba(15, 23, 42, 0.75);
+  border: 1px dashed rgba(15, 23, 42, 0.22);
+  background: rgba(15, 23, 42, 0.06);
 }
 
 .assignment-calendar-tooltip {

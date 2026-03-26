@@ -44,7 +44,12 @@ import {
   resolveScheduledEndUtcMsForDayKey,
   resolveScheduledStartUtcMsForDayKey,
 } from "./utils/scheduleTime";
-import { getAttendanceSettings } from "./services/attendanceSettingsService";
+import {
+  DEFAULT_STORAGE_TIME_ZONE,
+  DISPLAY_TIME_ZONE_MODE_DEVICE,
+  getAttendanceSettings,
+  resolveAttendanceDisplayTimeZone,
+} from "./services/attendanceSettingsService";
 import {
   getEmployeeProfilesByUserIds,
   saveEmployeeStartDate,
@@ -56,6 +61,7 @@ import {
   deleteAssignment,
   getAssignments,
   markAssignmentCompleted,
+  reviewAssignmentCompletion,
   requestAssignmentAccess,
   updateAssignment,
 } from "./services/assignmentService";
@@ -67,6 +73,21 @@ import {
   restoreAnnouncement,
   updateAnnouncement,
 } from "./services/announcementService";
+import {
+  getDeviceTimeZone,
+  getDisplayName,
+  getProfileImageUrl,
+  getUserId,
+  pick,
+  toMillis,
+} from "./utils/common";
+import {
+  isClockedOutLog,
+  isIn,
+  pickOutTs,
+  pickTs,
+  tsMs,
+} from "./utils/attendanceLog";
 
 import { UserPlus, LogOut, Megaphone } from "lucide-react";
 import InvoicesPage from "./components/InvoicesPage";
@@ -75,102 +96,6 @@ import PerformanceReportPage from "./components/PerformanceReportPage";
 import ManageAnnouncementsPage from "./components/ManageAnnouncementsPage";
 
 /* ----------------------------- helpers ----------------------------- */
-const getUserId = (emp) =>
-  emp?.userId ??
-  emp?.userID ??
-  emp?.user_id ??
-  emp?.UserId ??
-  emp?.uid ??
-  emp?.firebaseUid ??
-  emp?.id ??
-  emp?.employeeId ??
-  emp?._id ??
-  emp?.user?.id ??
-  emp?.user?.uid ??
-  emp?.user?.userId ??
-  null;
-
-const getDisplayName = (emp) =>
-  emp?.name ??
-  emp?.fullName ??
-  emp?.displayName ??
-  emp?.email ??
-  `User ${String(getUserId(emp) ?? "")}`.trim();
-
-const safeLower = (v) => String(v ?? "").toLowerCase();
-
-const pick = (obj, keys, fallback = "") => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null && String(v).length) return v;
-  }
-  return fallback;
-};
-
-const pickTs = (log) =>
-  pick(log, ["timestamp", "createdAt", "time", "timeIn", "clockIn", "timestampIn"], "");
-
-const pickOutTs = (log) =>
-  pick(
-    log,
-    [
-      "timeOut",
-      "time_out",
-      "clockOut",
-      "clock_out",
-      "timestampOut",
-      "outTimestamp",
-      "timeout",
-      "outTime",
-      "endTime",
-      "checkedOutAt",
-      "timeEnd",
-      "clockedOutAt",
-    ],
-    ""
-  );
-
-const isIn = (log) => {
-  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
-  return type.includes("in") || type.includes("clockin") || type.includes("timein");
-};
-
-const isOut = (log) => {
-  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
-  return (
-    type.includes("out") ||
-    type.includes("clockout") ||
-    type.includes("timeout") ||
-    type.includes("checkout")
-  );
-};
-
-const hasRealTimeOut = (log) => {
-  const outTs = pickOutTs(log || {});
-  if (!outTs) return false;
-  const t = new Date(outTs).getTime();
-  return Number.isFinite(t);
-};
-
-const isClockedOutLog = (log) => isOut(log) || hasRealTimeOut(log);
-
-const parseUtcMs = (ts) => {
-  const t = new Date(ts).getTime();
-  return Number.isFinite(t) ? t : NaN;
-};
-
-const toMillis = (value) => {
-  if (value == null) return NaN;
-  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
-  if (typeof value?.toMillis === "function") return value.toMillis();
-  if (typeof value?.toDate === "function") {
-    const d = value.toDate();
-    return d instanceof Date && Number.isFinite(d.getTime()) ? d.getTime() : NaN;
-  }
-  const t = new Date(value).getTime();
-  return Number.isFinite(t) ? t : NaN;
-};
-
 const isAnnouncementNotification = (typeValue) => {
   const type = String(typeValue || "").trim().toLowerCase();
   return type === "announcement_posted" || type.startsWith("announcement_");
@@ -210,7 +135,7 @@ const getLogEventTs = (log) => {
 
 const getLogEventMs = (log) => {
   const ts = getLogEventTs(log);
-  return ts ? parseUtcMs(ts) : NaN;
+  return ts ? tsMs(ts) : NaN;
 };
 
 const latestOf = (logs, predicate) => {
@@ -259,13 +184,59 @@ async function mapWithConcurrency(items, limit, worker) {
 
 const HISTORY_START_DATE = "2000-01-01";
 
-const getDeviceTimeZone = () => {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return String(tz || "").trim() || "America/Chicago";
-  } catch {
-    return "America/Chicago";
+const PAGE_HEADER_TITLES = {
+  dashboard: "Dashboard",
+  employee_dashboard: "My Dashboard",
+  attendance: "Attendance",
+  schedule: "Schedule",
+  assignment: "Assignment Management",
+  manage_employee: "Employee Profile Center",
+  control_panel: "Control Panel",
+  register_portal_user: "Register Portal User",
+  special_users: "Special Users",
+  notifications: "Notifications",
+  manage_announcements: "Manage Announcements",
+  perf_daily: "Performance Report (Daily)",
+  perf_weekly: "Performance Report (Weekly)",
+  perf_monthly: "Performance Report (Monthly)",
+  invoices: "Invoices",
+  hours: "Hours",
+};
+
+const buildProfileImageMapByUserId = (rows = []) => {
+  const map = {};
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const userId = String(getUserId(row) || row?.userId || "").trim();
+    if (!userId) continue;
+
+    const imageUrl = getProfileImageUrl(row);
+    if (imageUrl) {
+      map[userId] = imageUrl;
+    }
   }
+  return map;
+};
+
+const attachProfileImagesToUsers = (rows = [], profileImagesByUserId = {}) => {
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  const profileMap =
+    profileImagesByUserId && typeof profileImagesByUserId === "object"
+      ? profileImagesByUserId
+      : {};
+
+  return sourceRows.map((row) => {
+    const userId = String(getUserId(row) || row?.userId || "").trim();
+    const mappedUrl = userId ? String(profileMap[userId] || "").trim() : "";
+    const existingUrl = getProfileImageUrl(row);
+    const finalUrl = mappedUrl || existingUrl;
+
+    if (!finalUrl) return row;
+    return {
+      ...row,
+      profileImg: finalUrl,
+      profileImageKey: row?.profileImageKey || finalUrl,
+    };
+  });
 };
 
 const toDateTimeLocalValue = (value) => {
@@ -295,6 +266,11 @@ export default function App() {
   const api = useMemo(() => (apiKey ? new HyacinthAttendanceAPI(apiKey) : null), [apiKey]);
 
   const [attendanceResetTime, setAttendanceResetTime] = useState(() => getStoredAttendanceResetTime());
+  const [attendanceDisplayTimeZoneMode, setAttendanceDisplayTimeZoneMode] = useState(
+    DISPLAY_TIME_ZONE_MODE_DEVICE
+  );
+  const [attendanceDisplayTimeZone, setAttendanceDisplayTimeZone] = useState("");
+  const [storageTimeZone, setStorageTimeZone] = useState(DEFAULT_STORAGE_TIME_ZONE);
   const [businessTimeZone, setBusinessTimeZone] = useState(() => getDeviceTimeZone());
 
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -354,6 +330,10 @@ export default function App() {
   const [assignments, setAssignments] = useState([]);
   const [loadingAssignments, setLoadingAssignments] = useState(false);
   const [assignmentsError, setAssignmentsError] = useState("");
+  const [assignmentOpenRequest, setAssignmentOpenRequest] = useState({
+    taskId: "",
+    requestId: 0,
+  });
   const [announcements, setAnnouncements] = useState([]);
   const [loadingAnnouncements, setLoadingAnnouncements] = useState(false);
   const [announcementsError, setAnnouncementsError] = useState("");
@@ -378,8 +358,12 @@ export default function App() {
 
   const [notifications, setNotifications] = useState([]);
   const [overBreakNotes, setOverBreakNotes] = useState([]);
+  const [profileImagesByUserId, setProfileImagesByUserId] = useState({});
   const [toastQueue, setToastQueue] = useState([]);
   const seenToastIdsRef = useRef(new Set());
+  const profileImagesByUserIdRef = useRef({});
+  const profileImagesInitializedRef = useRef(false);
+  const portalMainRef = useRef(null);
   const viewerRole = useMemo(
     () => String(user?.role || "").trim().toLowerCase().replace(/\s+/g, "_"),
     [user?.role]
@@ -425,6 +409,27 @@ export default function App() {
 
   const closeNotificationModal = useCallback(() => {
     setSelectedNotification(null);
+  }, []);
+
+  const handleOpenAssignmentTask = useCallback((taskId) => {
+    const nextTaskId = String(taskId || "").trim();
+    if (!nextTaskId) return;
+
+    setAssignmentOpenRequest((prev) => ({
+      taskId: nextTaskId,
+      requestId: Number(prev?.requestId || 0) + 1,
+    }));
+    setActivePage("assignment");
+  }, []);
+
+  const handleConsumeAssignmentOpenRequest = useCallback((requestId) => {
+    const targetRequestId = Number(requestId || 0);
+    if (!targetRequestId) return;
+
+    setAssignmentOpenRequest((prev) => {
+      if (Number(prev?.requestId || 0) !== targetRequestId) return prev;
+      return { taskId: "", requestId: 0 };
+    });
   }, []);
 
   useEffect(() => {
@@ -480,10 +485,21 @@ export default function App() {
         if (!active) return;
 
         const nextResetTime = settings?.resetTime || getStoredAttendanceResetTime();
-        const nextBusinessTimeZone = getDeviceTimeZone();
+        const nextDisplayMode =
+          settings?.displayTimeZoneMode || DISPLAY_TIME_ZONE_MODE_DEVICE;
+        const nextDisplayTimeZone = String(settings?.displayTimeZone || "").trim();
+        const nextStorageTimeZone =
+          String(settings?.storageTimeZone || "").trim() || DEFAULT_STORAGE_TIME_ZONE;
+        const nextBusinessTimeZone = resolveAttendanceDisplayTimeZone(
+          settings,
+          getDeviceTimeZone()
+        );
 
         setStoredAttendanceResetTime(nextResetTime);
         setAttendanceResetTime(nextResetTime);
+        setAttendanceDisplayTimeZoneMode(nextDisplayMode);
+        setAttendanceDisplayTimeZone(nextDisplayTimeZone);
+        setStorageTimeZone(nextStorageTimeZone);
         setBusinessTimeZone(nextBusinessTimeZone);
       } catch {
         // keep local fallback
@@ -1187,6 +1203,15 @@ export default function App() {
     [reloadAssignments, reloadNotifications]
   );
 
+  const handleReviewAssignmentCompletion = useCallback(
+    async (assignmentId, decision = "", reviewer = {}) => {
+      await reviewAssignmentCompletion(assignmentId, decision, reviewer);
+      await reloadAssignments();
+      await reloadNotifications();
+    },
+    [reloadAssignments, reloadNotifications]
+  );
+
   const handleRequestAssignmentAccess = useCallback(
     async (assignmentId, payload = {}) => {
       await requestAssignmentAccess(assignmentId, payload);
@@ -1500,6 +1525,26 @@ export default function App() {
     }
   }, [employeeDashboardEmployees, selectedEmployeeId]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const resetScrollPosition = () => {
+      const mainEl = portalMainRef.current;
+      if (mainEl && typeof mainEl.scrollTo === "function") {
+        mainEl.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      } else if (mainEl) {
+        mainEl.scrollTop = 0;
+      }
+
+      if (typeof window.scrollTo === "function") {
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      }
+    };
+
+    const rafId = window.requestAnimationFrame(resetScrollPosition);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [activePage]);
+
   const selectedEmployee = useMemo(() => {
     const list = Array.isArray(employeeDashboardEmployees) ? employeeDashboardEmployees : [];
     const id = String(selectedEmployeeId || "");
@@ -1597,7 +1642,20 @@ export default function App() {
 
       try {
         const data = await api.getUsersByDepartment(departmentId, ac.signal);
-        setEmployees(Array.isArray(data) ? data : []);
+        const fetchedUsers = Array.isArray(data) ? data : [];
+
+        if (!profileImagesInitializedRef.current) {
+          const initialProfileImageMap = buildProfileImageMapByUserId(fetchedUsers);
+          profileImagesByUserIdRef.current = initialProfileImageMap;
+          profileImagesInitializedRef.current = true;
+          setProfileImagesByUserId(initialProfileImageMap);
+        }
+
+        const usersWithProfileImages = attachProfileImagesToUsers(
+          fetchedUsers,
+          profileImagesByUserIdRef.current
+        );
+        setEmployees(usersWithProfileImages);
       } catch (e) {
         if (e?.name !== "AbortError") {
           setUsersError(e?.message || "Failed to load users");
@@ -1815,6 +1873,7 @@ export default function App() {
       employeePermissionsByUserId,
       notifications,
       overBreakNotes,
+      profileImagesByUserId,
       attendanceResetTime,
       businessTimeZone,
       startDate,
@@ -1867,6 +1926,7 @@ export default function App() {
         updateAssignment: handleUpdateAssignment,
         deleteAssignment: handleDeleteAssignment,
         completeAssignment: handleMarkAssignmentCompleted,
+        reviewAssignmentCompletion: handleReviewAssignmentCompletion,
         requestAssignmentAccess: handleRequestAssignmentAccess,
         approveAssignmentAccess: handleApproveAssignmentAccess,
         createAnnouncement: handlePostAnnouncement,
@@ -1894,6 +1954,7 @@ export default function App() {
       employeePermissionsByUserId,
       notifications,
       overBreakNotes,
+      profileImagesByUserId,
       attendanceResetTime,
       businessTimeZone,
       startDate,
@@ -1939,6 +2000,7 @@ export default function App() {
       handleUpdateAssignment,
       handleDeleteAssignment,
       handleMarkAssignmentCompleted,
+      handleReviewAssignmentCompletion,
       handleRequestAssignmentAccess,
       handleApproveAssignmentAccess,
       handlePostAnnouncement,
@@ -1952,6 +2014,11 @@ export default function App() {
   );
 
   const globalError = usersError || schedulesError || attendanceError || employeeProfilesError;
+  const activePageHeader = useMemo(
+    () => PAGE_HEADER_TITLES[activePage] || formatTargetPageLabel(activePage),
+    [activePage]
+  );
+
   const formatNotificationModalDate = (ms) => {
     if (!Number.isFinite(ms)) return "Recent";
     return new Date(ms).toLocaleString(undefined, {
@@ -1959,6 +2026,7 @@ export default function App() {
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      timeZone: String(businessTimeZone || "").trim() || getDeviceTimeZone(),
     });
   };
 
@@ -1985,12 +2053,17 @@ export default function App() {
         <Header
           employee={selectedEmployee}
           viewer={user}
+          profileImagesByUserId={profileImagesByUserId}
           notifications={notifications}
           onNotificationClick={handleNotificationClick}
           onOpenNotificationsPage={() => setActivePage("notifications")}
         />
 
         <div className="portal-topbar">
+          <div className="portal-topbar-left">
+            <div className="portal-topbar-title">{activePageHeader}</div>
+          </div>
+
           <div className="portal-topbar-actions">
             {user?.role === ROLES.SUPER_ADMIN ? (
               <button
@@ -2028,7 +2101,7 @@ export default function App() {
 
         {globalError && <p className="portal-global-error">{globalError}</p>}
 
-        <main className="portal-main">
+        <main ref={portalMainRef} className="portal-main">
           {activePage === "manage_employee" && (
             <div className="portal-page-pad">
               {user?.role === ROLES.SUPER_ADMIN ? (
@@ -2073,11 +2146,33 @@ export default function App() {
                   usersError={specialUsersError || employeePermissionsError}
                   attendanceResetTime={attendanceResetTime}
                   businessTimeZone={businessTimeZone}
+                  attendanceDisplayTimeZoneMode={attendanceDisplayTimeZoneMode}
+                  attendanceDisplayTimeZone={attendanceDisplayTimeZone}
+                  storageTimeZone={storageTimeZone}
                   onSaveEmployeeAllowedPages={handleUpdateEmployeeAllowedPages}
                   onSaveSpecialUserAllowedPages={handleUpdatePortalUserAllowedPages}
                   onReloadUsers={async () => {
                     await reloadSpecialUsers();
                     await reloadEmployeePermissions();
+                  }}
+                  onAttendanceSettingsChange={(nextSettings) => {
+                    const nextReset = nextSettings?.resetTime || attendanceResetTime;
+                    const nextMode =
+                      nextSettings?.displayTimeZoneMode || DISPLAY_TIME_ZONE_MODE_DEVICE;
+                    const nextDisplay = String(nextSettings?.displayTimeZone || "").trim();
+                    const nextStorage =
+                      String(nextSettings?.storageTimeZone || "").trim() ||
+                      DEFAULT_STORAGE_TIME_ZONE;
+                    const resolvedDisplay =
+                      String(nextSettings?.resolvedBusinessTimeZone || "").trim() ||
+                      resolveAttendanceDisplayTimeZone(nextSettings, getDeviceTimeZone());
+
+                    setStoredAttendanceResetTime(nextReset);
+                    setAttendanceResetTime(nextReset);
+                    setAttendanceDisplayTimeZoneMode(nextMode);
+                    setAttendanceDisplayTimeZone(nextDisplay);
+                    setStorageTimeZone(nextStorage);
+                    setBusinessTimeZone(resolvedDisplay);
                   }}
                   onAttendanceResetTimeChange={(value) => {
                     setStoredAttendanceResetTime(value);
@@ -2122,6 +2217,7 @@ export default function App() {
                 overBreakNotes={overBreakNotes}
                 onMarkNotificationRead={handleNotificationClick}
                 onMarkAllRead={handleMarkAllNotificationsRead}
+                businessTimeZone={businessTimeZone}
                 pageData={sharedPageData}
               />
             </div>
@@ -2139,6 +2235,7 @@ export default function App() {
                 onRestoreAnnouncement={handleRestoreAnnouncement}
                 onPermanentDeleteAnnouncement={handlePermanentDeleteAnnouncement}
                 onToast={pushToast}
+                businessTimeZone={businessTimeZone}
                 pageData={sharedPageData}
               />
             </div>
@@ -2183,8 +2280,11 @@ export default function App() {
               <EmployeeDashboard
                 employees={employeeDashboardEmployees}
                 announcements={announcements}
+                assignments={assignments}
                 schedulesByUserId={schedulesByUserId}
                 logsByUserId={todayLogsByUserId}
+                loadingAssignments={loadingAssignments}
+                assignmentsError={assignmentsError}
                 nowMs={nowMs}
                 endDate={endDate}
                 businessTimeZone={businessTimeZone}
@@ -2202,6 +2302,7 @@ export default function App() {
                   await reloadNotifications();
                   await reloadOverBreakNotes();
                 }}
+                onOpenTaskDetails={handleOpenAssignmentTask}
                 pageData={sharedPageData}
               />
             </div>
@@ -2259,9 +2360,12 @@ export default function App() {
                 onUpdateAssignment={handleUpdateAssignment}
                 onDeleteAssignment={handleDeleteAssignment}
                 onMarkAssignmentCompleted={handleMarkAssignmentCompleted}
+                onReviewAssignmentCompletion={handleReviewAssignmentCompletion}
                 onRequestAssignmentAccess={handleRequestAssignmentAccess}
                 onApproveAssignmentAccess={handleApproveAssignmentAccess}
                 onToast={pushToast}
+                openTaskRequest={assignmentOpenRequest}
+                onConsumeOpenTaskRequest={handleConsumeAssignmentOpenRequest}
                 pageData={sharedPageData}
               />
             </div>

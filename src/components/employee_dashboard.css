@@ -63,18 +63,10 @@
 
 .empDashTop{
   display:flex;
-  align-items:center;
-  justify-content:space-between;
+  align-items:end;
+  justify-content:right;
   gap:14px;
   margin-bottom:18px;
-}
-
-.empDashTitle{
-  font-weight:700;
-  font-size:22px;
-  letter-spacing:-.03em;
-  text-transform:none;
-  color:var(--text);
 }
 
 .empDashActions{
@@ -118,6 +110,9 @@
   border:1px solid var(--border);
   background:var(--card);
   box-shadow:var(--shadow);
+  display:flex;
+  flex-direction:column;
+  min-height:0;
 }
 
 
@@ -125,7 +120,7 @@
 
 .empPanelHead{
   background:var(--cardTint);
-  padding:14px 18px;
+  padding:5px 14px;
   display:flex;
   align-items:center;
   justify-content:space-between;
@@ -140,6 +135,8 @@
   display:flex;
   align-items:center;
   gap:8px;
+  padding: 12px;
+  color: #111827;
 }
 
 .empPanelIcon{
@@ -162,6 +159,11 @@
 
 .empPanelBody{
   padding:18px;
+  flex:1;
+  min-height:0;
+  overflow:hidden;
+  overscroll-behavior:contain;
+  display:flex;
 }
 
 
@@ -171,13 +173,21 @@
   display:grid;
   grid-template-columns: 1fr 320px;
   gap:16px;
+  align-content:start;
+  align-items:stretch;
+  height:100%;
+  min-height:0;
 }
 
 .empSideColumn{
   display:grid;
   gap:12px;
-  align-content:start;
+  align-content:stretch;
   min-width:0;
+  min-height:0;
+  height:100%;
+  grid-template-rows:auto minmax(0, 1fr) minmax(0, 1fr);
+  overflow:hidden;
 }
 
 
@@ -189,6 +199,9 @@
   background:var(--cardSoft);
   padding:16px;
   box-shadow:var(--shadow2);
+  height:100%;
+  min-height:0;
+  overflow:auto;
 }
 
 .scheduleTopRow{
@@ -221,30 +234,20 @@
   color:var(--green);
 }
 
-
-/* ---------- Schedule Range ---------- */
-
-.scheduleSubRow{
-  margin-top:6px;
-  display:flex;
-  align-items:center;
-  gap:6px;
-  font-size:12px;
-  color:var(--muted);
-}
-
 .scheduleBoxes{
-  display:grid;
-  grid-template-columns:repeat(3,1fr);
-  gap:10px;
-  margin-top:14px;
+  display: flex;
+  flex-direction: row;
+  gap: 5px;
 }
 
 .miniBox{
-  border-radius:var(--radius-sm);
-  border:1px solid var(--border);
-  padding:12px;
-  background: linear-gradient(180deg, #293d69, #101825);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: row;
+  min-width:0;
+  border-left: solid 1px #0f172a;
+  padding-left: 5px;
 }
 
 .miniLabel{
@@ -252,16 +255,17 @@
   text-transform:uppercase;
   font-weight:600;
   letter-spacing:.08em;
-  color: #c9c9c9;
+  color: #0f172a;
 }
 
 .miniValue{
-  margin-top:6px;
   font-size:12px;
   font-weight:600;
   color:var(--text);
   font-variant-numeric:tabular-nums;
-  color: #9cb9f8;
+  color: #5087ff;
+  text-align: center;
+  overflow-wrap:anywhere;
 }
 
 
@@ -387,6 +391,10 @@
   margin-top:6px;
 }
 
+.scheduleBreakActions{
+  margin-top:12px;
+}
+
 .muted{
   color:var(--muted);
 }
@@ -456,6 +464,13 @@
   font-variant-numeric:tabular-nums;
 }
 
+.clockedTimeZoneRef{
+  margin-top:4px;
+  font-size:11px;
+  color:var(--muted);
+  font-weight:500;
+}
+
 
 /* ---------- Info Pill ---------- */
 
@@ -519,6 +534,281 @@
   color:var(--muted);
 }
 
+/* ---------- Task List ---------- */
+
+.taskListCard{
+  border-radius:10px;
+  border:1px solid var(--border);
+  background:#ffffff;
+  box-shadow:var(--shadow2);
+  overflow:hidden;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
+
+.taskListHead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:5px 6px;
+  border-bottom:1px solid var(--borderSoft);
+  font-size:11px;
+  letter-spacing:.08em;
+  font-weight:700;
+  text-transform:uppercase;
+  color:var(--text);
+}
+
+.taskListHeadRight{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.taskFilterGroup{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.taskFilterBtn{
+  appearance:none;
+  border:1px solid #cbd5e1;
+  background:#ffffff;
+  color:#0f172a;
+  border-radius:999px;
+  height:28px;
+  padding:0 8px 0 10px;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:0;
+  text-transform:none;
+  cursor:pointer;
+  transition:all .15s ease;
+}
+
+.taskFilterBtn:hover{
+  border-color:#94a3b8;
+  transform:translateY(-1px);
+}
+
+.taskFilterBtn:focus-visible{
+  outline:2px solid rgba(91,0,8,.35);
+  outline-offset:2px;
+}
+
+.taskFilterBtn.active{
+  background:#5b0008;
+  border-color:#5b0008;
+  color:#ffffff;
+}
+
+.taskFilterBtnCount{
+  height:18px;
+  border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  color:#5b0008;
+  font-size:10px;
+  font-weight:700;
+}
+
+.taskFilterBtn.active .taskFilterBtnCount{
+  color:#ffffff;
+}
+
+.taskListBody{
+  max-height:none;
+  overflow:auto;
+  padding:10px;
+  display:grid;
+  gap:8px;
+  flex:1;
+  min-height:0;
+}
+
+.taskListItem{
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:#f8fafc;
+  padding:10px;
+}
+
+.taskListItemButton{
+  width:100%;
+  text-align:left;
+  appearance:none;
+  font:inherit;
+  color:inherit;
+}
+
+.taskListItemButton:disabled{
+  opacity:1;
+}
+
+.taskListItemButton.clickable{
+  cursor:pointer;
+  transition:border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+
+.taskListItemButton.clickable:hover{
+  border-color:rgba(91,0,8,.26);
+  box-shadow:0 4px 10px rgba(15,23,42,.08);
+  transform:translateY(-1px);
+}
+
+.taskListItemButton.clickable:focus-visible{
+  outline:2px solid rgba(91,0,8,.35);
+  outline-offset:2px;
+}
+
+.taskListItemTop{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:8px;
+}
+
+.taskListTitle{
+  font-size:13px;
+  font-weight:700;
+  color:var(--text);
+  line-height:1.25;
+}
+
+.taskListStatus{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:999px;
+  padding:4px 8px;
+  font-size:10px;
+  font-weight:700;
+  white-space:nowrap;
+  border:1px solid transparent;
+}
+
+.taskListStatus.pending{
+  color:#1e293b;
+  background:rgba(15,23,42,.08);
+  border-color:rgba(15,23,42,.12);
+}
+
+.taskListStatus.inprogress{
+  color:#0f172a;
+  background:rgba(59,130,246,.12);
+  border-color:rgba(59,130,246,.2);
+}
+
+.taskListStatus.review{
+  color:#92400e;
+  background:rgba(245,158,11,.16);
+  border-color:rgba(245,158,11,.28);
+}
+
+.taskListStatus.warning{
+  color:#92400e;
+  background:rgba(245,158,11,.14);
+  border-color:rgba(245,158,11,.26);
+}
+
+.taskListStatus.today{
+  color:#9a3412;
+  background:rgba(249,115,22,.14);
+  border-color:rgba(249,115,22,.26);
+}
+
+.taskListStatus.overdue{
+  color:#991b1b;
+  background:rgba(239,68,68,.14);
+  border-color:rgba(239,68,68,.26);
+}
+
+.taskListStatus.completed{
+  color:#065f46;
+  background:rgba(16,185,129,.14);
+  border-color:rgba(16,185,129,.28);
+}
+
+.taskListFor{
+  margin-top:6px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:11px;
+  color:#64748b;
+}
+
+.taskListForLabel{
+  color:#64748b;
+  font-weight:600;
+}
+
+.taskListForValue{
+  color:#0f172a;
+  font-weight:700;
+}
+
+.taskAssigneeGroup{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+}
+
+.taskAssigneeAvatar{
+  width:24px;
+  height:24px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.16);
+  background:linear-gradient(180deg, #a11622, #791219);
+  color:#ffffff;
+  display:grid;
+  place-items:center;
+  font-size:9px;
+  font-weight:700;
+  letter-spacing:.02em;
+  overflow:hidden;
+  text-transform:uppercase;
+}
+
+.taskAssigneeAvatarImg{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+
+.taskListMeta{
+  margin-top:6px;
+  display:grid;
+  gap:4px;
+  font-size:11px;
+  color:var(--muted);
+}
+
+.taskListNotes{
+  margin-top:7px;
+  font-size:12px;
+  color:#334155;
+  line-height:1.35;
+}
+
+.taskListEmpty{
+  border:1px dashed var(--border);
+  border-radius:10px;
+  padding:12px;
+  font-size:12px;
+  color:var(--muted);
+  background:#f8fafc;
+}
+
 /* ---------- Announcements ---------- */
 
 .announcementCard{
@@ -527,6 +817,9 @@
   background:#ffffff;
   box-shadow:var(--shadow2);
   overflow:hidden;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
 }
 
 .announcementHead{
@@ -554,11 +847,14 @@
 }
 
 .announcementBody{
-  max-height:250px;
+  max-height:none;
+  overflow:auto;
   padding:10px;
   display:grid;
   gap:8px;
   width: 100%;
+  flex:1;
+  min-height:0;
 }
 
 .announcementItem{
@@ -745,6 +1041,32 @@
 
   .empGrid2{
     grid-template-columns:1fr;
+    height:auto;
+    min-height:auto;
+  }
+
+  .empPanelBody{
+    overflow:auto;
+    display:block;
+  }
+
+  .empSideColumn{
+    height:auto;
+    min-height:auto;
+    overflow:visible;
+    align-content:start;
+    grid-template-rows:auto;
+  }
+
+  .taskListCard,
+  .announcementCard{
+    min-height:260px;
+  }
+
+  .taskListBody,
+  .announcementBody{
+    max-height:240px;
+    flex:unset;
   }
 
   .statsRow{
@@ -759,8 +1081,10 @@
   }
 
   .empDashTop{
-    flex-direction:column;
-    align-items:flex-start;
+    display: flex;
+    flex-direction: row;
+    justify-content: end;
+    align-items: center;
   }
 
   .scheduleBoxes{

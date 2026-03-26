@@ -9,6 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import "./performanceReportPage.css";
+import { getDisplayName, getUserId, pick, toMillis } from "../utils/common";
 
 const STATUS_SERIES = [
   { key: "early", label: "Early", color: "#4b9fea" },
@@ -25,48 +26,6 @@ const MODE_LABELS = {
   daily: "Daily",
   weekly: "Weekly",
   monthly: "Monthly",
-};
-
-const pick = (obj, keys, fallback = "") => {
-  for (const key of keys) {
-    const value = obj?.[key];
-    if (value !== undefined && value !== null && String(value).length) return value;
-  }
-  return fallback;
-};
-
-const getUserId = (emp) =>
-  emp?.userId ??
-  emp?.userID ??
-  emp?.user_id ??
-  emp?.UserId ??
-  emp?.uid ??
-  emp?.firebaseUid ??
-  emp?.id ??
-  emp?.employeeId ??
-  emp?._id ??
-  emp?.user?.id ??
-  emp?.user?.uid ??
-  emp?.user?.userId ??
-  null;
-
-const getDisplayName = (emp) =>
-  emp?.name ??
-  emp?.fullName ??
-  emp?.displayName ??
-  emp?.email ??
-  `User ${String(getUserId(emp) ?? "")}`.trim();
-
-const toMillis = (value) => {
-  if (value == null) return NaN;
-  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
-  if (typeof value?.toMillis === "function") return value.toMillis();
-  if (typeof value?.toDate === "function") {
-    const d = value.toDate();
-    return d instanceof Date && Number.isFinite(d.getTime()) ? d.getTime() : NaN;
-  }
-  const t = new Date(value).getTime();
-  return Number.isFinite(t) ? t : NaN;
 };
 
 const formatYmdUtc = (date) => {

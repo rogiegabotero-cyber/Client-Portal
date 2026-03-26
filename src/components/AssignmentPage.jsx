@@ -17,10 +17,17 @@ import {
   getDaysUntilDeadline,
 } from "../services/assignmentService";
 import ConfirmModal from "./ConfirmModal";
+import { getDisplayName, getProfileImageUrl, getUserId, toText } from "../utils/common";
 
 const normalize = (s) => String(s || "").toLowerCase().trim();
-
-const toText = (value) => String(value || "").trim();
+const normalizeStatusKey = (status) => normalize(status).replace(/\s+/g, "_");
+const isToBeCheckStatus = (status) => normalizeStatusKey(status) === "to_be_check";
+const initialsFromName = (value = "") => {
+  const parts = toText(value).split(/\s+/).filter(Boolean);
+  const first = parts[0]?.[0] || "?";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return `${first}${last}`.toUpperCase();
+};
 
 const getViewerUserId = (viewer) =>
   toText(
@@ -39,28 +46,6 @@ const isAdminLikeRole = (role) => {
   const r = normalize(role);
   return r === "admin" || r === "super_admin" || r === "super admin";
 };
-
-const getUserId = (emp) =>
-  emp?.userId ??
-  emp?.userID ??
-  emp?.user_id ??
-  emp?.UserId ??
-  emp?.uid ??
-  emp?.firebaseUid ??
-  emp?.id ??
-  emp?.employeeId ??
-  emp?._id ??
-  emp?.user?.id ??
-  emp?.user?.uid ??
-  emp?.user?.userId ??
-  null;
-
-const getDisplayName = (emp) =>
-  emp?.name ??
-  emp?.fullName ??
-  emp?.displayName ??
-  emp?.email ??
-  `User ${String(getUserId(emp) ?? "")}`.trim();
 
 const getEmployeePosition = (emp, employeeProfilesByUserId = {}) => {
   const uid = String(getUserId(emp) || "");
@@ -123,12 +108,17 @@ const prettyDate = (dateStr) => {
     year: "numeric",
   });
 };
+const MAX_CALENDAR_TASK_MARKERS = 6;
 
 const getTaskStatusMeta = (task) => {
   const days = getDaysUntilDeadline(task?.deadlineDate);
 
-  if (task?.status === "completed") {
+  const statusKey = normalizeStatusKey(task?.status);
+  if (statusKey === "completed") {
     return { label: "Completed", tone: "completed" };
+  }
+  if (statusKey === "to_be_check") {
+    return { label: "To Be Check", tone: "review" };
   }
   if (days !== null && days < 0) {
     return { label: "Overdue", tone: "overdue" };
@@ -140,6 +130,29 @@ const getTaskStatusMeta = (task) => {
     return { label: "Due Tomorrow", tone: "warning" };
   }
   return { label: task?.status || "Pending", tone: "pending" };
+};
+const ASSIGNMENT_STATUS_FILTERS = [
+  { key: "all", label: "All" },
+  { key: "pending", label: "Pending" },
+  { key: "in_progress", label: "In Progress" },
+  { key: "to_be_check", label: "To Be Check" },
+  { key: "completed", label: "Completed" },
+  { key: "overdue", label: "Overdue" },
+];
+
+const isTaskOverdue = (task) => {
+  const statusKey = normalizeStatusKey(task?.status);
+  if (statusKey === "completed") return false;
+  const days = getDaysUntilDeadline(task?.deadlineDate);
+  return days !== null && days < 0;
+};
+
+const matchesStatusFilter = (task, statusFilter) => {
+  const key = normalizeStatusKey(statusFilter) || "all";
+  if (key === "all") return true;
+  if (key === "overdue") return isTaskOverdue(task);
+  const taskStatusKey = normalizeStatusKey(task?.status) || "pending";
+  return taskStatusKey === key;
 };
 
 export default function AssignmentPage({
@@ -154,17 +167,23 @@ export default function AssignmentPage({
   onUpdateAssignment,
   onDeleteAssignment,
   onMarkAssignmentCompleted,
+  onReviewAssignmentCompletion,
   onRequestAssignmentAccess,
   onApproveAssignmentAccess,
+  openTaskRequest = null,
+  onConsumeOpenTaskRequest,
+  pageData = null,
   onToast,
 }) {
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [selectedAssigneeIds, setSelectedAssigneeIds] = useState([]);
   const [selectedTask, setSelectedTask] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [saving, setSaving] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState("");
   const [deleteConfirmTask, setDeleteConfirmTask] = useState(null);
+  const [handledOpenRequestId, setHandledOpenRequestId] = useState(0);
   const [form, setForm] = useState({
     title: "",
     instructions: "",
@@ -206,6 +225,47 @@ export default function AssignmentPage({
     }
     return map;
   }, [employeeOptions]);
+  const employeeById = useMemo(() => {
+    const map = {};
+    for (const emp of validEmployees) {
+      const id = String(getUserId(emp) || "");
+      if (!id) continue;
+      map[id] = emp;
+    }
+    return map;
+  }, [validEmployees]);
+  const profileImagesByUserId =
+    pageData?.profileImagesByUserId && typeof pageData.profileImagesByUserId === "object"
+      ? pageData.profileImagesByUserId
+      : {};
+  const getCalendarTaskAssignee = (task) => {
+    const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
+    const primaryAssignee = assignees[0] || null;
+    const assigneeIds = Array.isArray(task?.employeeUserIds)
+      ? task.employeeUserIds.map((id) => toText(id)).filter(Boolean)
+      : [];
+    const fallbackListedName = toText(task?.employeeName).split(",")[0]?.trim() || "";
+    const assigneeUserId =
+      toText(primaryAssignee?.userId) ||
+      assigneeIds[0] ||
+      toText(task?.employeeUserId);
+    const mappedEmployee = assigneeUserId ? employeeById[assigneeUserId] : null;
+    const profileImg =
+      toText(primaryAssignee?.profileImg) ||
+      toText(primaryAssignee?.profileImage) ||
+      toText(primaryAssignee?.profileImageUrl) ||
+      toText(profileImagesByUserId?.[assigneeUserId]) ||
+      getProfileImageUrl(mappedEmployee) ||
+      "";
+    const name =
+      toText(primaryAssignee?.name) ||
+      toText(employeeNameById?.[assigneeUserId]) ||
+      (mappedEmployee ? getDisplayName(mappedEmployee) : "") ||
+      fallbackListedName ||
+      "Unassigned";
+
+    return { userId: assigneeUserId, profileImg, name };
+  };
 
   useEffect(() => {
     const validIds = new Set(employeeOptions.map((item) => String(item.userId)));
@@ -229,6 +289,25 @@ export default function AssignmentPage({
       setSelectedTask(updated);
     }
   }, [assignments, selectedTask]);
+
+  useEffect(() => {
+    const requestId = Number(openTaskRequest?.requestId || 0);
+    const taskId = toText(openTaskRequest?.taskId);
+    if (!requestId || !taskId) return;
+    if (handledOpenRequestId === requestId) return;
+
+    const targetTask =
+      (Array.isArray(assignments) ? assignments : []).find(
+        (row) => String(row?.id || "") === taskId
+      ) || null;
+    if (!targetTask) return;
+
+    setHandledOpenRequestId(requestId);
+    setSelectedTask(targetTask);
+    if (typeof onConsumeOpenTaskRequest === "function") {
+      onConsumeOpenTaskRequest(requestId);
+    }
+  }, [openTaskRequest, assignments, handledOpenRequestId, onConsumeOpenTaskRequest]);
 
   const selectedAssignees = useMemo(
     () =>
@@ -261,7 +340,33 @@ export default function AssignmentPage({
     return { total, completed, pending, overdue };
   }, [assignments]);
 
-  const filteredAssignments = useMemo(() => {
+  const assignmentStatusCounts = useMemo(() => {
+    const counts = {
+      all: assignments.length,
+      pending: 0,
+      in_progress: 0,
+      to_be_check: 0,
+      completed: 0,
+      overdue: 0,
+    };
+
+    for (const task of assignments) {
+      const statusKey = normalizeStatusKey(task?.status) || "pending";
+      if (Object.prototype.hasOwnProperty.call(counts, statusKey)) {
+        counts[statusKey] += 1;
+      } else {
+        counts.pending += 1;
+      }
+
+      if (isTaskOverdue(task)) {
+        counts.overdue += 1;
+      }
+    }
+
+    return counts;
+  }, [assignments]);
+
+  const searchedAssignments = useMemo(() => {
     const q = normalize(query);
 
     return assignments.filter((task) => {
@@ -278,10 +383,15 @@ export default function AssignmentPage({
     });
   }, [assignments, query]);
 
+  const filteredAssignments = useMemo(
+    () => searchedAssignments.filter((task) => matchesStatusFilter(task, statusFilter)),
+    [searchedAssignments, statusFilter]
+  );
+
   const assignmentsByDate = useMemo(() => {
     const map = new Map();
 
-    for (const task of filteredAssignments) {
+    for (const task of searchedAssignments) {
       const key = String(task?.deadlineDate || "");
       if (!key) continue;
       if (!map.has(key)) map.set(key, []);
@@ -289,7 +399,7 @@ export default function AssignmentPage({
     }
 
     return map;
-  }, [filteredAssignments]);
+  }, [searchedAssignments]);
 
   const myTasks = useMemo(() => {
     if (!viewerId) return [];
@@ -319,8 +429,9 @@ export default function AssignmentPage({
     const hasApprovedAccess = !!viewerId && approvedUserIds.includes(viewerId);
     const alreadyRequested = !!viewerId && requestedUserIds.includes(viewerId);
     const canComplete = isManager || isOwner || hasApprovedAccess;
+    const statusKey = normalizeStatusKey(task?.status);
     const canRequestAccess =
-      !isManager && !!viewerId && !canComplete && String(task?.status || "") !== "completed";
+      !isManager && !!viewerId && !canComplete && statusKey !== "completed" && statusKey !== "to_be_check";
 
     return {
       assignedUserIds,
@@ -330,6 +441,8 @@ export default function AssignmentPage({
       hasApprovedAccess,
       alreadyRequested,
       canComplete,
+      statusKey,
+      isPendingReview: statusKey === "to_be_check",
       canRequestAccess,
     };
   };
@@ -425,6 +538,22 @@ export default function AssignmentPage({
       });
       return;
     }
+    if (access.statusKey === "completed") {
+      onToast?.({
+        type: "info",
+        title: "Already Completed",
+        message: "This task is already completed.",
+      });
+      return;
+    }
+    if (access.statusKey === "to_be_check") {
+      onToast?.({
+        type: "info",
+        title: "Already Submitted",
+        message: "This task is already waiting for manager review.",
+      });
+      return;
+    }
 
     try {
       if (!onMarkAssignmentCompleted) {
@@ -439,22 +568,71 @@ export default function AssignmentPage({
       if (selectedTask?.id === task.id) {
         setSelectedTask({
           ...task,
-          status: "completed",
-          completedByUserId: viewerId,
-          completedByName: viewerName,
+          status: "to_be_check",
+          completionRequestedByUserId: viewerId,
+          completionRequestedByName: viewerName,
         });
       }
       onToast?.({
         type: "success",
-        title: "Task Completed",
-        message: `"${task.title}" marked as completed by ${viewerName}.`,
+        title: "Submitted For Check",
+        message: `"${task.title}" is now waiting for manager review.`,
       });
     } catch (err) {
       console.error("Failed to complete task:", err);
       onToast?.({
         type: "error",
-        title: "Complete Failed",
-        message: err?.message || "Could not complete task.",
+        title: "Submit Failed",
+        message: err?.message || "Could not submit task for manager check.",
+      });
+    }
+  };
+
+  const handleReviewCompletion = async (task, decision = "") => {
+    if (!isManager) {
+      onToast?.({
+        type: "warning",
+        title: "Action Restricted",
+        message: "Only admins can review completion requests.",
+      });
+      return;
+    }
+
+    const normalizedDecision = normalizeStatusKey(decision);
+    if (normalizedDecision !== "approve" && normalizedDecision !== "reject") return;
+
+    try {
+      if (!onReviewAssignmentCompletion) {
+        throw new Error("Review action is unavailable");
+      }
+
+      await onReviewAssignmentCompletion(task.id, normalizedDecision, {
+        userId: viewerId,
+        name: viewerName,
+        role: viewerRole,
+      });
+
+      if (selectedTask?.id === task.id) {
+        setSelectedTask({
+          ...task,
+          status: normalizedDecision === "approve" ? "completed" : "in_progress",
+        });
+      }
+
+      onToast?.({
+        type: "success",
+        title: normalizedDecision === "approve" ? "Completion Approved" : "Completion Rejected",
+        message:
+          normalizedDecision === "approve"
+            ? `"${task.title}" is now marked as completed.`
+            : `"${task.title}" was sent back to In Progress.`,
+      });
+    } catch (err) {
+      console.error("Failed to review completion:", err);
+      onToast?.({
+        type: "error",
+        title: "Review Failed",
+        message: err?.message || "Could not review completion request.",
       });
     }
   };
@@ -826,6 +1004,8 @@ export default function AssignmentPage({
               {calendarDates.map((dateObj) => {
                 const ymd = toYmd(dateObj);
                 const dayTasks = assignmentsByDate.get(ymd) || [];
+                const visibleDayTasks = dayTasks.slice(0, MAX_CALENDAR_TASK_MARKERS);
+                const hiddenDayTaskCount = Math.max(0, dayTasks.length - visibleDayTasks.length);
                 const isCurrentMonth =
                   dateObj.getMonth() === calendarMonth.getMonth();
                 const isToday = ymd === toYmd(new Date());
@@ -842,22 +1022,32 @@ export default function AssignmentPage({
                     <div className="assignment-calendar-date">{dateObj.getDate()}</div>
 
                     <div className="assignment-calendar-items">
-                      {dayTasks.map((task) => {
+                      {visibleDayTasks.map((task) => {
                         const meta = getTaskStatusMeta(task);
+                        const assignee = getCalendarTaskAssignee(task);
                         return (
                           <button
                             type="button"
                             key={task.id}
                             className={`assignment-calendar-item ${meta.tone}`}
                             onClick={() => setSelectedTask(task)}
-                            title={`${task.employeeName} - ${task.title}`}
+                            title={`${assignee.name} - ${task.title}`}
                           >
-                            <span className="assignment-calendar-item-name">
-                              {task.employeeName}
+                            <span className="assignment-calendar-item-avatar" aria-hidden="true">
+                              {assignee.profileImg ? (
+                                <img
+                                  src={assignee.profileImg}
+                                  alt=""
+                                  className="assignment-calendar-item-avatar-img"
+                                  loading="lazy"
+                                />
+                              ) : (
+                                initialsFromName(assignee.name)
+                              )}
                             </span>
 
                             <span className="assignment-calendar-tooltip">
-                              <strong>{task.employeeName}</strong>
+                              <strong>{assignee.name}</strong>
                               <span>{task.title}</span>
                               <span>{task.employeePosition}</span>
                               <span>Deadline: {prettyDate(task.deadlineDate)}</span>
@@ -865,6 +1055,16 @@ export default function AssignmentPage({
                           </button>
                         );
                       })}
+                      {hiddenDayTaskCount > 0 ? (
+                        <span
+                          className="assignment-calendar-more"
+                          title={`${hiddenDayTaskCount} more task${
+                            hiddenDayTaskCount === 1 ? "" : "s"
+                          } on this date`}
+                        >
+                          +{hiddenDayTaskCount}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 );
@@ -878,6 +1078,26 @@ export default function AssignmentPage({
               <span className="assignment-count">
                 {loadingAssignments ? "Loading..." : filteredAssignments.length}
               </span>
+            </div>
+
+            <div className="assignment-status-filters" role="tablist" aria-label="Assignment status filters">
+              {ASSIGNMENT_STATUS_FILTERS.map((item) => {
+                const isActive = statusFilter === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`assignment-status-filter-btn ${isActive ? "active" : ""}`}
+                    onClick={() => setStatusFilter(item.key)}
+                    aria-pressed={isActive}
+                  >
+                    <span>{item.label}</span>
+                    <span className="assignment-status-filter-count">
+                      {assignmentStatusCounts[item.key] || 0}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
             <div className="assignment-table-wrap">
@@ -1000,15 +1220,17 @@ export default function AssignmentPage({
                 <div className="assignment-section-title">Quick Actions</div>
 
                 <div className="assignment-action-row">
-                  {selectedTaskAccess?.canComplete ? (
+                  {selectedTaskAccess?.canComplete && !isManager ? (
                     <button
                       type="button"
                       className="assignment-action-btn success"
                       onClick={() => handleMarkCompleted(selectedTask)}
-                      disabled={selectedTask.status === "completed"}
+                      disabled={selectedTaskAccess.statusKey === "completed" || selectedTaskAccess.isPendingReview}
                     >
                       <CheckCircle2 size={16} />
-                      <span>Mark Completed</span>
+                      <span>
+                        {selectedTaskAccess.isPendingReview ? "Waiting For Review" : "Submit For Check"}
+                      </span>
                     </button>
                   ) : null}
 
@@ -1028,10 +1250,33 @@ export default function AssignmentPage({
 
                   {isManager ? (
                     <>
+                      {selectedTaskAccess?.isPendingReview ? (
+                        <>
+                          <button
+                            type="button"
+                            className="assignment-action-btn success"
+                            onClick={() => handleReviewCompletion(selectedTask, "approve")}
+                          >
+                            <CheckCircle2 size={16} />
+                            <span>Approve Completion</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="assignment-action-btn danger"
+                            onClick={() => handleReviewCompletion(selectedTask, "reject")}
+                          >
+                            <AlertTriangle size={16} />
+                            <span>Reject Completion</span>
+                          </button>
+                        </>
+                      ) : null}
+
                       <button
                         type="button"
                         className="assignment-action-btn"
                         onClick={() => handleStatusChange(selectedTask, "in_progress")}
+                        disabled={selectedTaskAccess?.statusKey === "completed"}
                       >
                         <Clock3 size={16} />
                         <span>Set In Progress</span>
@@ -1078,7 +1323,12 @@ export default function AssignmentPage({
 
               {(() => {
                 const daysLeft = getDaysUntilDeadline(selectedTask.deadlineDate);
-                if (selectedTask.status === "completed" || daysLeft === null || daysLeft > 1) {
+                if (
+                  normalizeStatusKey(selectedTask.status) === "completed" ||
+                  isToBeCheckStatus(selectedTask.status) ||
+                  daysLeft === null ||
+                  daysLeft > 1
+                ) {
                   return null;
                 }
 

@@ -1,15 +1,18 @@
 ﻿import React, { useState, useRef, useEffect } from "react";
 import "./header.css";
 import { Bell } from "lucide-react";
+import { getProfileImageUrl, getUserId } from "../utils/common";
 
 const Header = ({
   employee,
   viewer,
+  profileImagesByUserId = {},
   notifications = [],
   onNotificationClick,
   onOpenNotificationsPage,
 }) => {
   const [notifOpen, setNotifOpen] = useState(false);
+  const [avatarErrored, setAvatarErrored] = useState(false);
   const notifRef = useRef(null);
 
   const unreadCount = notifications.filter((n) => !n?.read).length;
@@ -27,6 +30,14 @@ const Header = ({
   }, []);
 
   const profileSource = viewer || employee || null;
+  const profileUserId = String(
+    getUserId(profileSource) || profileSource?.uid || viewer?.uid || ""
+  ).trim();
+  const mappedProfileImage = profileUserId
+    ? String(profileImagesByUserId?.[profileUserId] || "").trim()
+    : "";
+  const sourceProfileImage = getProfileImageUrl(profileSource || {});
+  const profileImage = mappedProfileImage || sourceProfileImage;
 
   const displayName =
     profileSource?.name ||
@@ -50,6 +61,10 @@ const Header = ({
       .map((part) => part.charAt(0).toUpperCase())
       .join("") || "U";
 
+  useEffect(() => {
+    setAvatarErrored(false);
+  }, [profileImage]);
+
   return (
     <header className="top-header">
       <div className="header-right">
@@ -60,9 +75,19 @@ const Header = ({
               <div className="profile-role">{displayRole}</div>
             </div>
 
-            <div className="profile-avatar-initials" aria-label={displayName}>
-              {initials}
-            </div>
+            {profileImage && !avatarErrored ? (
+              <img
+                src={profileImage}
+                alt={`${displayName} profile`}
+                className="profile-avatar-img"
+                loading="lazy"
+                onError={() => setAvatarErrored(true)}
+              />
+            ) : (
+              <div className="profile-avatar-initials" aria-label={displayName}>
+                {initials}
+              </div>
+            )}
           </div>
 
           <button

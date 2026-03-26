@@ -1,35 +1,16 @@
 ﻿// src/components/SchedulePage.jsx
 import React, { useMemo, useState } from "react";
 import "./schedule.css";
+import {
+  getDisplayName,
+  getProfileImageUrl,
+  getUserId,
+  pick,
+  safeLower,
+} from "../utils/common";
+import { getScheduleTimeZone } from "../utils/scheduleTime";
 
 // robust userId detection
-const getUserId = (emp) =>
-  emp?.userId ??
-  emp?.userID ??
-  emp?.user_id ??
-  emp?.UserId ??
-  emp?.uid ??
-  emp?.firebaseUid ??
-  emp?.id ??
-  emp?.employeeId ??
-  emp?._id ??
-  emp?.user?.id ??
-  emp?.user?.uid ??
-  emp?.user?.userId ??
-  null;
-
-const getDisplayName = (emp) =>
-  emp?.name ?? emp?.fullName ?? emp?.displayName ?? emp?.email ?? `User ${getUserId(emp) ?? ""}`.trim();
-
-const safeLower = (v) => String(v ?? "").toLowerCase();
-
-const pick = (obj, keys, fallback = "") => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null && String(v).length) return v;
-  }
-  return fallback;
-};
 
 const initials = (name = "") => {
   const parts = String(name).trim().split(/\s+/).filter(Boolean);
@@ -123,13 +104,18 @@ const formatDayRanges = (dayKeys) => {
 const getScheduleTimeIn = (item) =>
   pick(item, ["timeIn", "time_in", "startTime", "shiftStart", "start"], "-");
 
+const getScheduleTimeOut = (item) =>
+  pick(item, ["timeOut", "time_out", "endTime", "shiftEnd", "end"], "-");
+
+const getScheduleTimeZoneRaw = (item) =>
+  String(
+    pick(item, ["timeRegion", "timezone", "timeZone", "tz", "scheduleTimezone", "scheduleTimeZone"], "")
+  ).trim();
+
 const getScheduleDuration = (item) => {
   const value = Number(pick(item, ["shiftDuration", "hours", "durationHours"], null));
   return Number.isFinite(value) ? value : null;
 };
-
-const getScheduleTimezone = (item) =>
-  pick(item, ["timeRegion", "timezone", "tz", "scheduleTimezone"], "-");
 
 const formatUtcIsoToHHMM = (utcIso, timeZone) => {
   const d = new Date(utcIso);
@@ -143,7 +129,7 @@ const formatUtcIsoToHHMM = (utcIso, timeZone) => {
   }).format(d);
 };
 
-const buildScheduleGroups = (scheduleArr = [], businessTimeZone = "America/Chicago") => {
+const buildScheduleGroups = (scheduleArr = []) => {
   if (!Array.isArray(scheduleArr) || scheduleArr.length === 0) return [];
 
   const groupsMap = new Map();
@@ -154,18 +140,26 @@ const buildScheduleGroups = (scheduleArr = [], businessTimeZone = "America/Chica
 
     const utcTimeIn = pick(item, ["utcTimeIn", "utcStart", "startUtc", "utcTimeStart"], "");
     const utcTimeOut = pick(item, ["utcTimeOut", "utcEnd", "endUtc", "utcTimeEnd"], "");
+    const apiTimeIn = getScheduleTimeIn(item);
+    const apiTimeOut = getScheduleTimeOut(item);
+    const apiTimeZone = getScheduleTimeZoneRaw(item);
+    const tzForConversion = getScheduleTimeZone(item);
+    const displayTimeZone = tzForConversion;
 
-    const convertedIn = utcTimeIn ? formatUtcIsoToHHMM(utcTimeIn, businessTimeZone) : "";
-    const timeIn = convertedIn || getScheduleTimeIn(item);
+    const convertedIn = utcTimeIn ? formatUtcIsoToHHMM(utcTimeIn, displayTimeZone) : "";
+    const timeIn = apiTimeIn !== "-" ? apiTimeIn : convertedIn || "-";
     const duration = getScheduleDuration(item);
-    const tz = String(businessTimeZone || "").trim() || getScheduleTimezone(item);
 
-    const convertedOut = utcTimeOut ? formatUtcIsoToHHMM(utcTimeOut, businessTimeZone) : "";
-    const { outHHMM, dayOffset } = convertedOut
-      ? { outHHMM: convertedOut, dayOffset: 0 }
+    const convertedOut = utcTimeOut ? formatUtcIsoToHHMM(utcTimeOut, displayTimeZone) : "";
+    const hasExplicitOutValue = apiTimeOut !== "-" || !!convertedOut;
+    const explicitOutValue = apiTimeOut !== "-" ? apiTimeOut : convertedOut || "";
+    const { outHHMM, dayOffset } = hasExplicitOutValue
+      ? { outHHMM: explicitOutValue || "-", dayOffset: 0 }
       : timeIn !== "-" && duration != null
         ? addHoursToHHMM(timeIn, duration)
         : { outHHMM: "-", dayOffset: 0 };
+
+    const tz = apiTimeZone || (convertedIn || convertedOut ? displayTimeZone : "-");
 
     const groupKey = JSON.stringify({
       timeIn,
@@ -208,12 +202,16 @@ export default function SchedulePage({
   employees = [],
   schedulesByUserId = {},
   errorsByUserId = {},
-  businessTimeZone = "America/Chicago",
   loading = false,
   error = "",
   onReload,
+  pageData = null,
 }) {
   const [query, setQuery] = useState("");
+  const profileImagesByUserId =
+    pageData?.profileImagesByUserId && typeof pageData.profileImagesByUserId === "object"
+      ? pageData.profileImagesByUserId
+      : {};
 
   const validEmployees = (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e));
   const perUserErrorCount = Object.keys(errorsByUserId || {}).length;
@@ -225,16 +223,19 @@ export default function SchedulePage({
       const userId = String(getUserId(emp));
       const name = getDisplayName(emp);
       const email = pick(emp || {}, ["email"], "");
+      const mappedProfileImage = String(profileImagesByUserId?.[userId] || "").trim();
+      const profileImage = mappedProfileImage || getProfileImageUrl(emp);
 
       const scheduleArr = Array.isArray(schedulesByUserId?.[userId]) ? schedulesByUserId[userId] : [];
       const hasSchedule = scheduleArr.length > 0;
-      const scheduleGroups = buildScheduleGroups(scheduleArr, businessTimeZone);
+      const scheduleGroups = buildScheduleGroups(scheduleArr);
 
       out.push({
         key: userId,
         userId,
         name,
         email,
+        profileImg: profileImage,
         hasSchedule,
         scheduleGroups,
         tz:
@@ -250,7 +251,7 @@ export default function SchedulePage({
 
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
-  }, [validEmployees, schedulesByUserId, errorsByUserId, businessTimeZone]);
+  }, [validEmployees, schedulesByUserId, errorsByUserId, profileImagesByUserId]);
 
   const filtered = useMemo(() => {
     const q = safeLower(query).trim();
@@ -344,10 +345,10 @@ export default function SchedulePage({
               <tr>
                 <th>User</th>
                 <th>Days</th>
-                <th>Time In</th>
-                <th>Time Out</th>
+                <th>Time In (API TZ)</th>
+                <th>Time Out (API TZ)</th>
                 <th>Hours</th>
-                <th>Timezone</th>
+                <th>Timezone (API)</th>
               </tr>
             </thead>
 
@@ -369,7 +370,18 @@ export default function SchedulePage({
                   <tr className="schxTr" key={r.key}>
                     <td>
                       <div className="schxPerson">
-                        <div className="schxAvatar">{initials(r.name)}</div>
+                        <div className="schxAvatar" aria-label={r.name}>
+                          {r.profileImg ? (
+                            <img
+                              src={r.profileImg}
+                              alt={`${r.name} profile`}
+                              className="schxAvatarImg"
+                              loading="lazy"
+                            />
+                          ) : (
+                            initials(r.name)
+                          )}
+                        </div>
                         <div>
                           <div className="schxName">{r.name}</div>
                           <div className="schxEmail">{r.email || r.userId}</div>

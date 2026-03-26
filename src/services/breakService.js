@@ -9,6 +9,8 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { getBusinessDayKey } from "../utils/attendanceDate";
+import { toMillis } from "../utils/common";
+import { buildTimeZoneMeta, resolveStorageTimeZone } from "../utils/timeZoneMeta";
 
 export const DAILY_BREAK_LIMIT_MINUTES = 60;
 export const BREAK_REMINDER_MINUTES = 55;
@@ -27,11 +29,6 @@ const toDate = (value) => {
 
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
-};
-
-const toMillis = (value) => {
-  const d = toDate(value);
-  return d ? d.getTime() : NaN;
 };
 
 const minutesBetween = (startValue, endValue) => {
@@ -124,6 +121,9 @@ async function createNotification({
   totalBreakMinutes = 0,
   overBreakMinutes = 0,
 }) {
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+
   const ref = await addDoc(collection(db, BREAK_NOTIFICATIONS_COLLECTION), {
     userId: String(userId || "").trim(),
     audience,
@@ -142,6 +142,8 @@ async function createNotification({
     read: false,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 
   return ref.id;
@@ -164,6 +166,8 @@ async function createOrUpdateOverBreakNote({
   }
 
   const now = endedAt ? new Date(endedAt) : new Date();
+  const endedAtDate = endedAt ? new Date(endedAt) : null;
+  const storageTimeZone = resolveStorageTimeZone();
   const totalBreakMinutes = minutesBetween(activeBreak.startedAt, now);
 
   if (totalBreakMinutes < OVERBREAK_TRIGGER_MINUTES) {
@@ -189,7 +193,7 @@ async function createOrUpdateOverBreakNote({
     email: email || activeBreak?.email || "",
     breakLogId: activeBreak.id,
     startedAt: activeBreak.startedAt || null,
-    endedAt: endedAt ? Timestamp.fromDate(new Date(endedAt)) : activeBreak?.endedAt || null,
+    endedAt: endedAtDate ? Timestamp.fromDate(endedAtDate) : activeBreak?.endedAt || null,
     overBreakStartedAt: Timestamp.fromDate(overBreakStartedAt),
     totalBreakMinutes,
     overBreakMinutes,
@@ -201,6 +205,12 @@ async function createOrUpdateOverBreakNote({
       overBreakMinutes
     )}. Total break: ${formatDurationLabel(totalBreakMinutes)}.`,
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("startedAtClient", activeBreak.startedAt, storageTimeZone),
+    ...(endedAtDate
+      ? buildTimeZoneMeta("endedAtClient", endedAtDate, storageTimeZone)
+      : {}),
+    ...buildTimeZoneMeta("overBreakStartedAtClient", overBreakStartedAt, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   };
 
   if (existing?.id) {
@@ -219,6 +229,7 @@ async function createOrUpdateOverBreakNote({
   const ref = await addDoc(collection(db, OVERBREAK_NOTES_COLLECTION), {
     ...payload,
     createdAt: serverTimestamp(),
+    ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
   });
 
   return {
@@ -241,6 +252,7 @@ export async function startBreak({ userId, name = "", email = "" }) {
   }
 
   const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   const ref = await addDoc(collection(db, BREAK_LOGS_COLLECTION), {
     userId: uid,
@@ -255,6 +267,9 @@ export async function startBreak({ userId, name = "", email = "" }) {
     overBreakSavedAt: null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("startedAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 
   return {
@@ -279,6 +294,7 @@ export async function endBreak(userId) {
   }
 
   const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
   const totalBreakMinutes = minutesBetween(activeBreak.startedAt, now);
   const overBreakMinutes = Math.max(0, totalBreakMinutes - OVERBREAK_TRIGGER_MINUTES);
 
@@ -306,6 +322,11 @@ export async function endBreak(userId) {
         ? Timestamp.fromDate(now)
         : activeBreak?.overBreakSavedAt || null,
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("endedAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+    ...(totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
+      ? buildTimeZoneMeta("overBreakSavedAtClient", now, storageTimeZone)
+      : {}),
   });
 
   return {
@@ -462,6 +483,7 @@ export async function ensureBreakReminder({
 
   const now = new Date();
   const totalBreakMinutes = minutesBetween(activeBreak.startedAt, now);
+  const storageTimeZone = resolveStorageTimeZone();
 
   if (totalBreakMinutes < BREAK_REMINDER_MINUTES) {
     return { created: false, reason: "too-early" };
@@ -490,6 +512,8 @@ export async function ensureBreakReminder({
     reminderSent: true,
     reminderSentAt: Timestamp.fromDate(now),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("reminderSentAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 
   return {
@@ -580,10 +604,15 @@ export async function ensureOverBreakEscalation({
     });
   }
 
+  const overBreakSavedAt = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+
   await updateDoc(doc(db, BREAK_LOGS_COLLECTION, activeBreak.id), {
     overBreakSaved: true,
-    overBreakSavedAt: Timestamp.fromDate(new Date()),
+    overBreakSavedAt: Timestamp.fromDate(overBreakSavedAt),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("overBreakSavedAtClient", overBreakSavedAt, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", overBreakSavedAt, storageTimeZone),
   });
 
   return result;
@@ -628,11 +657,15 @@ export async function getNotificationsForUser(user) {
 export async function markNotificationRead(notificationId) {
   const id = String(notificationId || "").trim();
   if (!id) return;
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   await updateDoc(doc(db, BREAK_NOTIFICATIONS_COLLECTION, id), {
     read: true,
     readAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("readAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 }
 

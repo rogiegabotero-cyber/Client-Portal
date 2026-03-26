@@ -5,6 +5,7 @@ import {
   loginPortalUser,
   logoutPortalUser,
 } from "./firebaseAuthService";
+import { getDisplayName as getUserName, getUserId } from "../utils/common";
 
 const STORAGE_KEY = "hyacinth_portal_auth";
 
@@ -14,34 +15,6 @@ function safeJsonParse(value, fallback = null) {
   } catch {
     return fallback;
   }
-}
-
-function getUserId(emp) {
-  return (
-    emp?.userId ??
-    emp?.userID ??
-    emp?.user_id ??
-    emp?.UserId ??
-    emp?.uid ??
-    emp?.firebaseUid ??
-    emp?.id ??
-    emp?.employeeId ??
-    emp?._id ??
-    emp?.user?.id ??
-    emp?.user?.uid ??
-    emp?.user?.userId ??
-    null
-  );
-}
-
-function getUserName(emp) {
-  return (
-    emp?.name ??
-    emp?.fullName ??
-    emp?.displayName ??
-    emp?.email ??
-    `User ${String(getUserId(emp) ?? "")}`.trim()
-  );
 }
 
 export function getStoredSession() {

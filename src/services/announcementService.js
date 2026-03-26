@@ -12,12 +12,12 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { db } from "../firebase";
+import { toText, uniq } from "../utils/common";
+import { buildTimeZoneMeta, resolveStorageTimeZone } from "../utils/timeZoneMeta";
 
 const ANNOUNCEMENTS_COLLECTION = "employee_announcements";
 const NOTIFICATIONS_COLLECTION = "break_notifications";
 
-const toText = (value) => String(value || "").trim();
-const uniq = (arr = []) => Array.from(new Set(arr));
 const toPreviewText = (value, maxLen = 120) => {
   const cleaned = toText(value).replace(/\s+/g, " ");
   if (!cleaned) return "";
@@ -77,6 +77,8 @@ export async function createAnnouncement(payload = {}) {
   if (expiresAt.getTime() <= publishAt.getTime()) {
     throw new Error("Expire time must be after post time.");
   }
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   const ref = await addDoc(collection(db, ANNOUNCEMENTS_COLLECTION), {
     headline,
@@ -88,6 +90,10 @@ export async function createAnnouncement(payload = {}) {
     expiresAt: Timestamp.fromDate(expiresAt),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("publishAtClient", publishAt, storageTimeZone),
+    ...buildTimeZoneMeta("expiresAtClient", expiresAt, storageTimeZone),
+    ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 
   const recipientUserIds = uniq(
@@ -104,6 +110,7 @@ export async function createAnnouncement(payload = {}) {
     const previewMessage = toPreviewText(note, 140);
 
     for (const userId of recipientUserIds) {
+      const notifNow = new Date();
       await addDoc(collection(db, NOTIFICATIONS_COLLECTION), {
         audience: "employee",
         userId,
@@ -115,6 +122,8 @@ export async function createAnnouncement(payload = {}) {
         read: false,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+        ...buildTimeZoneMeta("createdAtClient", notifNow, storageTimeZone),
+        ...buildTimeZoneMeta("updatedAtClient", notifNow, storageTimeZone),
       });
     }
   }
@@ -125,9 +134,12 @@ export async function createAnnouncement(payload = {}) {
 export async function updateAnnouncement(announcementId, updates = {}) {
   const id = toText(announcementId);
   if (!id) throw new Error("Announcement ID is required");
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   const payload = {
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   };
 
   if ("note" in updates) {
@@ -149,12 +161,14 @@ export async function updateAnnouncement(announcementId, updates = {}) {
     publishAtDate = toDate(updates?.publishAt);
     if (!publishAtDate) throw new Error("Invalid publish time");
     payload.publishAt = Timestamp.fromDate(publishAtDate);
+    Object.assign(payload, buildTimeZoneMeta("publishAtClient", publishAtDate, storageTimeZone));
   }
 
   if ("expiresAt" in updates) {
     expiresAtDate = toDate(updates?.expiresAt);
     if (!expiresAtDate) throw new Error("Invalid expire time");
     payload.expiresAt = Timestamp.fromDate(expiresAtDate);
+    Object.assign(payload, buildTimeZoneMeta("expiresAtClient", expiresAtDate, storageTimeZone));
   }
 
   if (publishAtDate && expiresAtDate && expiresAtDate.getTime() <= publishAtDate.getTime()) {
@@ -167,23 +181,30 @@ export async function updateAnnouncement(announcementId, updates = {}) {
 export async function deleteAnnouncement(announcementId, actor = {}) {
   const id = toText(announcementId);
   if (!id) throw new Error("Announcement ID is required");
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
   await updateDoc(doc(db, ANNOUNCEMENTS_COLLECTION, id), {
     deletedAt: serverTimestamp(),
     deletedByUserId: toText(actor?.userId ?? actor?.uid ?? actor?.id ?? ""),
     deletedByName: toText(actor?.name ?? actor?.displayName ?? actor?.email ?? ""),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("deletedAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 }
 
 export async function restoreAnnouncement(announcementId) {
   const id = toText(announcementId);
   if (!id) throw new Error("Announcement ID is required");
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   await updateDoc(doc(db, ANNOUNCEMENTS_COLLECTION, id), {
     deletedAt: null,
     deletedByUserId: "",
     deletedByName: "",
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 }
 

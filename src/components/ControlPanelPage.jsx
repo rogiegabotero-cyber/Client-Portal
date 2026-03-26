@@ -10,7 +10,13 @@ import {
 } from "../utils/attendanceDate";
 import {
   saveAttendanceSettings,
+  DEFAULT_STORAGE_TIME_ZONE,
+  DISPLAY_TIME_ZONE_MODE_DEVICE,
+  DISPLAY_TIME_ZONE_MODE_FIXED,
+  resolveAttendanceDisplayTimeZone,
+  sanitizeTimeZone,
 } from "../services/attendanceSettingsService";
+import { getDeviceTimeZone } from "../utils/common";
 import "./controlPanelPage.css";
 
 const PAGE_LABELS = {
@@ -53,13 +59,27 @@ const PERMISSION_PAGE_ORDER = [
   "control_panel",
 ];
 
-const getDeviceTimeZone = () => {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return String(tz || "").trim() || "America/Chicago";
-  } catch {
-    return "America/Chicago";
+const SIMPLE_TIME_ZONE_OPTIONS = [
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Phoenix",
+  "America/Los_Angeles",
+  "America/Anchorage",
+  "Pacific/Honolulu",
+  "UTC",
+];
+
+const DEVICE_TIME_ZONE_OPTION = "__DEVICE_TIME_ZONE__";
+
+const buildSimpleTimeZoneOptions = (...values) => {
+  const list = [...SIMPLE_TIME_ZONE_OPTIONS];
+  for (const value of values) {
+    const tz = String(value || "").trim();
+    if (!tz) continue;
+    if (!list.includes(tz)) list.push(tz);
   }
+  return list;
 };
 
 export default function ControlPanelPage({
@@ -70,9 +90,13 @@ export default function ControlPanelPage({
   viewer = null,
   attendanceResetTime = "05:00",
   businessTimeZone = "America/Chicago",
+  attendanceDisplayTimeZoneMode = DISPLAY_TIME_ZONE_MODE_DEVICE,
+  attendanceDisplayTimeZone = "",
+  storageTimeZone = DEFAULT_STORAGE_TIME_ZONE,
   onSaveEmployeeAllowedPages,
   onSaveSpecialUserAllowedPages,
   onReloadUsers,
+  onAttendanceSettingsChange,
   onAttendanceResetTimeChange,
   onBusinessTimeZoneChange,
   onToast,
@@ -83,14 +107,72 @@ export default function ControlPanelPage({
   const [saving, setSaving] = useState(false);
   const [savingAttendanceSettings, setSavingAttendanceSettings] = useState(false);
   const [localError, setLocalError] = useState("");
+  const deviceTimeZone = getDeviceTimeZone();
 
   const [resetTimeDraft, setResetTimeDraft] = useState(() =>
     normalizeResetTime(attendanceResetTime)
+  );
+  const [displayTimeZoneModeDraft, setDisplayTimeZoneModeDraft] = useState(
+    attendanceDisplayTimeZoneMode || DISPLAY_TIME_ZONE_MODE_DEVICE
+  );
+  const [displayTimeZoneDraft, setDisplayTimeZoneDraft] = useState(
+    String(attendanceDisplayTimeZone || "").trim()
+  );
+  const [storageTimeZoneDraft, setStorageTimeZoneDraft] = useState(
+    String(storageTimeZone || "").trim() || DEFAULT_STORAGE_TIME_ZONE
   );
 
   useEffect(() => {
     setResetTimeDraft(normalizeResetTime(attendanceResetTime));
   }, [attendanceResetTime]);
+
+  useEffect(() => {
+    setDisplayTimeZoneModeDraft(
+      attendanceDisplayTimeZoneMode === DISPLAY_TIME_ZONE_MODE_FIXED
+        ? DISPLAY_TIME_ZONE_MODE_FIXED
+        : DISPLAY_TIME_ZONE_MODE_DEVICE
+    );
+  }, [attendanceDisplayTimeZoneMode]);
+
+  useEffect(() => {
+    setDisplayTimeZoneDraft(String(attendanceDisplayTimeZone || "").trim());
+  }, [attendanceDisplayTimeZone]);
+
+  useEffect(() => {
+    setStorageTimeZoneDraft(
+      String(storageTimeZone || "").trim() || DEFAULT_STORAGE_TIME_ZONE
+    );
+  }, [storageTimeZone]);
+
+  useEffect(() => {
+    if (displayTimeZoneModeDraft !== DISPLAY_TIME_ZONE_MODE_FIXED) return;
+    if (String(displayTimeZoneDraft || "").trim()) return;
+    setDisplayTimeZoneDraft(deviceTimeZone);
+  }, [displayTimeZoneModeDraft, displayTimeZoneDraft, deviceTimeZone]);
+
+  const timeZoneSelectOptions = useMemo(
+    () =>
+      buildSimpleTimeZoneOptions(
+        deviceTimeZone,
+        displayTimeZoneDraft,
+        storageTimeZoneDraft,
+        businessTimeZone,
+        DEFAULT_STORAGE_TIME_ZONE
+      ),
+    [deviceTimeZone, displayTimeZoneDraft, storageTimeZoneDraft, businessTimeZone]
+  );
+
+  const resolvedDisplayTimeZonePreview = useMemo(
+    () =>
+      resolveAttendanceDisplayTimeZone(
+        {
+          displayTimeZoneMode: displayTimeZoneModeDraft,
+          displayTimeZone: displayTimeZoneDraft,
+        },
+        deviceTimeZone
+      ),
+    [displayTimeZoneModeDraft, displayTimeZoneDraft, deviceTimeZone]
+  );
 
   useEffect(() => {
     const special = (Array.isArray(specialUsers) ? specialUsers : []).filter(
@@ -246,18 +328,44 @@ export default function ControlPanelPage({
     setSelectedUserId(String(user.uid || user.id || ""));
   }
 
+  function handleDisplayTimeZoneSelection(value) {
+    const next = String(value || "").trim();
+
+    if (next === DEVICE_TIME_ZONE_OPTION) {
+      setDisplayTimeZoneModeDraft(DISPLAY_TIME_ZONE_MODE_DEVICE);
+      setDisplayTimeZoneDraft("");
+      return;
+    }
+
+    setDisplayTimeZoneModeDraft(DISPLAY_TIME_ZONE_MODE_FIXED);
+    setDisplayTimeZoneDraft(next);
+  }
+
   async function handleSaveAttendanceSettings() {
     setSavingAttendanceSettings(true);
     setLocalError("");
 
     try {
       const normalizedResetTime = normalizeResetTime(resetTimeDraft);
-      const normalizedBusinessTimeZone = getDeviceTimeZone();
+      const normalizedDisplayMode =
+        displayTimeZoneModeDraft === DISPLAY_TIME_ZONE_MODE_FIXED
+          ? DISPLAY_TIME_ZONE_MODE_FIXED
+          : DISPLAY_TIME_ZONE_MODE_DEVICE;
+      const normalizedDisplayTimeZone =
+        normalizedDisplayMode === DISPLAY_TIME_ZONE_MODE_FIXED
+          ? sanitizeTimeZone(displayTimeZoneDraft, deviceTimeZone)
+          : "";
+      const normalizedStorageTimeZone = sanitizeTimeZone(
+        storageTimeZoneDraft,
+        DEFAULT_STORAGE_TIME_ZONE
+      );
 
-      await saveAttendanceSettings(
+      const savedSettings = await saveAttendanceSettings(
         {
           resetTime: normalizedResetTime,
-          businessTimeZone: normalizedBusinessTimeZone,
+          displayTimeZoneMode: normalizedDisplayMode,
+          displayTimeZone: normalizedDisplayTimeZone,
+          storageTimeZone: normalizedStorageTimeZone,
         },
         {
           uid: viewer?.uid || viewer?.userId || viewer?.id || "",
@@ -266,15 +374,28 @@ export default function ControlPanelPage({
           name: viewer?.name || viewer?.displayName || "",
         }
       );
+      const resolvedDisplayTimeZone = resolveAttendanceDisplayTimeZone(
+        savedSettings,
+        deviceTimeZone
+      );
 
-      setStoredAttendanceResetTime(normalizedResetTime);
-      onAttendanceResetTimeChange?.(normalizedResetTime);
-      onBusinessTimeZoneChange?.(normalizedBusinessTimeZone);
+      setStoredAttendanceResetTime(savedSettings.resetTime);
+      setResetTimeDraft(savedSettings.resetTime);
+      setDisplayTimeZoneModeDraft(savedSettings.displayTimeZoneMode);
+      setDisplayTimeZoneDraft(savedSettings.displayTimeZone);
+      setStorageTimeZoneDraft(savedSettings.storageTimeZone);
+
+      onAttendanceSettingsChange?.({
+        ...savedSettings,
+        resolvedBusinessTimeZone: resolvedDisplayTimeZone,
+      });
+      onAttendanceResetTimeChange?.(savedSettings.resetTime);
+      onBusinessTimeZoneChange?.(resolvedDisplayTimeZone);
 
       onToast?.({
         type: "success",
         title: "Saved",
-        message: `Attendance settings saved: ${normalizedResetTime} / Device TZ (${normalizedBusinessTimeZone})`,
+        message: `Saved reset ${savedSettings.resetTime}, display TZ ${resolvedDisplayTimeZone}, DB TZ ${savedSettings.storageTimeZone}.`,
       });
     } catch (err) {
       const msg = err?.message || "Failed to save attendance settings";
@@ -364,7 +485,7 @@ export default function ControlPanelPage({
 
             <div className="control-panel-attendance-settings">
               <p className="control-panel-attendance-help">
-                Set the attendance business day reset time. Timezone is automatically detected from the device.
+                Set reset time and choose simple timezone options for display and saved timestamp tags.
               </p>
 
               <div className="control-panel-attendance-grid">
@@ -380,11 +501,42 @@ export default function ControlPanelPage({
                 </div>
 
                 <div className="control-panel-attendance-card">
-                  <h3>Time Zone (Device)</h3>
-                  <p>This system now follows your current device/browser timezone.</p>
-                  <div className="control-panel-device-tz">
-                    {String(businessTimeZone || "").trim() || getDeviceTimeZone()}
-                  </div>
+                  <h3>Display Time Zone</h3>
+                  <p>Choose the timezone used for displaying all times in the app.</p>
+                  <select
+                    value={
+                      displayTimeZoneModeDraft === DISPLAY_TIME_ZONE_MODE_DEVICE
+                        ? DEVICE_TIME_ZONE_OPTION
+                        : displayTimeZoneDraft
+                    }
+                    onChange={(e) => handleDisplayTimeZoneSelection(e.target.value)}
+                    className="control-panel-time-input control-panel-time-select"
+                  >
+                    <option value={DEVICE_TIME_ZONE_OPTION}>
+                      Device Time Zone (Auto: {deviceTimeZone})
+                    </option>
+                    {timeZoneSelectOptions.map((tz) => (
+                      <option key={tz} value={tz}>
+                        {tz}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="control-panel-attendance-card">
+                  <h3>DB Save Time Zone</h3>
+                  <p>Timezone tag for saved timestamps.</p>
+                  <select
+                    value={storageTimeZoneDraft}
+                    onChange={(e) => setStorageTimeZoneDraft(e.target.value)}
+                    className="control-panel-time-input control-panel-time-select"
+                  >
+                    {timeZoneSelectOptions.map((tz) => (
+                      <option key={`save-${tz}`} value={tz}>
+                        {tz}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -400,7 +552,9 @@ export default function ControlPanelPage({
               </div>
 
               <div className="control-panel-attendance-example">
-                Current device timezone: <strong>{String(businessTimeZone || "").trim() || getDeviceTimeZone()}</strong>
+                Display timezone in app: <strong>{resolvedDisplayTimeZonePreview}</strong>{" "}
+                | Active app timezone: <strong>{String(businessTimeZone || "").trim() || resolvedDisplayTimeZonePreview}</strong>{" "}
+                | Saved timestamp timezone tag: <strong>{storageTimeZoneDraft || DEFAULT_STORAGE_TIME_ZONE}</strong>
               </div>
             </div>
 

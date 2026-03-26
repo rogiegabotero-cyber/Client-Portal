@@ -132,6 +132,7 @@
   color: #ffffff;
   background: linear-gradient(135deg, #5c8dff, #7a5cff);
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .mep-avatar-sm {
@@ -147,6 +148,14 @@
   border-radius: 24px;
   font-size: 28px;
   box-shadow: 0 16px 32px rgba(92, 141, 255, 0.25);
+}
+
+.mep-avatar-img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  display: block;
 }
 
 .mep-list-body {
@@ -506,6 +515,13 @@
   padding: 4px;
   background: rgba(255, 255, 255, 0.05);
   gap: 4px;
+}
+
+.mep-toggle-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
 }
 
 .mep-toggle-btn {

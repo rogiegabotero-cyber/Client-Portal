@@ -14,6 +14,8 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "../firebase";
+import { toText, uniq } from "../utils/common";
+import { buildTimeZoneMeta, resolveStorageTimeZone } from "../utils/timeZoneMeta";
 
 const ASSIGNMENTS_COLLECTION = "employeeAssignments";
 const NOTIFICATIONS_COLLECTION = "break_notifications";
@@ -27,13 +29,15 @@ const normalizeDateOnly = (value) => {
   return d.toISOString().slice(0, 10);
 };
 
-const toText = (value) => String(value || "").trim();
-const uniq = (arr = []) => Array.from(new Set(arr));
-
 const isAdminLikeRole = (role) => {
   const r = toText(role).toLowerCase();
   return r === "admin" || r === "super_admin" || r === "super admin";
 };
+
+const normalizeStatusKey = (status) =>
+  toText(status).toLowerCase().replace(/\s+/g, "_");
+
+const isToBeCheckStatus = (status) => normalizeStatusKey(status) === "to_be_check";
 
 const canUserCompleteAssignment = (assignment, actorUserId, actorRole) => {
   if (!assignment || !actorUserId) return false;
@@ -65,6 +69,9 @@ const addAssignmentNotification = async ({
   actorName = "",
   extra = {},
 } = {}) => {
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+
   await addDoc(collection(db, NOTIFICATIONS_COLLECTION), {
     audience: toText(audience) || "employee",
     userId: toText(userId),
@@ -78,6 +85,8 @@ const addAssignmentNotification = async ({
     read: false,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
     ...extra,
   });
 };
@@ -152,6 +161,8 @@ export async function createAssignment(payload) {
     name: "",
     position: "",
   };
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   const docRef = await addDoc(collection(db, ASSIGNMENTS_COLLECTION), {
     employeeUserId: String(primaryAssignee.userId || ""),
@@ -171,9 +182,18 @@ export async function createAssignment(payload) {
     createdByName: payload.createdByName || "",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
     completedAt: null,
     completedByUserId: "",
     completedByName: "",
+    completionRequestedAt: null,
+    completionRequestedByUserId: "",
+    completionRequestedByName: "",
+    completionReviewedAt: null,
+    completionReviewedByUserId: "",
+    completionReviewedByName: "",
+    completionReviewDecision: "",
     accessRequestedByUserIds: [],
     accessApprovedUserIds: [],
     notificationSent24h: false,
@@ -207,10 +227,13 @@ export async function createAssignment(payload) {
 
 export async function updateAssignment(assignmentId, updates = {}) {
   const ref = doc(db, ASSIGNMENTS_COLLECTION, assignmentId);
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   const payload = {
     ...updates,
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   };
 
   if ("deadlineDate" in payload) {
@@ -252,22 +275,40 @@ export async function markAssignmentCompleted(assignmentId, actor = {}) {
   if (!canUserCompleteAssignment(current, actorUserId, actorRole)) {
     throw new Error("You do not have access to complete this task.");
   }
+  if (current.status === "completed") {
+    return { requested: false, reason: "already-completed" };
+  }
+  if (isToBeCheckStatus(current.status)) {
+    return { requested: false, reason: "already-pending-review" };
+  }
+
+  const requestNow = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   await updateDoc(ref, {
-    status: "completed",
-    completedAt: serverTimestamp(),
-    completedByUserId: actorUserId,
-    completedByName: actorName,
+    status: "to_be_check",
+    completionRequestedAt: serverTimestamp(),
+    completionRequestedByUserId: actorUserId,
+    completionRequestedByName: actorName,
+    completionReviewedAt: null,
+    completionReviewedByUserId: "",
+    completionReviewedByName: "",
+    completionReviewDecision: "",
+    completedAt: null,
+    completedByUserId: "",
+    completedByName: "",
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("completionRequestedAtClient", requestNow, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", requestNow, storageTimeZone),
   });
 
   await addAssignmentNotification({
     audience: "admin",
     userId: "",
     assignmentId: aid,
-    type: "assignment_completed",
-    title: "Assignment completed",
-    message: `${actorName} completed "${current.title || "an assignment"}".`,
+    type: "assignment_completion_submitted",
+    title: "Completion request submitted",
+    message: `${actorName} marked "${current.title || "an assignment"}" as To Be Check.`,
     actorUserId,
     actorName,
     extra: {
@@ -275,6 +316,107 @@ export async function markAssignmentCompleted(assignmentId, actor = {}) {
       employeeName: current.employeeName || "",
     },
   });
+
+  return { requested: true, status: "to_be_check" };
+}
+
+export async function reviewAssignmentCompletion(assignmentId, decision = "", reviewer = {}) {
+  const aid = toText(assignmentId);
+  if (!aid) throw new Error("Missing assignment id");
+
+  const reviewDecision = normalizeStatusKey(decision);
+  if (reviewDecision !== "approve" && reviewDecision !== "reject") {
+    throw new Error("Invalid completion review decision");
+  }
+
+  const reviewerRole = toText(reviewer?.role).toLowerCase();
+  if (!isAdminLikeRole(reviewerRole)) {
+    throw new Error("Only admins can review completion requests.");
+  }
+
+  const reviewerUserId = toText(
+    reviewer?.userId ?? reviewer?.uid ?? reviewer?.id ?? reviewer?.employeeId ?? ""
+  );
+  const reviewerName =
+    toText(reviewer?.name) || toText(reviewer?.displayName) || toText(reviewer?.email) || "Manager";
+
+  const ref = doc(db, ASSIGNMENTS_COLLECTION, aid);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Assignment not found");
+
+  const current = snap.data() || {};
+  if (!isToBeCheckStatus(current.status)) {
+    throw new Error("This assignment is not awaiting completion review.");
+  }
+
+  const requesterUserId = toText(
+    current.completionRequestedByUserId || current.employeeUserId
+  );
+  const requesterName =
+    toText(current.completionRequestedByName) || toText(current.employeeName) || "Employee";
+  const reviewNow = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+
+  if (reviewDecision === "approve") {
+    await updateDoc(ref, {
+      status: "completed",
+      completedAt: serverTimestamp(),
+      completedByUserId: requesterUserId,
+      completedByName: requesterName,
+      completionReviewedAt: serverTimestamp(),
+      completionReviewedByUserId: reviewerUserId,
+      completionReviewedByName: reviewerName,
+      completionReviewDecision: "approved",
+      updatedAt: serverTimestamp(),
+      ...buildTimeZoneMeta("completedAtClient", reviewNow, storageTimeZone),
+      ...buildTimeZoneMeta("completionReviewedAtClient", reviewNow, storageTimeZone),
+      ...buildTimeZoneMeta("updatedAtClient", reviewNow, storageTimeZone),
+    });
+
+    if (requesterUserId) {
+      await addAssignmentNotification({
+        audience: "employee",
+        userId: requesterUserId,
+        assignmentId: aid,
+        type: "assignment_completion_approved",
+        title: "Task completion approved",
+        message: `${reviewerName} approved your completion request for "${current.title || "an assignment"}".`,
+        actorUserId: reviewerUserId,
+        actorName: reviewerName,
+      });
+    }
+
+    return { reviewed: true, status: "completed" };
+  }
+
+  await updateDoc(ref, {
+    status: "in_progress",
+    completionRequestedAt: null,
+    completionRequestedByUserId: "",
+    completionRequestedByName: "",
+    completionReviewedAt: serverTimestamp(),
+    completionReviewedByUserId: reviewerUserId,
+    completionReviewedByName: reviewerName,
+    completionReviewDecision: "rejected",
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("completionReviewedAtClient", reviewNow, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", reviewNow, storageTimeZone),
+  });
+
+  if (requesterUserId) {
+    await addAssignmentNotification({
+      audience: "employee",
+      userId: requesterUserId,
+      assignmentId: aid,
+      type: "assignment_completion_rejected",
+      title: "Task completion rejected",
+      message: `${reviewerName} requested more updates before completing "${current.title || "this assignment"}".`,
+      actorUserId: reviewerUserId,
+      actorName: reviewerName,
+    });
+  }
+
+  return { reviewed: true, status: "in_progress" };
 }
 
 export async function requestAssignmentAccess(assignmentId, payload = {}) {
@@ -299,10 +441,13 @@ export async function requestAssignmentAccess(assignmentId, payload = {}) {
   if (canUserCompleteAssignment(current, requesterUserId, requesterRole)) {
     return { requested: false, reason: "already-authorized" };
   }
+  const requestNow = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   await updateDoc(ref, {
     accessRequestedByUserIds: arrayUnion(requesterUserId),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", requestNow, storageTimeZone),
   });
 
   await addAssignmentNotification({
@@ -336,11 +481,14 @@ export async function approveAssignmentAccess(assignmentId, requesterUserId, app
   if (!snap.exists()) throw new Error("Assignment not found");
 
   const current = snap.data() || {};
+  const approveNow = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
 
   await updateDoc(ref, {
     accessApprovedUserIds: arrayUnion(requesterId),
     accessRequestedByUserIds: arrayRemove(requesterId),
     updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", approveNow, storageTimeZone),
   });
 
   const approverName =
@@ -384,7 +532,8 @@ export async function createDeadlineAlertsForAssignments(assignments = []) {
   const tasks = Array.isArray(assignments) ? assignments : [];
 
   for (const item of tasks) {
-    if (!item?.id || item?.status === "completed") continue;
+    const statusKey = normalizeStatusKey(item?.status);
+    if (!item?.id || statusKey === "completed" || statusKey === "to_be_check") continue;
 
     const recipientIds = uniq(
       (Array.isArray(item?.employeeUserIds) ? item.employeeUserIds : [])
@@ -411,6 +560,8 @@ export async function createDeadlineAlertsForAssignments(assignments = []) {
     } else if (shouldSendSameDay) {
       message = `Your task "${item.title}" is due today (${item.deadlineDate}).`;
     }
+    const reminderNow = new Date();
+    const storageTimeZone = resolveStorageTimeZone();
 
     for (const recipientId of recipientIds) {
       await addDoc(collection(db, NOTIFICATIONS_COLLECTION), {
@@ -424,6 +575,8 @@ export async function createDeadlineAlertsForAssignments(assignments = []) {
         targetPage: "assignment",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+        ...buildTimeZoneMeta("createdAtClient", reminderNow, storageTimeZone),
+        ...buildTimeZoneMeta("updatedAtClient", reminderNow, storageTimeZone),
       });
     }
 

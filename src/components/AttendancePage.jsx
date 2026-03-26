@@ -1,39 +1,21 @@
 ﻿import React, { useMemo, useState, useEffect } from "react";
 import "./attendancePage.css";
 import { getBusinessDayKey } from "../utils/attendanceDate";
+import {
+  getDisplayName,
+  getProfileImageUrl,
+  getUserId,
+  pick,
+  safeLower,
+} from "../utils/common";
+import {
+  getEventTs,
+  isClockedOutLog,
+  isIn,
+  tsMs,
+} from "../utils/attendanceLog";
 
 /* ------------------------- helpers (ids, strings) ------------------------- */
-const getUserId = (emp) =>
-  emp?.userId ??
-  emp?.userID ??
-  emp?.user_id ??
-  emp?.UserId ??
-  emp?.uid ??
-  emp?.firebaseUid ??
-  emp?.id ??
-  emp?.employeeId ??
-  emp?._id ??
-  emp?.user?.id ??
-  emp?.user?.uid ??
-  emp?.user?.userId ??
-  null;
-
-const getDisplayName = (emp) =>
-  emp?.name ??
-  emp?.fullName ??
-  emp?.displayName ??
-  emp?.email ??
-  `User ${getUserId(emp) ?? ""}`.trim();
-
-const safeLower = (v) => String(v ?? "").toLowerCase();
-
-const pick = (obj, keys, fallback = "") => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null && String(v).length) return v;
-  }
-  return fallback;
-};
 
 const initials = (name = "") => {
   const parts = String(name).trim().split(/\s+/).filter(Boolean);
@@ -97,72 +79,6 @@ const getRawStatus = (log) =>
   pick(log || {}, ["status", "attendanceStatus", "dailyStatus", "remark"], "").trim();
 
 /* --------------------------- time helpers ------------------------------- */
-const tsMs = (ts) => {
-  const d = new Date(ts);
-  const t = d.getTime();
-  return Number.isFinite(t) ? t : NaN;
-};
-
-const pickTs = (log) =>
-  pick(log, ["timestamp", "createdAt", "time", "timeIn", "clockIn", "timestampIn"], "");
-
-const pickOutTs = (log) =>
-  pick(
-    log,
-    [
-      "timeOut",
-      "time_out",
-      "clockOut",
-      "clock_out",
-      "timestampOut",
-      "outTimestamp",
-      "timeout",
-      "outTime",
-      "endTime",
-      "checkedOutAt",
-      "timeEnd",
-      "clockedOutAt",
-    ],
-    ""
-  );
-
-const getEventTs = (log) => {
-  const outTs = pickOutTs(log);
-  const mainTs = pickTs(log);
-
-  if (safeLower(pick(log, ["type", "logType", "eventType"], "")).includes("out")) {
-    return outTs || mainTs || "";
-  }
-
-  if (hasRealTimeOut(log)) {
-    return outTs || mainTs || "";
-  }
-
-  return mainTs || outTs || "";
-};
-
-const isIn = (log) => {
-  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
-  return type.includes("in") || type.includes("clockin") || type.includes("timein");
-};
-
-const isOut = (log) => {
-  const type = safeLower(pick(log, ["type", "logType", "eventType"], ""));
-  return (
-    type.includes("out") ||
-    type.includes("clockout") ||
-    type.includes("timeout") ||
-    type.includes("checkout")
-  );
-};
-
-const hasRealTimeOut = (raw) => {
-  const v = pickOutTs(raw || {});
-  if (!v) return false;
-  return Number.isFinite(new Date(v).getTime());
-};
-
-const isClockedOutLog = (log) => isOut(log) || hasRealTimeOut(log);
 const isValidTs = (log) => Number.isFinite(tsMs(getEventTs(log)));
 
 const isNcnsInLog = (log) => {
@@ -767,6 +683,7 @@ export default function AttendancePage({
   activeBreaksByUserId = {},
   attendanceResetTime = "05:00",
   businessTimeZone = "America/Chicago",
+  pageData = null,
 }) {
   const [query, setQuery] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -789,6 +706,10 @@ export default function AttendancePage({
     () => (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e)),
     [employees]
   );
+  const profileImagesByUserId =
+    pageData?.profileImagesByUserId && typeof pageData.profileImagesByUserId === "object"
+      ? pageData.profileImagesByUserId
+      : {};
 
   const dateKeys = useMemo(() => enumerateYmdRange(startDate, endDate), [startDate, endDate]);
   const perUserErrorCount = Object.keys(errorsByUserId || {}).length;
@@ -800,6 +721,8 @@ export default function AttendancePage({
       const userId = String(getUserId(emp));
       const name = getDisplayName(emp);
       const email = pick(emp || {}, ["email"], "");
+      const mappedProfileImage = String(profileImagesByUserId?.[userId] || "").trim();
+      const profileImage = mappedProfileImage || getProfileImageUrl(emp);
 
       const logs = Array.isArray(logsByUserId?.[userId]) ? logsByUserId[userId] : [];
       const byDay = groupLogsByBusinessDay(logs, attendanceResetTime, businessTimeZone);
@@ -849,6 +772,7 @@ export default function AttendancePage({
           userId,
           name,
           email,
+          profileImg: profileImage,
           dayKey,
           status,
           timeInTs,
@@ -878,6 +802,7 @@ export default function AttendancePage({
     endDate,
     attendanceResetTime,
     businessTimeZone,
+    profileImagesByUserId,
   ]);
 
   const visibleRows = useMemo(() => {
@@ -939,16 +864,6 @@ export default function AttendancePage({
   return (
     <div className="attx">
       <div className="attxTop">
-        <div className="attxTopLeft">
-          <div className="attxTitleWrap">
-            <div className="attxTitle">Attendance</div>
-            <div className="attxSub">
-              Range: {startDate} -&gt; {endDate}  |  Users: {validEmployees.length}
-              {perUserErrorCount ? `  |  Errors: ${perUserErrorCount}` : ""}
-            </div>
-          </div>
-        </div>
-
         <div className="attxTopRight">
           <div className="attxControls">
             <button id="badeng" className="attxBtn" onClick={onReload} disabled={loading}>
@@ -1051,8 +966,15 @@ export default function AttendancePage({
 
       <div className="attxCard">
         <div className="attxCardHead">
-          <div className="attxCardTitle">Daily Attendance</div>
+          <div className="attxTitleWrap attxTitleWrapCard">
+            <div className="attxTitle attxTitleCard">Attendance</div>
+            <div className="attxSub attxSubCard">
+              Range: {startDate} -&gt; {endDate}  |  Users: {validEmployees.length}
+              {perUserErrorCount ? `  |  Errors: ${perUserErrorCount}` : ""}
+            </div>
+          </div>
           <div className="attxCardMetaWrap">
+            <div className="attxCardTitle">Daily Attendance</div>
             <div className="attxCardMeta">
               Showing {filtered.length} of {visibleRows.length}
             </div>
@@ -1092,7 +1014,18 @@ export default function AttendancePage({
                   <tr className="attxTr" key={r.key}>
                     <td>
                       <div className="attxPerson">
-                        <div className="attxAvatar">{initials(r.name)}</div>
+                        <div className="attxAvatar" aria-label={r.name}>
+                          {r.profileImg ? (
+                            <img
+                              src={r.profileImg}
+                              alt={`${r.name} profile`}
+                              className="attxAvatarImg"
+                              loading="lazy"
+                            />
+                          ) : (
+                            initials(r.name)
+                          )}
+                        </div>
                         <div>
                           <div className="attxName">{r.name}</div>
                           <div className="attxEmail">{r.email || r.userId}</div>
@@ -1165,10 +1098,25 @@ export default function AttendancePage({
 
       <div className={`attxDrawer ${drawerOpen ? "open" : ""}`} role="dialog" aria-modal="true">
         <div className="attxDrawerHead">
-          <div>
+          <div className="attxDrawerIdentity">
             <div className="attxDrawerTitle">Attendance Records</div>
-            <div className="attxDrawerSub">
-              {drawerRow?.name || "-"}  |  {drawerRow?.email || drawerRow?.userId || "-"}
+            <div className="attxDrawerPerson">
+              <div className="attxAvatar" aria-label={drawerRow?.name || "Employee"}>
+                {drawerRow?.profileImg ? (
+                  <img
+                    src={drawerRow.profileImg}
+                    alt={`${drawerRow?.name || "Employee"} profile`}
+                    className="attxAvatarImg"
+                    loading="lazy"
+                  />
+                ) : (
+                  initials(drawerRow?.name || "")
+                )}
+              </div>
+              <div className="attxDrawerMeta">
+                <div className="attxDrawerName">{drawerRow?.name || "-"}</div>
+                <div className="attxDrawerSub">{drawerRow?.email || drawerRow?.userId || "-"}</div>
+              </div>
             </div>
           </div>
 

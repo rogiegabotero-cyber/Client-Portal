@@ -42,8 +42,13 @@ export function getStoredBusinessTimeZone() {
     if (!raw) return DEFAULT_BUSINESS_TIME_ZONE;
 
     const parsed = JSON.parse(raw);
-    const value = String(parsed?.businessTimeZone || "").trim();
-    return value || DEFAULT_BUSINESS_TIME_ZONE;
+    const mode = String(parsed?.displayTimeZoneMode || "").trim().toLowerCase();
+    const fixedValue = String(parsed?.displayTimeZone || "").trim();
+    const legacyValue = String(parsed?.businessTimeZone || "").trim();
+
+    if (mode === "fixed" && fixedValue) return fixedValue;
+    if (legacyValue) return legacyValue;
+    return DEFAULT_BUSINESS_TIME_ZONE;
   } catch {
     return DEFAULT_BUSINESS_TIME_ZONE;
   }
