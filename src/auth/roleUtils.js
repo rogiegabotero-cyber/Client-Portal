@@ -1,6 +1,7 @@
 export const ROLES = {
   EMPLOYEE: "employee",
   ADMIN: "admin",
+  ACCOUNTING: "accounting",
   VISITOR: "visitor",
   SUPER_ADMIN: "super_admin",
 };
@@ -40,6 +41,17 @@ export const DEFAULT_ROLE_PAGES = {
     "perf_monthly",
     "invoices",
   ],
+  [ROLES.ACCOUNTING]: [
+    "dashboard",
+    "attendance",
+    "schedule",
+    "hours",
+    "notifications",
+    "perf_daily",
+    "perf_weekly",
+    "perf_monthly",
+    "invoices",
+  ],
   [ROLES.VISITOR]: ["employee_dashboard", "notifications", "manage_announcements"],
   [ROLES.EMPLOYEE]: ["employee_dashboard", "attendance", "assignment", "schedule", "notifications"],
 };
@@ -49,6 +61,7 @@ export function normalizeRole(role) {
 
   if (value === "employee") return ROLES.EMPLOYEE;
   if (value === "admin") return ROLES.ADMIN;
+  if (value === "accounting") return ROLES.ACCOUNTING;
   if (value === "visitor") return ROLES.VISITOR;
   if (value === "super admin" || value === "super_admin" || value === "superadmin") {
     return ROLES.SUPER_ADMIN;

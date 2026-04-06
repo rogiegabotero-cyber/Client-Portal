@@ -90,6 +90,14 @@ const getTaskDeadlineSortMs = (task = {}) => {
   return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY;
 };
 
+const getTaskDeadlineMonthKey = (task = {}, businessTimeZone = "America/Chicago") => {
+  const datePart = toDateOnly(task?.deadlineDate);
+  if (!datePart) return "";
+  const ms = new Date(`${datePart}T12:00:00Z`).getTime();
+  if (!Number.isFinite(ms)) return "";
+  return monthKeyFromMsInZone(ms, businessTimeZone);
+};
+
 const getTaskAssigneeLabel = (task = {}) => {
   const assignees = Array.isArray(task?.assignees) ? task.assignees : [];
   const assigneeNames = assignees.map((row) => toText(row?.name)).filter(Boolean);
@@ -260,10 +268,12 @@ export default function EmployeeDashboard({
   const [breakLoading, setBreakLoading] = useState(false);
   const [breakError, setBreakError] = useState("");
   const [breakConfirmAction, setBreakConfirmAction] = useState("");
-  const [taskStatusFilter, setTaskStatusFilter] = useState("all");
+  const [taskStatusFilter, setTaskStatusFilter] = useState("active");
+  const [isTaskFilterOpen, setIsTaskFilterOpen] = useState(false);
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
   const [selectedAnnouncement, setSelectedAnnouncement] = useState(null);
   const panelRef = useRef(null);
+  const taskFilterDrawerRef = useRef(null);
   const [panelHeightPx, setPanelHeightPx] = useState(null);
 
   const effectiveSelectedId = useMemo(() => {
@@ -398,6 +408,11 @@ export default function EmployeeDashboard({
 
   const filteredEmployeeTasks = useMemo(() => {
     const list = Array.isArray(employeeTasks) ? employeeTasks : [];
+    if (taskStatusFilter === "thisMonth") {
+      const currentMonthKey = monthKeyFromMsInZone(nowMs || Date.now(), businessTimeZone);
+      if (!currentMonthKey) return [];
+      return list.filter((task) => getTaskDeadlineMonthKey(task, businessTimeZone) === currentMonthKey);
+    }
     if (taskStatusFilter === "completed") {
       return list.filter((task) => normalize(task?.status) === "completed");
     }
@@ -405,18 +420,59 @@ export default function EmployeeDashboard({
       return list.filter((task) => normalize(task?.status) !== "completed");
     }
     return list;
-  }, [employeeTasks, taskStatusFilter]);
+  }, [employeeTasks, taskStatusFilter, nowMs, businessTimeZone]);
 
   const taskFilterCounts = useMemo(() => {
     const list = Array.isArray(employeeTasks) ? employeeTasks : [];
     const completed = list.filter((task) => normalize(task?.status) === "completed").length;
+    const currentMonthKey = monthKeyFromMsInZone(nowMs || Date.now(), businessTimeZone);
+    const thisMonth = currentMonthKey
+      ? list.filter((task) => getTaskDeadlineMonthKey(task, businessTimeZone) === currentMonthKey)
+          .length
+      : 0;
     const all = list.length;
     return {
       all,
       active: Math.max(0, all - completed),
       completed,
+      thisMonth,
     };
-  }, [employeeTasks]);
+  }, [employeeTasks, nowMs, businessTimeZone]);
+
+  const TASK_FILTER_OPTIONS = [
+    { key: "all", label: "All" },
+    { key: "active", label: "Active" },
+    { key: "completed", label: "Completed" },
+    { key: "thisMonth", label: "This Month" },
+  ];
+  const activeTaskFilterLabel =
+    TASK_FILTER_OPTIONS.find((option) => option.key === taskStatusFilter)?.label || "Active";
+
+  const handleTaskFilterSelect = (nextFilter) => {
+    setTaskStatusFilter(String(nextFilter || "active"));
+    setIsTaskFilterOpen(false);
+  };
+
+  useEffect(() => {
+    if (!isTaskFilterOpen) return;
+
+    const handlePointerDown = (event) => {
+      if (!taskFilterDrawerRef.current) return;
+      if (taskFilterDrawerRef.current.contains(event.target)) return;
+      setIsTaskFilterOpen(false);
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsTaskFilterOpen(false);
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isTaskFilterOpen]);
 
   useEffect(() => {
     const uid = String(effectiveSelectedId || "");
@@ -992,34 +1048,41 @@ export default function EmployeeDashboard({
                     <div className="taskListHead">
                       <span>Tasks</span>
                       <div className="taskListHeadRight">
-                        <div className="taskFilterGroup" role="tablist" aria-label="Task status filters">
+                        <div className="taskFilterDrawer" ref={taskFilterDrawerRef}>
                           <button
                             type="button"
-                            className={`taskFilterBtn ${taskStatusFilter === "all" ? "active" : ""}`}
-                            onClick={() => setTaskStatusFilter("all")}
-                            aria-pressed={taskStatusFilter === "all"}
+                            className={`taskFilterTrigger ${isTaskFilterOpen ? "open" : ""}`}
+                            aria-haspopup="listbox"
+                            aria-expanded={isTaskFilterOpen}
+                            onClick={() => setIsTaskFilterOpen((prev) => !prev)}
                           >
-                            <span>All</span>
-                            <span className="taskFilterBtnCount">{taskFilterCounts.all}</span>
+                            <span>{activeTaskFilterLabel}</span>
                           </button>
-                          <button
-                            type="button"
-                            className={`taskFilterBtn ${taskStatusFilter === "active" ? "active" : ""}`}
-                            onClick={() => setTaskStatusFilter("active")}
-                            aria-pressed={taskStatusFilter === "active"}
-                          >
-                            <span>Active</span>
-                            <span className="taskFilterBtnCount">{taskFilterCounts.active}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`taskFilterBtn ${taskStatusFilter === "completed" ? "active" : ""}`}
-                            onClick={() => setTaskStatusFilter("completed")}
-                            aria-pressed={taskStatusFilter === "completed"}
-                          >
-                            <span>Completed</span>
-                            <span className="taskFilterBtnCount">{taskFilterCounts.completed}</span>
-                          </button>
+                          <span className="taskFilterDrawerCount">
+                            {taskFilterCounts[taskStatusFilter] ?? 0}
+                          </span>
+                          {isTaskFilterOpen ? (
+                            <div className="taskFilterMenu" role="listbox" aria-label="Task status filters">
+                              {TASK_FILTER_OPTIONS.map((option) => {
+                                const isActive = taskStatusFilter === option.key;
+                                return (
+                                  <button
+                                    key={option.key}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={isActive}
+                                    className={`taskFilterMenuItem ${isActive ? "active" : ""}`}
+                                    onClick={() => handleTaskFilterSelect(option.key)}
+                                  >
+                                    <span>{option.label}</span>
+                                    <span className="taskFilterMenuItemCount">
+                                      {taskFilterCounts[option.key] ?? 0}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </div>

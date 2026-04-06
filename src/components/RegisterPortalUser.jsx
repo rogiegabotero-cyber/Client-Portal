@@ -49,7 +49,7 @@ export default function RegisterPortalUser() {
         <div className="login-left">
           <div className="login-header">
             <h1>Register Portal User</h1>
-            <p>Create Super Admin, Admin, or Visitor accounts in Firebase.</p>
+            <p>Create Super Admin, Admin, Accounting, or Visitor accounts in Firebase.</p>
           </div>
 
           <form className="login-form" onSubmit={handleSubmit}>
@@ -112,6 +112,7 @@ export default function RegisterPortalUser() {
               >
                 <option value="super_admin">Super Admin</option>
                 <option value="admin">Admin</option>
+                <option value="accounting">Accounting</option>
                 <option value="visitor">Visitor</option>
               </select>
             </div>

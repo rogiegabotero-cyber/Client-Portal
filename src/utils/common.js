@@ -79,7 +79,28 @@ export const getProfileImageUrl = (emp = {}) => {
     ""
   );
 
-  return String(raw || "").trim();
+  const value = String(raw || "").trim();
+  if (!value) return "";
+
+  const lower = value.toLowerCase();
+  if (lower.startsWith("data:image/")) return value;
+  if (lower.startsWith("/")) return value;
+  if (lower.startsWith("./") || lower.startsWith("../")) return value;
+
+  try {
+    const base =
+      typeof window !== "undefined" && window?.location?.origin
+        ? window.location.origin
+        : "http://localhost";
+    const parsed = new URL(value, base);
+    const protocol = String(parsed.protocol || "").toLowerCase();
+    if (protocol === "http:" || protocol === "https:" || protocol === "blob:") {
+      return parsed.href;
+    }
+    return "";
+  } catch {
+    return "";
+  }
 };
 
 export const getDeviceTimeZone = (fallback = "America/Chicago") => {

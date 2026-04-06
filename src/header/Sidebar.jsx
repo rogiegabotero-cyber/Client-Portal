@@ -37,7 +37,6 @@ export default function Sidebar({
         { key: "attendance", label: "ATTENDANCE", icon: <CalendarCheck size={20} /> },
         { key: "assignment", label: "ASSIGNMENT", icon: <ClipboardList size={20} /> },
         { key: "schedule", label: "SCHEDULE", icon: <CalendarDays size={20} /> },
-        { key: "hours", label: "HOURS", icon: <Timer size={20} /> },
         { key: "notifications", label: "NOTIFICATIONS", icon: <Bell size={20} /> },
       ],
     },
@@ -99,7 +98,12 @@ export default function Sidebar({
           </div>
 
           <div className="sb-live-list">
-            {liveAgents.length === 0 ? (
+            {loadingLive ? (
+              <div className="sb-live-loading" role="status" aria-live="polite">
+                <span className="sb-live-loading-spinner" />
+                <span>Loading live agents...</span>
+              </div>
+            ) : liveAgents.length === 0 ? (
               <div className="sb-live-empty">No present agents today</div>
             ) : (
               liveAgents.map((a) => {

@@ -34,6 +34,16 @@ const isAdminLikeRole = (role) => {
   return r === "admin" || r === "super_admin" || r === "super admin";
 };
 
+const isArchiveAllowedRole = (role) => {
+  const r = toText(role).toLowerCase();
+  return (
+    r === "admin" ||
+    r === "super_admin" ||
+    r === "super admin" ||
+    r === "visitor"
+  );
+};
+
 const normalizeStatusKey = (status) =>
   toText(status).toLowerCase().replace(/\s+/g, "_");
 
@@ -91,7 +101,8 @@ const addAssignmentNotification = async ({
   });
 };
 
-export async function getAssignments() {
+export async function getAssignments(options = {}) {
+  const includeArchived = !!options?.includeArchived;
   const q = query(
     collection(db, ASSIGNMENTS_COLLECTION),
     orderBy("deadlineDate", "asc")
@@ -99,13 +110,17 @@ export async function getAssignments() {
 
   const snap = await getDocs(q);
 
-  return snap.docs.map((d) => ({
+  const rows = snap.docs.map((d) => ({
     id: d.id,
     ...d.data(),
   }));
+
+  if (includeArchived) return rows;
+  return rows.filter((row) => !row?.archived);
 }
 
-export async function getAssignmentsByUserId(userId) {
+export async function getAssignmentsByUserId(userId, options = {}) {
+  const includeArchived = !!options?.includeArchived;
   const uid = String(userId || "");
   if (!uid) return [];
 
@@ -129,7 +144,9 @@ export async function getAssignmentsByUserId(userId) {
     map.set(d.id, { id: d.id, ...d.data() });
   }
 
-  return Array.from(map.values());
+  const rows = Array.from(map.values());
+  if (includeArchived) return rows;
+  return rows.filter((row) => !row?.archived);
 }
 
 export async function createAssignment(payload) {
@@ -198,6 +215,10 @@ export async function createAssignment(payload) {
     accessApprovedUserIds: [],
     notificationSent24h: false,
     notificationSentSameDay: false,
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: "",
+    archivedByName: "",
   });
 
   const assignmentId = docRef.id;
@@ -251,8 +272,144 @@ export async function updateAssignment(assignmentId, updates = {}) {
   await updateDoc(ref, payload);
 }
 
-export async function deleteAssignment(assignmentId) {
-  await deleteDoc(doc(db, ASSIGNMENTS_COLLECTION, assignmentId));
+export async function archiveAssignment(assignmentId, actor = {}) {
+  const aid = toText(assignmentId);
+  if (!aid) throw new Error("Missing assignment id");
+
+  const actorRole = toText(actor?.role).toLowerCase();
+  if (!isArchiveAllowedRole(actorRole)) {
+    throw new Error("Only admins or visitors can archive assignments.");
+  }
+
+  const ref = doc(db, ASSIGNMENTS_COLLECTION, aid);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Assignment not found");
+
+  const current = snap.data() || {};
+  if (current?.archived) {
+    return { archived: false, reason: "already-archived" };
+  }
+
+  const archivedNow = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+  const actorUserId = toText(
+    actor?.userId ?? actor?.uid ?? actor?.id ?? actor?.employeeId ?? ""
+  );
+  const actorName =
+    toText(actor?.name) || toText(actor?.displayName) || toText(actor?.email) || "Super Admin";
+
+  await updateDoc(ref, {
+    archived: true,
+    archivedAt: serverTimestamp(),
+    archivedByUserId: actorUserId,
+    archivedByName: actorName,
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("archivedAtClient", archivedNow, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", archivedNow, storageTimeZone),
+  });
+
+  return { archived: true };
+}
+
+export async function repostAssignment(assignmentId, updates = {}, actor = {}) {
+  const aid = toText(assignmentId);
+  if (!aid) throw new Error("Missing assignment id");
+
+  const actorRole = toText(actor?.role).toLowerCase();
+  if (!isArchiveAllowedRole(actorRole)) {
+    throw new Error("Only admins or visitors can repost archived assignments.");
+  }
+
+  const ref = doc(db, ASSIGNMENTS_COLLECTION, aid);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Assignment not found");
+
+  const current = snap.data() || {};
+  if (!current?.archived) {
+    return { reposted: false, reason: "not-archived" };
+  }
+
+  const repostNow = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+  const actorUserId = toText(
+    actor?.userId ?? actor?.uid ?? actor?.id ?? actor?.employeeId ?? ""
+  );
+  const actorName =
+    toText(actor?.name) || toText(actor?.displayName) || toText(actor?.email) || "Manager";
+
+  const nextDeadlineDate = normalizeDateOnly(updates?.deadlineDate || current?.deadlineDate);
+
+  await updateDoc(ref, {
+    title: toText(updates?.title) || toText(current?.title),
+    instructions: toText(updates?.instructions) || toText(current?.instructions),
+    deadlineDate: nextDeadlineDate || "",
+    deadlineTime: toText(updates?.deadlineTime || current?.deadlineTime),
+    priority: toText(updates?.priority || current?.priority || "medium"),
+    status: toText(updates?.status || "pending"),
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: "",
+    archivedByName: "",
+    notificationSent24h: false,
+    notificationSentSameDay: false,
+    completionRequestedAt: null,
+    completionRequestedByUserId: "",
+    completionRequestedByName: "",
+    completionReviewedAt: null,
+    completionReviewedByUserId: "",
+    completionReviewedByName: "",
+    completionReviewDecision: "",
+    completedAt: null,
+    completedByUserId: "",
+    completedByName: "",
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", repostNow, storageTimeZone),
+  });
+
+  const recipientIds = Array.isArray(current?.employeeUserIds)
+    ? current.employeeUserIds.map((id) => toText(id)).filter(Boolean)
+    : [toText(current?.employeeUserId)].filter(Boolean);
+
+  const taskTitle = toText(updates?.title) || toText(current?.title) || "an assignment";
+  const deadlineText = nextDeadlineDate || "No deadline";
+
+  for (const recipientId of uniq(recipientIds)) {
+    await addAssignmentNotification({
+      audience: "employee",
+      userId: recipientId,
+      assignmentId: aid,
+      type: "assignment_reposted",
+      title: "Assignment reposted",
+      message: `${actorName} reposted "${taskTitle}". Deadline: ${deadlineText}.`,
+      actorUserId,
+      actorName,
+      extra: {
+        priority: toText(updates?.priority || current?.priority || "medium"),
+        deadlineDate: nextDeadlineDate || "",
+      },
+    });
+  }
+
+  return { reposted: true };
+}
+
+export async function deleteAssignment(assignmentId, actor = {}) {
+  const aid = toText(assignmentId);
+  if (!aid) throw new Error("Missing assignment id");
+
+  const actorRole = toText(actor?.role).toLowerCase();
+  if (!isAdminLikeRole(actorRole)) {
+    throw new Error("Only admins can permanently delete archived assignments.");
+  }
+
+  const ref = doc(db, ASSIGNMENTS_COLLECTION, aid);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("Assignment not found");
+  if (!snap.data()?.archived) {
+    throw new Error("Only archived assignments can be permanently deleted.");
+  }
+
+  await deleteDoc(ref);
 }
 
 export async function markAssignmentCompleted(assignmentId, actor = {}) {

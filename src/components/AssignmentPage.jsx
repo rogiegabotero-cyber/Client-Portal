@@ -9,8 +9,10 @@ import {
   Search,
   X,
   AlertTriangle,
+  Archive,
   CheckCircle2,
   Clock3,
+  Pencil,
   Trash2,
 } from "lucide-react";
 import {
@@ -155,10 +157,24 @@ const matchesStatusFilter = (task, statusFilter) => {
   return taskStatusKey === key;
 };
 
+const matchesAssignmentSearchQuery = (task, queryValue = "") => {
+  const q = normalize(queryValue);
+  if (!q) return true;
+  return (
+    normalize(task?.title).includes(q) ||
+    normalize(task?.instructions).includes(q) ||
+    normalize(task?.employeeName).includes(q) ||
+    normalize(task?.employeePosition).includes(q) ||
+    normalize(task?.deadlineDate).includes(q) ||
+    normalize(task?.priority).includes(q)
+  );
+};
+
 export default function AssignmentPage({
   employees = [],
   viewer = null,
   assignments = [],
+  archivedAssignments = [],
   loadingAssignments = false,
   assignmentsError = "",
   employeeProfilesByUserId = {},
@@ -166,6 +182,8 @@ export default function AssignmentPage({
   onCreateAssignment,
   onUpdateAssignment,
   onDeleteAssignment,
+  onArchiveAssignment,
+  onRepostAssignment,
   onMarkAssignmentCompleted,
   onReviewAssignmentCompletion,
   onRequestAssignmentAccess,
@@ -179,10 +197,26 @@ export default function AssignmentPage({
   const [statusFilter, setStatusFilter] = useState("all");
   const [selectedAssigneeIds, setSelectedAssigneeIds] = useState([]);
   const [selectedTask, setSelectedTask] = useState(null);
+  const [showCreateAssignmentDrawer, setShowCreateAssignmentDrawer] = useState(false);
+  const [showAllAssignmentsDrawer, setShowAllAssignmentsDrawer] = useState(false);
+  const [showArchivedDrawer, setShowArchivedDrawer] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [saving, setSaving] = useState(false);
+  const [archivingTaskId, setArchivingTaskId] = useState("");
+  const [archiveConfirmTask, setArchiveConfirmTask] = useState(null);
+  const [repostingTaskId, setRepostingTaskId] = useState("");
+  const [repostConfirmTask, setRepostConfirmTask] = useState(null);
   const [deletingTaskId, setDeletingTaskId] = useState("");
   const [deleteConfirmTask, setDeleteConfirmTask] = useState(null);
+  const [editingArchivedTask, setEditingArchivedTask] = useState(null);
+  const [savingArchivedEdit, setSavingArchivedEdit] = useState(false);
+  const [archivedEditForm, setArchivedEditForm] = useState({
+    title: "",
+    instructions: "",
+    deadlineDate: "",
+    deadlineTime: "",
+    priority: "medium",
+  });
   const [handledOpenRequestId, setHandledOpenRequestId] = useState(0);
   const [form, setForm] = useState({
     title: "",
@@ -199,6 +233,19 @@ export default function AssignmentPage({
   const canCreateAssignments = useMemo(
     () => isManager || viewerRole === "visitor",
     [isManager, viewerRole]
+  );
+  const canUseArchiveFeature = useMemo(
+    () => isManager || viewerRole === "visitor",
+    [isManager, viewerRole]
+  );
+  const canPermanentlyDeleteArchived = useMemo(() => isManager, [isManager]);
+  const canViewMyTasks = useMemo(
+    () => viewerRole !== "visitor" && viewerRole !== "visitors",
+    [viewerRole]
+  );
+  const isAnyDrawerOpen = useMemo(
+    () => Boolean(showCreateAssignmentDrawer || showAllAssignmentsDrawer || showArchivedDrawer || selectedTask),
+    [showCreateAssignmentDrawer, showAllAssignmentsDrawer, showArchivedDrawer, selectedTask]
   );
 
   const validEmployees = useMemo(
@@ -267,6 +314,47 @@ export default function AssignmentPage({
     return { userId: assigneeUserId, profileImg, name };
   };
 
+  const openTaskDetails = (task) => {
+    setShowCreateAssignmentDrawer(false);
+    setShowAllAssignmentsDrawer(false);
+    setShowArchivedDrawer(false);
+    setSelectedTask(task);
+  };
+
+  const openCreateAssignmentDrawer = () => {
+    if (!canCreateAssignments) return;
+    setSelectedTask(null);
+    setShowAllAssignmentsDrawer(false);
+    setShowArchivedDrawer(false);
+    setShowCreateAssignmentDrawer(true);
+  };
+
+  const closeCreateAssignmentDrawer = () => {
+    setShowCreateAssignmentDrawer(false);
+  };
+
+  const openAllAssignmentsDrawer = () => {
+    setSelectedTask(null);
+    setShowCreateAssignmentDrawer(false);
+    setShowArchivedDrawer(false);
+    setShowAllAssignmentsDrawer(true);
+  };
+
+  const closeAllAssignmentsDrawer = () => {
+    setShowAllAssignmentsDrawer(false);
+  };
+
+  const openArchivedDrawer = () => {
+    setSelectedTask(null);
+    setShowCreateAssignmentDrawer(false);
+    setShowAllAssignmentsDrawer(false);
+    setShowArchivedDrawer(true);
+  };
+
+  const closeArchivedDrawer = () => {
+    setShowArchivedDrawer(false);
+  };
+
   useEffect(() => {
     const validIds = new Set(employeeOptions.map((item) => String(item.userId)));
     setSelectedAssigneeIds((prev) => {
@@ -303,11 +391,39 @@ export default function AssignmentPage({
     if (!targetTask) return;
 
     setHandledOpenRequestId(requestId);
-    setSelectedTask(targetTask);
+    openTaskDetails(targetTask);
     if (typeof onConsumeOpenTaskRequest === "function") {
       onConsumeOpenTaskRequest(requestId);
     }
   }, [openTaskRequest, assignments, handledOpenRequestId, onConsumeOpenTaskRequest]);
+
+  useEffect(() => {
+    if (canUseArchiveFeature) return;
+    setShowArchivedDrawer(false);
+  }, [canUseArchiveFeature]);
+
+  useEffect(() => {
+    if (canCreateAssignments) return;
+    setShowCreateAssignmentDrawer(false);
+  }, [canCreateAssignments]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const lockClass = "assignment-scroll-lock";
+    if (isAnyDrawerOpen) {
+      document.documentElement.classList.add(lockClass);
+      document.body.classList.add(lockClass);
+    } else {
+      document.documentElement.classList.remove(lockClass);
+      document.body.classList.remove(lockClass);
+    }
+
+    return () => {
+      document.documentElement.classList.remove(lockClass);
+      document.body.classList.remove(lockClass);
+    };
+  }, [isAnyDrawerOpen]);
 
   const selectedAssignees = useMemo(
     () =>
@@ -367,21 +483,14 @@ export default function AssignmentPage({
   }, [assignments]);
 
   const searchedAssignments = useMemo(() => {
-    const q = normalize(query);
-
-    return assignments.filter((task) => {
-      if (!q) return true;
-
-      return (
-        normalize(task?.title).includes(q) ||
-        normalize(task?.instructions).includes(q) ||
-        normalize(task?.employeeName).includes(q) ||
-        normalize(task?.employeePosition).includes(q) ||
-        normalize(task?.deadlineDate).includes(q) ||
-        normalize(task?.priority).includes(q)
-      );
-    });
+    return assignments.filter((task) => matchesAssignmentSearchQuery(task, query));
   }, [assignments, query]);
+
+  const searchedArchivedAssignments = useMemo(() => {
+    return (Array.isArray(archivedAssignments) ? archivedAssignments : []).filter((task) =>
+      matchesAssignmentSearchQuery(task, query)
+    );
+  }, [archivedAssignments, query]);
 
   const filteredAssignments = useMemo(
     () => searchedAssignments.filter((task) => matchesStatusFilter(task, statusFilter)),
@@ -509,6 +618,7 @@ export default function AssignmentPage({
       });
 
       resetForm();
+      setShowCreateAssignmentDrawer(false);
       await onReloadAssignments?.();
 
       onToast?.({
@@ -638,16 +748,201 @@ export default function AssignmentPage({
   };
 
   const handleDeleteTask = async (task) => {
-    if (!isManager) {
+    if (!canPermanentlyDeleteArchived) {
       onToast?.({
         type: "warning",
         title: "Action Restricted",
-        message: "Only admins can delete assignments.",
+        message: "Only admins can permanently delete archived assignments.",
+      });
+      return;
+    }
+    if (!task?.archived) {
+      onToast?.({
+        type: "warning",
+        title: "Archived Tasks Only",
+        message: "Only archived tasks can be permanently deleted.",
       });
       return;
     }
 
     setDeleteConfirmTask(task);
+  };
+
+  const handleArchiveTask = async (task) => {
+    if (!canUseArchiveFeature) {
+      onToast?.({
+        type: "warning",
+        title: "Action Restricted",
+        message: "Only admins or visitors can archive assignments.",
+      });
+      return;
+    }
+
+    setArchiveConfirmTask(task);
+  };
+
+  const openArchivedTaskEditor = (task) => {
+    if (!task) return;
+    setEditingArchivedTask(task);
+    setArchivedEditForm({
+      title: toText(task?.title),
+      instructions: toText(task?.instructions),
+      deadlineDate: toText(task?.deadlineDate),
+      deadlineTime: toText(task?.deadlineTime),
+      priority: toText(task?.priority) || "medium",
+    });
+  };
+
+  const closeArchivedTaskEditor = () => {
+    if (savingArchivedEdit) return;
+    setEditingArchivedTask(null);
+  };
+
+  const saveArchivedTaskEdit = async () => {
+    const task = editingArchivedTask;
+    if (!task) return;
+
+    const title = toText(archivedEditForm.title).trim();
+    const deadlineDate = toText(archivedEditForm.deadlineDate).trim();
+    if (!title || !deadlineDate) {
+      onToast?.({
+        type: "warning",
+        title: "Missing Fields",
+        message: "Title and deadline date are required.",
+      });
+      return;
+    }
+
+    setSavingArchivedEdit(true);
+    try {
+      if (!onUpdateAssignment) {
+        throw new Error("Edit action is unavailable");
+      }
+
+      await onUpdateAssignment(task.id, {
+        title,
+        instructions: toText(archivedEditForm.instructions),
+        deadlineDate,
+        deadlineTime: toText(archivedEditForm.deadlineTime),
+        priority: toText(archivedEditForm.priority) || "medium",
+      });
+
+      onToast?.({
+        type: "success",
+        title: "Archived Task Updated",
+        message: "Changes saved successfully.",
+      });
+      setEditingArchivedTask(null);
+    } catch (err) {
+      console.error("Failed to edit archived task:", err);
+      onToast?.({
+        type: "error",
+        title: "Edit Failed",
+        message: err?.message || "Could not update archived task.",
+      });
+    } finally {
+      setSavingArchivedEdit(false);
+    }
+  };
+
+  const closeArchiveConfirm = () => {
+    if (archivingTaskId) return;
+    setArchiveConfirmTask(null);
+  };
+
+  const confirmArchiveTask = async () => {
+    const task = archiveConfirmTask;
+    if (!task) return;
+
+    setArchivingTaskId(String(task.id));
+    try {
+      if (!onArchiveAssignment) {
+        throw new Error("Archive action is unavailable");
+      }
+
+      await onArchiveAssignment(task.id, {
+        userId: viewerId,
+        name: viewerName,
+        role: viewerRole,
+      });
+      if (selectedTask?.id === task.id) setSelectedTask(null);
+      onToast?.({
+        type: "success",
+        title: "Task Archived",
+        message: "Assignment archived successfully.",
+      });
+    } catch (err) {
+      console.error("Failed to archive task:", err);
+      onToast?.({
+        type: "error",
+        title: "Archive Failed",
+        message: err?.message || "Could not archive assignment.",
+      });
+    } finally {
+      setArchivingTaskId("");
+      setArchiveConfirmTask(null);
+    }
+  };
+
+  const handleRepostTask = async (task) => {
+    if (!canUseArchiveFeature) {
+      onToast?.({
+        type: "warning",
+        title: "Action Restricted",
+        message: "Only admins or visitors can repost archived assignments.",
+      });
+      return;
+    }
+    setRepostConfirmTask(task);
+  };
+
+  const closeRepostConfirm = () => {
+    if (repostingTaskId) return;
+    setRepostConfirmTask(null);
+  };
+
+  const confirmRepostTask = async () => {
+    const task = repostConfirmTask;
+    if (!task) return;
+
+    setRepostingTaskId(String(task.id));
+    try {
+      if (!onRepostAssignment) {
+        throw new Error("Repost action is unavailable");
+      }
+
+      await onRepostAssignment(
+        task.id,
+        {
+          title: toText(task?.title),
+          instructions: toText(task?.instructions),
+          deadlineDate: toText(task?.deadlineDate),
+          deadlineTime: toText(task?.deadlineTime),
+          priority: toText(task?.priority) || "medium",
+          status: "pending",
+        },
+        {
+          userId: viewerId,
+          name: viewerName,
+          role: viewerRole,
+        }
+      );
+      onToast?.({
+        type: "success",
+        title: "Task Reposted",
+        message: `"${toText(task?.title) || "Task"}" is active again.`,
+      });
+    } catch (err) {
+      console.error("Failed to repost task:", err);
+      onToast?.({
+        type: "error",
+        title: "Repost Failed",
+        message: err?.message || "Could not repost assignment.",
+      });
+    } finally {
+      setRepostingTaskId("");
+      setRepostConfirmTask(null);
+    }
   };
 
   const closeDeleteConfirm = () => {
@@ -665,19 +960,23 @@ export default function AssignmentPage({
         throw new Error("Delete action is unavailable");
       }
 
-      await onDeleteAssignment(task.id);
+      await onDeleteAssignment(task.id, {
+        userId: viewerId,
+        name: viewerName,
+        role: viewerRole,
+      });
       if (selectedTask?.id === task.id) setSelectedTask(null);
       onToast?.({
         type: "success",
-        title: "Task Deleted",
-        message: "Assignment removed successfully.",
+        title: "Task Permanently Deleted",
+        message: "Archived assignment removed successfully.",
       });
     } catch (err) {
       console.error("Failed to delete task:", err);
       onToast?.({
         type: "error",
         title: "Delete Failed",
-        message: "Could not delete assignment.",
+        message: err?.message || "Could not delete assignment.",
       });
     } finally {
       setDeletingTaskId("");
@@ -771,20 +1070,49 @@ export default function AssignmentPage({
   return (
     <div className="assignment-page">
       <div className="assignment-header">
-        <div>
-          <h1 className="assignment-title">Assignment Management</h1>
-          <p className="assignment-subtitle">
-            Assign tasks, track deadlines, and monitor employee deliverables in a calendar layout.
-          </p>
-        </div>
+        <div className="assignment-header-actions">
+          <div className="assignment-search">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search task, employee, deadline, priority..."
+            />
+          </div>
 
-        <div className="assignment-search">
-          <Search size={16} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search task, employee, deadline, priority..."
-          />
+          {canCreateAssignments ? (
+            <button
+              type="button"
+              className="assignment-inline-btn"
+              onClick={openCreateAssignmentDrawer}
+            >
+              <Plus size={14} />
+              <span>Create Assignment</span>
+            </button>
+          ) : null}
+
+          <button
+            type="button"
+            className="assignment-inline-btn"
+            onClick={openAllAssignmentsDrawer}
+          >
+            <ClipboardList size={14} />
+            <span>
+              {isManager ? "All Assignments" : "Assignments"} (
+              {loadingAssignments ? "..." : filteredAssignments.length})
+            </span>
+          </button>
+
+          {canUseArchiveFeature ? (
+            <button
+              type="button"
+              className="assignment-inline-btn"
+              onClick={openArchivedDrawer}
+            >
+              <Archive size={14} />
+              <span>Archived ({searchedArchivedAssignments.length})</span>
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -813,146 +1141,46 @@ export default function AssignmentPage({
         </div>
       </div>
 
-      <div className="assignment-layout">
-        <section className="assignment-left">
-          {canCreateAssignments ? (
-            <>
-              <div className="assignment-panel">
-                <div className="assignment-panel-head">
-                  <ClipboardList size={16} />
-                  <span>Create Assignment</span>
-                </div>
-
-                <form className="assignment-form" onSubmit={handleCreateAssignment}>
-                  <label className="assignment-field">
-                    <span>Assignees (check all that apply)</span>
-                    <div className="assignment-checkbox-list" role="group" aria-label="Assignees">
-                      {employeeOptions.map((emp) => (
-                        <label key={emp.userId} className="assignment-checkbox-item">
-                          <input
-                            type="checkbox"
-                            checked={selectedAssigneeIds.includes(String(emp.userId))}
-                            onChange={() => toggleAssigneeSelection(emp.userId)}
-                          />
-                          <span className="assignment-checkbox-item-text">
-                            <span className="assignment-checkbox-name">{emp.name}</span>
-                            <span className="assignment-checkbox-position">{emp.position}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </label>
-
-                  <div className="assignment-employee-preview">
-                    <div className="assignment-employee-name">
-                      {selectedAssignees.length
-                        ? selectedAssignees.map((item) => item.name).join(", ")
-                        : "No assignees selected"}
-                    </div>
-                    <div className="assignment-employee-position">
-                      {selectedAssignees.length} assignee{selectedAssignees.length === 1 ? "" : "s"} selected
-                    </div>
-                  </div>
-
-                  <label className="assignment-field">
-                    <span>Task Title</span>
-                    <input
-                      type="text"
-                      value={form.title}
-                      onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
-                      placeholder="Enter specific task"
-                    />
-                  </label>
-
-                  <label className="assignment-field">
-                    <span>Instructions</span>
-                    <textarea
-                      rows={5}
-                      value={form.instructions}
-                      onChange={(e) => setForm((p) => ({ ...p, instructions: e.target.value }))}
-                      placeholder="Enter detailed instructions for the employee"
-                    />
-                  </label>
-
-                  <div className="assignment-grid-2">
-                    <label className="assignment-field">
-                      <span>Deadline Date</span>
-                      <input
-                        type="date"
-                        value={form.deadlineDate}
-                        onChange={(e) => setForm((p) => ({ ...p, deadlineDate: e.target.value }))}
-                      />
-                    </label>
-
-                    <label className="assignment-field">
-                      <span>Deadline Time</span>
-                      <input
-                        type="time"
-                        value={form.deadlineTime}
-                        onChange={(e) => setForm((p) => ({ ...p, deadlineTime: e.target.value }))}
-                      />
-                    </label>
-                  </div>
-
-                  <label className="assignment-field">
-                    <span>Priority</span>
-                    <select
-                      value={form.priority}
-                      onChange={(e) => setForm((p) => ({ ...p, priority: e.target.value }))}
-                    >
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                      <option value="urgent">Urgent</option>
-                    </select>
-                  </label>
-
-                  <button className="assignment-primary-btn" type="submit" disabled={saving}>
-                    <Plus size={16} />
-                    <span>{saving ? "Saving..." : "Assign Task"}</span>
-                  </button>
-                </form>
+      <div className={`assignment-layout ${canViewMyTasks ? "" : "assignment-layout-full"}`}>
+        {canViewMyTasks ? (
+          <section className="assignment-left">
+            <div className="assignment-panel">
+              <div className="assignment-panel-head">
+                <span>My Tasks</span>
+                <span className="assignment-count">{myTasks.length}</span>
               </div>
 
-            </>
-          ) : null}
-
-          <div className="assignment-panel">
-            <div className="assignment-panel-head">
-              <span>My Tasks</span>
-              <span className="assignment-count">{myTasks.length}</span>
+              <div className="assignment-task-list compact">
+                {myTasks.length === 0 ? (
+                  <div className="assignment-empty">No tasks for current viewer.</div>
+                ) : (
+                  myTasks.map((task) => {
+                    const meta = getTaskStatusMeta(task);
+                    return (
+                      <button
+                        type="button"
+                        key={task.id}
+                        className="assignment-task-card compact"
+                        onClick={() => openTaskDetails(task)}
+                      >
+                        <div className="assignment-task-card-top">
+                          <div className="assignment-task-card-title">{task.title}</div>
+                          <span className={`assignment-status-pill ${meta.tone}`}>
+                            {meta.label}
+                          </span>
+                        </div>
+                        <div className="assignment-task-card-meta">
+                          <span>{task.employeeName}</span>
+                          <span>{prettyDate(task.deadlineDate)}</span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
-
-            <div className="assignment-task-list compact">
-              {myTasks.length === 0 ? (
-                <div className="assignment-empty">No tasks for current viewer.</div>
-              ) : (
-                myTasks.map((task) => {
-                  const meta = getTaskStatusMeta(task);
-                  return (
-                    <button
-                      type="button"
-                      key={task.id}
-                      className="assignment-task-card compact"
-                      onClick={() => setSelectedTask(task)}
-                    >
-                      <div className="assignment-task-card-top">
-                        <div className="assignment-task-card-title">{task.title}</div>
-                        <span className={`assignment-status-pill ${meta.tone}`}>
-                          {meta.label}
-                        </span>
-                      </div>
-                      <div className="assignment-task-card-meta">
-                        <span>{task.employeeName}</span>
-                        <span>{prettyDate(task.deadlineDate)}</span>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </section>
+          </section>
+        ) : null}
 
         <section className="assignment-right">
           <div className="assignment-panel calendar-panel">
@@ -1030,7 +1258,7 @@ export default function AssignmentPage({
                             type="button"
                             key={task.id}
                             className={`assignment-calendar-item ${meta.tone}`}
-                            onClick={() => setSelectedTask(task)}
+                            onClick={() => openTaskDetails(task)}
                             title={`${assignee.name} - ${task.title}`}
                           >
                             <span className="assignment-calendar-item-avatar" aria-hidden="true">
@@ -1071,35 +1299,172 @@ export default function AssignmentPage({
               })}
             </div>
           </div>
+        </section>
+      </div>
 
-          <div className="assignment-panel">
-            <div className="assignment-panel-head">
-              <span>{isManager ? "All Assignments" : "Assignments"}</span>
-              <span className="assignment-count">
-                {loadingAssignments ? "Loading..." : filteredAssignments.length}
-              </span>
+      {canCreateAssignments ? (
+        <div
+          className={`assignment-drawer assignment-create-drawer ${showCreateAssignmentDrawer ? "open" : ""}`}
+        >
+          <div className="assignment-drawer-backdrop" onClick={closeCreateAssignmentDrawer} />
+          <div className="assignment-drawer-panel assignment-create-drawer-panel">
+            <div className="assignment-drawer-head">
+              <div>
+                <div className="assignment-drawer-title">Create Assignment</div>
+                <div className="assignment-drawer-subtitle">
+                  Assign tasks to one or more agents.
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="assignment-icon-btn"
+                onClick={closeCreateAssignmentDrawer}
+              >
+                <X size={18} />
+              </button>
             </div>
 
-            <div className="assignment-status-filters" role="tablist" aria-label="Assignment status filters">
-              {ASSIGNMENT_STATUS_FILTERS.map((item) => {
-                const isActive = statusFilter === item.key;
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={`assignment-status-filter-btn ${isActive ? "active" : ""}`}
-                    onClick={() => setStatusFilter(item.key)}
-                    aria-pressed={isActive}
+            <div className="assignment-drawer-body">
+              <form className="assignment-form" onSubmit={handleCreateAssignment}>
+                <label className="assignment-field">
+                  <span>Assignees (check all that apply)</span>
+                  <div className="assignment-checkbox-list" role="group" aria-label="Assignees">
+                    {employeeOptions.map((emp) => (
+                      <label key={emp.userId} className="assignment-checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedAssigneeIds.includes(String(emp.userId))}
+                          onChange={() => toggleAssigneeSelection(emp.userId)}
+                        />
+                        <span className="assignment-checkbox-item-text">
+                          <span className="assignment-checkbox-name">{emp.name}</span>
+                          <span className="assignment-checkbox-position">{emp.position}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </label>
+
+                <div className="assignment-employee-preview">
+                  <div className="assignment-employee-name">
+                    {selectedAssignees.length
+                      ? selectedAssignees.map((item) => item.name).join(", ")
+                      : "No assignees selected"}
+                  </div>
+                  <div className="assignment-employee-position">
+                    {selectedAssignees.length} assignee{selectedAssignees.length === 1 ? "" : "s"} selected
+                  </div>
+                </div>
+
+                <label className="assignment-field">
+                  <span>Task Title</span>
+                  <input
+                    type="text"
+                    value={form.title}
+                    onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
+                    placeholder="Enter specific task"
+                  />
+                </label>
+
+                <label className="assignment-field">
+                  <span>Instructions</span>
+                  <textarea
+                    rows={5}
+                    value={form.instructions}
+                    onChange={(e) => setForm((p) => ({ ...p, instructions: e.target.value }))}
+                    placeholder="Enter detailed instructions for the employee"
+                  />
+                </label>
+
+                <div className="assignment-grid-2">
+                  <label className="assignment-field">
+                    <span>Deadline Date</span>
+                    <input
+                      type="date"
+                      value={form.deadlineDate}
+                      onChange={(e) => setForm((p) => ({ ...p, deadlineDate: e.target.value }))}
+                    />
+                  </label>
+
+                  <label className="assignment-field">
+                    <span>Deadline Time</span>
+                    <input
+                      type="time"
+                      value={form.deadlineTime}
+                      onChange={(e) => setForm((p) => ({ ...p, deadlineTime: e.target.value }))}
+                    />
+                  </label>
+                </div>
+
+                <label className="assignment-field">
+                  <span>Priority</span>
+                  <select
+                    value={form.priority}
+                    onChange={(e) => setForm((p) => ({ ...p, priority: e.target.value }))}
                   >
-                    <span>{item.label}</span>
-                    <span className="assignment-status-filter-count">
-                      {assignmentStatusCounts[item.key] || 0}
-                    </span>
-                  </button>
-                );
-              })}
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </label>
+
+                <button className="assignment-primary-btn" type="submit" disabled={saving}>
+                  <Plus size={16} />
+                  <span>{saving ? "Saving..." : "Assign Task"}</span>
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className={`assignment-drawer assignment-all-drawer ${showAllAssignmentsDrawer ? "open" : ""}`}>
+        <div className="assignment-drawer-backdrop" onClick={closeAllAssignmentsDrawer} />
+        <div className="assignment-drawer-panel assignment-all-drawer-panel">
+          <div className="assignment-drawer-head">
+            <div>
+              <div className="assignment-drawer-title">
+                {isManager ? "All Assignments" : "Assignments"}
+              </div>
+              <div className="assignment-drawer-subtitle">
+                {loadingAssignments
+                  ? "Loading assignments..."
+                  : `${filteredAssignments.length} task${filteredAssignments.length === 1 ? "" : "s"} shown`}
+              </div>
             </div>
 
+            <button
+              type="button"
+              className="assignment-icon-btn"
+              onClick={closeAllAssignmentsDrawer}
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="assignment-status-filters" role="tablist" aria-label="Assignment status filters">
+            {ASSIGNMENT_STATUS_FILTERS.map((item) => {
+              const isActive = statusFilter === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`assignment-status-filter-btn ${isActive ? "active" : ""}`}
+                  onClick={() => setStatusFilter(item.key)}
+                  aria-pressed={isActive}
+                >
+                  <span>{item.label}</span>
+                  <span className="assignment-status-filter-count">
+                    {assignmentStatusCounts[item.key] || 0}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="assignment-drawer-body">
             <div className="assignment-table-wrap">
               <table className="assignment-table">
                 <thead>
@@ -1124,7 +1489,7 @@ export default function AssignmentPage({
                     filteredAssignments.map((task) => {
                       const meta = getTaskStatusMeta(task);
                       return (
-                        <tr key={task.id} onClick={() => setSelectedTask(task)}>
+                        <tr key={task.id} onClick={() => openTaskDetails(task)}>
                           <td>{task.employeeName}</td>
                           <td>{task.employeePosition}</td>
                           <td>{task.title}</td>
@@ -1144,7 +1509,104 @@ export default function AssignmentPage({
               </table>
             </div>
           </div>
-        </section>
+        </div>
+      </div>
+
+      <div className={`assignment-drawer assignment-archive-drawer ${showArchivedDrawer ? "open" : ""}`}>
+        <div className="assignment-drawer-backdrop" onClick={closeArchivedDrawer} />
+        <div className="assignment-drawer-panel assignment-archive-drawer-panel">
+          <div className="assignment-drawer-head">
+            <div>
+              <div className="assignment-drawer-title">Archived Assignments</div>
+              <div className="assignment-drawer-subtitle">
+                {searchedArchivedAssignments.length} archived task
+                {searchedArchivedAssignments.length === 1 ? "" : "s"}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="assignment-icon-btn"
+              onClick={closeArchivedDrawer}
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="assignment-drawer-body">
+            <div className="assignment-table-wrap">
+              <table className="assignment-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Task</th>
+                    <th>Deadline</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {searchedArchivedAssignments.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="assignment-no-rows">
+                        No archived assignments found.
+                      </td>
+                    </tr>
+                  ) : (
+                    searchedArchivedAssignments.map((task) => (
+                      <tr key={`archived-${task.id}`}>
+                        <td>{task.employeeName || "-"}</td>
+                        <td>{task.title || "-"}</td>
+                        <td>{prettyDate(task.deadlineDate)}</td>
+                        <td>
+                          <div className="assignment-inline-actions">
+                            <button
+                              type="button"
+                              className="assignment-inline-btn"
+                              onClick={() => openArchivedTaskEditor(task)}
+                            >
+                              <Pencil size={14} />
+                              <span>Edit</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="assignment-inline-btn success"
+                              onClick={() => handleRepostTask(task)}
+                              disabled={repostingTaskId === String(task?.id || "")}
+                            >
+                              <CheckCircle2 size={14} />
+                              <span>
+                                {repostingTaskId === String(task?.id || "")
+                                  ? "Reposting..."
+                                  : "Repost"}
+                              </span>
+                            </button>
+
+                            {canPermanentlyDeleteArchived ? (
+                              <button
+                                type="button"
+                                className="assignment-inline-btn danger"
+                                onClick={() => handleDeleteTask(task)}
+                                disabled={deletingTaskId === String(task?.id || "")}
+                              >
+                                <Trash2 size={14} />
+                                <span>
+                                  {deletingTaskId === String(task?.id || "")
+                                    ? "Deleting..."
+                                    : "Delete"}
+                                </span>
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className={`assignment-drawer ${selectedTask ? "open" : ""}`}>
@@ -1281,21 +1743,23 @@ export default function AssignmentPage({
                         <Clock3 size={16} />
                         <span>Set In Progress</span>
                       </button>
-
-                      <button
-                        type="button"
-                        className="assignment-action-btn danger"
-                        onClick={() => handleDeleteTask(selectedTask)}
-                        disabled={deletingTaskId === String(selectedTask?.id || "")}
-                      >
-                        <Trash2 size={16} />
-                        <span>
-                          {deletingTaskId === String(selectedTask?.id || "")
-                            ? "Deleting..."
-                            : "Delete"}
-                        </span>
-                      </button>
                     </>
+                  ) : null}
+
+                  {canUseArchiveFeature ? (
+                    <button
+                      type="button"
+                      className="assignment-action-btn"
+                      onClick={() => handleArchiveTask(selectedTask)}
+                      disabled={archivingTaskId === String(selectedTask?.id || "")}
+                    >
+                      <Archive size={16} />
+                      <span>
+                        {archivingTaskId === String(selectedTask?.id || "")
+                          ? "Archiving..."
+                          : "Archive"}
+                      </span>
+                    </button>
                   ) : null}
                 </div>
               </div>
@@ -1350,10 +1814,125 @@ export default function AssignmentPage({
         </div>
       </div>
 
+      {editingArchivedTask ? (
+        <div className="assignment-edit-modal-root">
+          <div className="assignment-edit-modal-backdrop" onClick={closeArchivedTaskEditor} />
+          <div className="assignment-edit-modal-panel" role="dialog" aria-modal="true">
+            <div className="assignment-edit-modal-head">
+              <h3>Edit Archived Task</h3>
+            </div>
+
+            <div className="assignment-edit-modal-body">
+              <label className="assignment-field">
+                <span>Task Title</span>
+                <input
+                  type="text"
+                  value={archivedEditForm.title}
+                  onChange={(e) =>
+                    setArchivedEditForm((prev) => ({ ...prev, title: e.target.value }))
+                  }
+                />
+              </label>
+
+              <label className="assignment-field">
+                <span>Instructions</span>
+                <textarea
+                  rows={4}
+                  value={archivedEditForm.instructions}
+                  onChange={(e) =>
+                    setArchivedEditForm((prev) => ({ ...prev, instructions: e.target.value }))
+                  }
+                />
+              </label>
+
+              <div className="assignment-grid-2">
+                <label className="assignment-field">
+                  <span>Deadline Date</span>
+                  <input
+                    type="date"
+                    value={archivedEditForm.deadlineDate}
+                    onChange={(e) =>
+                      setArchivedEditForm((prev) => ({ ...prev, deadlineDate: e.target.value }))
+                    }
+                  />
+                </label>
+
+                <label className="assignment-field">
+                  <span>Deadline Time</span>
+                  <input
+                    type="time"
+                    value={archivedEditForm.deadlineTime}
+                    onChange={(e) =>
+                      setArchivedEditForm((prev) => ({ ...prev, deadlineTime: e.target.value }))
+                    }
+                  />
+                </label>
+              </div>
+
+              <label className="assignment-field">
+                <span>Priority</span>
+                <select
+                  value={archivedEditForm.priority}
+                  onChange={(e) =>
+                    setArchivedEditForm((prev) => ({ ...prev, priority: e.target.value }))
+                  }
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="assignment-edit-modal-actions">
+              <button
+                type="button"
+                className="assignment-inline-btn"
+                onClick={closeArchivedTaskEditor}
+                disabled={savingArchivedEdit}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="assignment-inline-btn success"
+                onClick={saveArchivedTaskEdit}
+                disabled={savingArchivedEdit}
+              >
+                {savingArchivedEdit ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <ConfirmModal
+        open={!!archiveConfirmTask}
+        title="Archive Assignment?"
+        message={`Archive task "${archiveConfirmTask?.title || ""}"?`}
+        confirmText="Archive Task"
+        tone="primary"
+        busy={!!archivingTaskId}
+        onCancel={closeArchiveConfirm}
+        onConfirm={confirmArchiveTask}
+      />
+
+      <ConfirmModal
+        open={!!repostConfirmTask}
+        title="Repost Assignment?"
+        message={`Repost task "${repostConfirmTask?.title || ""}" to active assignments?`}
+        confirmText="Repost Task"
+        tone="primary"
+        busy={!!repostingTaskId}
+        onCancel={closeRepostConfirm}
+        onConfirm={confirmRepostTask}
+      />
+
       <ConfirmModal
         open={!!deleteConfirmTask}
-        title="Delete Assignment?"
-        message={`Delete task "${deleteConfirmTask?.title || ""}"?`}
+        title="Permanently Delete Archived Task?"
+        message={`Permanently delete archived task "${deleteConfirmTask?.title || ""}"?`}
         confirmText="Delete Task"
         tone="danger"
         busy={!!deletingTaskId}
@@ -1363,4 +1942,3 @@ export default function AssignmentPage({
     </div>
   );
 }
-

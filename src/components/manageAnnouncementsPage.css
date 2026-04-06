@@ -50,6 +50,30 @@
   color: #1f2937;
 }
 
+.ma-summary-card-button {
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+
+.ma-summary-card-button:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.ma-summary-card-button.is-active {
+  border-color: #1d4ed8;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.ma-summary-card-button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
 .ma-section {
   border: 1px solid #e5e7eb;
   border-radius: 16px;
@@ -269,6 +293,91 @@
   font-weight: 700;
 }
 
+.ma-recycle-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 120;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.ma-recycle-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(520px, 100vw);
+  height: 100vh;
+  background: #f8fafc;
+  border-left: 1px solid #dbe3ee;
+  box-shadow: -20px 0 45px rgba(15, 23, 42, 0.2);
+  z-index: 121;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  animation: ma-slide-in-right 0.22s ease-out;
+}
+
+.ma-recycle-drawer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #dbe3ee;
+  background: #ffffff;
+}
+
+.ma-recycle-drawer-close {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.ma-recycle-drawer-body {
+  overflow: auto;
+  padding: 10px;
+}
+
+.ma-recycle-toolbar {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ma-recycle-toolbar span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ma-recycle-delete-all-btn {
+  padding: 7px 10px;
+}
+
+@keyframes ma-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
 @media (max-width: 900px) {
   .ma-summary {
     grid-template-columns: 1fr;
@@ -276,5 +385,15 @@
 
   .ma-edit-grid {
     grid-template-columns: 1fr;
+  }
+
+  .ma-recycle-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ma-recycle-delete-all-btn {
+    width: 100%;
+    justify-content: center;
   }
 }

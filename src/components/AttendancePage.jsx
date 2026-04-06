@@ -81,10 +81,13 @@ const getRawStatus = (log) =>
 /* --------------------------- time helpers ------------------------------- */
 const isValidTs = (log) => Number.isFinite(tsMs(getEventTs(log)));
 
-const isNcnsInLog = (log) => {
-  if (!isIn(log)) return false;
-  const status = safeLower(pick(log, ["status"], "")).trim();
-  return status === "ncns";
+const getAbsentStateFromInLog = (log) => {
+  if (!isIn(log)) return "";
+  const status = safeLower(getRawStatus(log)).trim();
+  if (!status) return "";
+  if (status === "ncns" || status.includes("no show")) return "No Show";
+  if (status.includes("absent")) return "Absent";
+  return "";
 };
 
 const dayKeyFromTs = (
@@ -619,17 +622,29 @@ const resolveDailyStatus = ({
 
   if (hasLogs) {
     const rawStatus = normalizeStatusFromLogs(logs);
-    if (rawStatus) return rawStatus;
 
-    if (logs.some((l) => isNcnsInLog(l))) {
-      return "No Show";
+    if (
+      rawStatus === "No Schedule" ||
+      rawStatus === "No Show" ||
+      rawStatus === "Day Off" ||
+      rawStatus === "Holiday" ||
+      rawStatus === "Leave" ||
+      rawStatus === "Vacation" ||
+      rawStatus === "Absent"
+    ) {
+      return rawStatus;
     }
+
+    const absentStateFromInLog = logs.map((log) => getAbsentStateFromInLog(log)).find(Boolean);
+    if (absentStateFromInLog) return absentStateFromInLog;
 
     const hasIn = logs.some((l) => isIn(l));
     const hasOut = logs.some((l) => isClockedOutLog(l));
 
     if (hasOut) return "Completed";
     if (hasIn) return "Live";
+
+    if (rawStatus) return rawStatus;
 
     return "Logged";
   }
@@ -828,7 +843,10 @@ export default function AttendancePage({
     const completed = visibleRows.filter((r) => safeLower(r.status) === "completed").length;
     const live = visibleRows.filter((r) => safeLower(r.status) === "live").length;
     const onBreak = visibleRows.filter((r) => safeLower(r.status) === "on break").length;
-    const absent = visibleRows.filter((r) => safeLower(r.status) === "no show").length;
+    const absent = visibleRows.filter((r) => {
+      const status = safeLower(r.status);
+      return status === "no show" || status === "absent";
+    }).length;
     const noSchedule = visibleRows.filter((r) => safeLower(r.status) === "no schedule").length;
 
     return { total, completed, live, onBreak, absent, noSchedule };
@@ -889,7 +907,7 @@ export default function AttendancePage({
         <div className="attxTile">
           <div className="attxTileLabel">Absent</div>
           <div className="attxTileValue">{kpis.absent}</div>
-          <div className="attxTileHint">Only when API IN status is NCNS</div>
+          <div className="attxTileHint">When API IN status is NCNS or Absent</div>
         </div>
 
         <div className="attxTile">

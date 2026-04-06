@@ -17,14 +17,24 @@ import ManageEmployee from "./components/ManageEmployee";
 import "./App.css";
 import HyacinthAttendanceAPI from "./api/hyacinthAttendanceApi";
 import { useAuth } from "./auth/useAuth";
-import { canAccessPage, DEFAULT_ROLE_PAGES, ROLES } from "./auth/roleUtils";
+import { canAccessPage, DEFAULT_ROLE_PAGES, ROLES, getAllowedPages } from "./auth/roleUtils";
 import {
+  approvePortalUserRequest,
+  createPortalUserRequest,
   getEmployeePermission,
+  getPortalUserRequests,
   getSpecialPortalUsers,
+  rejectPortalUserRequest,
+  sendPortalUserPasswordResetEmail,
   updateEmployeeAllowedPages,
+  updateEmployeePortalPassword,
+  updatePortalUserEmail,
+  updatePortalUserPassword,
+  updatePortalUserProfileDetails,
   updatePortalUserAllowedPages,
 } from "./auth/firebaseAuthService";
 import {
+  getActiveBreakForUser,
   getActiveBreaks,
   getBreakLogsForUserOnDate,
   calculateBreakUsageMinutes,
@@ -56,11 +66,13 @@ import {
 } from "./services/employeeProfileService";
 import {
   approveAssignmentAccess,
+  archiveAssignment,
   createAssignment,
   createDeadlineAlertsForAssignments,
   deleteAssignment,
   getAssignments,
   markAssignmentCompleted,
+  repostAssignment,
   reviewAssignmentCompletion,
   requestAssignmentAccess,
   updateAssignment,
@@ -110,6 +122,12 @@ const formatTargetPageLabel = (pageKey) => {
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 };
+
+const PORTAL_USER_REQUEST_ROLE_OPTIONS = [
+  { value: ROLES.ADMIN, label: "Admin" },
+  { value: ROLES.ACCOUNTING, label: "Accounting" },
+  { value: ROLES.VISITOR, label: "Visitor" },
+];
 
 const toPreviewText = (value, maxLen = 140) => {
   const cleaned = String(value || "").replace(/\s+/g, " ").trim();
@@ -163,6 +181,67 @@ const getBusinessDayLogsFromList = (logs, businessDayKey, resetTime, businessTim
   });
 };
 
+const getAttendanceStatusText = (log) =>
+  String(
+    pick(log || {}, ["status", "attendanceStatus", "dailyStatus", "remark"], "")
+  ).trim();
+
+const containsAbsentStatus = (statusText) =>
+  String(statusText || "").trim().toLowerCase().includes("absent");
+
+const scanAbsentStatusesInLogsByUserId = (logsByUserId = {}) => {
+  const entries = Object.entries(logsByUserId || {});
+  let totalLogs = 0;
+  let totalAbsentLogs = 0;
+  const usersWithAbsent = [];
+
+  for (const [userId, rawLogs] of entries) {
+    const logs = Array.isArray(rawLogs) ? rawLogs : [];
+    totalLogs += logs.length;
+
+    const absentStatuses = logs
+      .map((log) => getAttendanceStatusText(log))
+      .filter((status) => containsAbsentStatus(status));
+
+    if (!absentStatuses.length) continue;
+
+    totalAbsentLogs += absentStatuses.length;
+    usersWithAbsent.push({
+      userId,
+      absentLogs: absentStatuses.length,
+      statuses: Array.from(new Set(absentStatuses)).join(" | "),
+    });
+  }
+
+  return {
+    totalLogs,
+    totalAbsentLogs,
+    usersWithAbsentCount: usersWithAbsent.length,
+    usersWithAbsent,
+  };
+};
+
+const logAbsentStatusScan = (label, logsByUserId = {}) => {
+  const report = scanAbsentStatusesInLogsByUserId(logsByUserId);
+  const tag = `[Attendance Absent Scan] ${label}`;
+
+  if (!report.totalLogs) {
+    console.info(`${tag}: no logs returned from API.`);
+    return report;
+  }
+
+  if (!report.totalAbsentLogs) {
+    console.info(`${tag}: no 'Absent' status found in ${report.totalLogs} log(s).`);
+    return report;
+  }
+
+  console.info(
+    `${tag}: found ${report.totalAbsentLogs} 'Absent' status log(s) across ${report.usersWithAbsentCount} user(s).`
+  );
+  console.table(report.usersWithAbsent);
+  return report;
+};
+
 async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length);
   let i = 0;
@@ -201,6 +280,14 @@ const PAGE_HEADER_TITLES = {
   perf_monthly: "Performance Report (Monthly)",
   invoices: "Invoices",
   hours: "Hours",
+};
+
+const resolveDefaultActivePage = (authUser) => {
+  const allowedPages = getAllowedPages(authUser?.role, authUser?.allowedPages);
+
+  if (allowedPages.includes("dashboard")) return "dashboard";
+  if (allowedPages.includes("employee_dashboard")) return "employee_dashboard";
+  return allowedPages[0] || "dashboard";
 };
 
 const buildProfileImageMapByUserId = (rows = []) => {
@@ -278,6 +365,7 @@ export default function App() {
   const [activePage, setActivePage] = useState("dashboard");
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const [endDate, setEndDate] = useState(() =>
     getTodayAttendanceKey(getStoredAttendanceResetTime(), getDeviceTimeZone())
@@ -314,6 +402,9 @@ export default function App() {
   const [breakUsageByUserId, setBreakUsageByUserId] = useState({});
   const [loadingBreaks, setLoadingBreaks] = useState(false);
   const [loadingBreakUsage, setLoadingBreakUsage] = useState(false);
+  const [hasSeenLiveAgentsLoading, setHasSeenLiveAgentsLoading] = useState(false);
+  const [hasCompletedInitialLiveAgentsLoading, setHasCompletedInitialLiveAgentsLoading] =
+    useState(false);
 
   const [employeeProfilesByUserId, setEmployeeProfilesByUserId] = useState({});
   const [loadingEmployeeProfiles, setLoadingEmployeeProfiles] = useState(false);
@@ -328,6 +419,7 @@ export default function App() {
   const [employeePermissionsError, setEmployeePermissionsError] = useState("");
 
   const [assignments, setAssignments] = useState([]);
+  const [archivedAssignments, setArchivedAssignments] = useState([]);
   const [loadingAssignments, setLoadingAssignments] = useState(false);
   const [assignmentsError, setAssignmentsError] = useState("");
   const [assignmentOpenRequest, setAssignmentOpenRequest] = useState({
@@ -347,12 +439,36 @@ export default function App() {
     () => getDefaultAnnouncementWindow().expiresAt
   );
   const [savingAnnouncement, setSavingAnnouncement] = useState(false);
+  const [showUserRequestModal, setShowUserRequestModal] = useState(false);
+  const [requestingNewUser, setRequestingNewUser] = useState(false);
+  const [newUserRequestForm, setNewUserRequestForm] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    role: ROLES.VISITOR,
+    note: "",
+  });
+  const [portalUserRequests, setPortalUserRequests] = useState([]);
+  const [loadingPortalUserRequests, setLoadingPortalUserRequests] = useState(false);
+  const [portalUserRequestsError, setPortalUserRequestsError] = useState("");
+  const [processingPortalUserRequest, setProcessingPortalUserRequest] = useState({
+    id: "",
+    action: "",
+  });
   const [selectedNotification, setSelectedNotification] = useState(null);
+
+  const authSessionKey = useMemo(() => {
+    if (!isAuthenticated || !user) return "";
+    return String(getUserId(user) || user?.uid || user?.email || "")
+      .trim()
+      .toLowerCase();
+  }, [isAuthenticated, user]);
 
   const usersAbortRef = useRef(null);
   const schedulesAbortRef = useRef(null);
   const attendanceAbortRef = useRef(null);
   const todayAbortRef = useRef(null);
+  const lastAuthSessionKeyRef = useRef("");
 
   const [breakLogsByUserId, setBreakLogsByUserId] = useState({});
 
@@ -363,10 +479,28 @@ export default function App() {
   const seenToastIdsRef = useRef(new Set());
   const profileImagesByUserIdRef = useRef({});
   const profileImagesInitializedRef = useRef(false);
+  const announcementsRef = useRef([]);
+  const periodicRefreshHandlersRef = useRef({
+    reloadActiveBreaks: async () => {},
+    reloadBreakUsage: async () => {},
+    reloadNotifications: async () => {},
+    reloadAnnouncements: async () => {},
+    reloadOverBreakNotes: async () => {},
+    reloadPortalUserRequests: async () => {},
+  });
   const portalMainRef = useRef(null);
   const viewerRole = useMemo(
     () => String(user?.role || "").trim().toLowerCase().replace(/\s+/g, "_"),
     [user?.role]
+  );
+  const canRequestPortalUser = useMemo(() => viewerRole === ROLES.ADMIN, [viewerRole]);
+  const canReviewPortalUserRequests = useMemo(
+    () => viewerRole === ROLES.SUPER_ADMIN,
+    [viewerRole]
+  );
+  const canLoadSpecialUsers = useMemo(
+    () => viewerRole === ROLES.SUPER_ADMIN,
+    [viewerRole]
   );
   const canPostAnnouncements = useMemo(
     () => viewerRole === ROLES.VISITOR || viewerRole === ROLES.ADMIN || viewerRole === ROLES.SUPER_ADMIN,
@@ -377,9 +511,40 @@ export default function App() {
     setShowLogoutConfirm(true);
   }, []);
 
-  const handleConfirmLogout = useCallback(() => {
+  const handleConfirmLogout = useCallback(async () => {
+    const logoutStartedAt = Date.now();
     setShowLogoutConfirm(false);
-    signOut();
+    setShowAnnouncementModal(false);
+    setShowUserRequestModal(false);
+    setSelectedNotification(null);
+    setIsLoggingOut(true);
+
+    // Ensure the overlay can paint at least once before sign-out resolves.
+    await new Promise((resolve) => {
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => resolve());
+        return;
+      }
+      setTimeout(resolve, 0);
+    });
+
+    usersAbortRef.current?.abort?.();
+    schedulesAbortRef.current?.abort?.();
+    attendanceAbortRef.current?.abort?.();
+    todayAbortRef.current?.abort?.();
+    Object.values(historyAbortRef.current || {}).forEach((controller) => controller?.abort?.());
+    historyAbortRef.current = {};
+
+    try {
+      await signOut();
+    } finally {
+      const minOverlayMs = 700;
+      const elapsed = Date.now() - logoutStartedAt;
+      if (elapsed < minOverlayMs) {
+        await new Promise((resolve) => setTimeout(resolve, minOverlayMs - elapsed));
+      }
+      setIsLoggingOut(false);
+    }
   }, [signOut]);
 
   const handleCancelLogout = useCallback(() => {
@@ -397,6 +562,18 @@ export default function App() {
     setShowAnnouncementModal(true);
   }, [canPostAnnouncements]);
 
+  const handleOpenUserRequestModal = useCallback(() => {
+    if (!canRequestPortalUser) return;
+    setNewUserRequestForm({
+      firstName: "",
+      lastName: "",
+      email: "",
+      role: ROLES.VISITOR,
+      note: "",
+    });
+    setShowUserRequestModal(true);
+  }, [canRequestPortalUser]);
+
   const handleCloseAnnouncementModal = useCallback(() => {
     if (savingAnnouncement) return;
     const defaults = getDefaultAnnouncementWindow();
@@ -406,6 +583,18 @@ export default function App() {
     setAnnouncementPostAt(defaults.postAt);
     setAnnouncementExpireAt(defaults.expiresAt);
   }, [savingAnnouncement]);
+
+  const handleCloseUserRequestModal = useCallback(() => {
+    if (requestingNewUser) return;
+    setShowUserRequestModal(false);
+    setNewUserRequestForm({
+      firstName: "",
+      lastName: "",
+      email: "",
+      role: ROLES.VISITOR,
+      note: "",
+    });
+  }, [requestingNewUser]);
 
   const closeNotificationModal = useCallback(() => {
     setSelectedNotification(null);
@@ -431,6 +620,30 @@ export default function App() {
       return { taskId: "", requestId: 0 };
     });
   }, []);
+
+  const isLiveAgentsLoadingNow =
+    loadingUsers || loadingTodayLogs || loadingBreaks || loadingBreakUsage;
+  const showLiveAgentsStartupLoading = !hasCompletedInitialLiveAgentsLoading;
+
+  useEffect(() => {
+    if (hasCompletedInitialLiveAgentsLoading) return;
+
+    if (isLiveAgentsLoadingNow) {
+      if (!hasSeenLiveAgentsLoading) {
+        setHasSeenLiveAgentsLoading(true);
+      }
+      return;
+    }
+
+    if (hasSeenLiveAgentsLoading || usersError) {
+      setHasCompletedInitialLiveAgentsLoading(true);
+    }
+  }, [
+    isLiveAgentsLoadingNow,
+    hasSeenLiveAgentsLoading,
+    hasCompletedInitialLiveAgentsLoading,
+    usersError,
+  ]);
 
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
@@ -528,6 +741,10 @@ export default function App() {
       role: user?.role || "",
     };
   }, [user]);
+
+  useEffect(() => {
+    announcementsRef.current = Array.isArray(announcements) ? announcements : [];
+  }, [announcements]);
 
   const pushToast = useCallback(({ type = "info", title = "Notice", message = "" }) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -677,13 +894,14 @@ export default function App() {
     const isAdminLike = viewerRole === ROLES.SUPER_ADMIN || viewerRole === ROLES.ADMIN;
 
     if (!currentViewerIdentity?.userId && !isAdminLike) {
-      setNotifications([]);
+      setNotifications((prev) => (prev.length ? [] : prev));
       return;
     }
 
     try {
       const rows = await getNotificationsForUser(currentViewerIdentity);
       const list = Array.isArray(rows) ? rows : [];
+      const announcementRows = announcementsRef.current;
       const enrichedRows = list.map((row) => {
         if (!isAnnouncementNotification(row?.type)) return row;
         if (String(row?.message || "").trim()) return row;
@@ -691,7 +909,7 @@ export default function App() {
         const announcementId = String(row?.announcementId || "").trim();
         if (!announcementId) return row;
 
-        const match = (Array.isArray(announcements) ? announcements : []).find(
+        const match = announcementRows.find(
           (item) => String(item?.id || "").trim() === announcementId
         );
         if (!match) return row;
@@ -730,11 +948,16 @@ export default function App() {
     } catch (err) {
       console.error("Failed to load notifications:", err);
     }
-  }, [announcements, currentViewerIdentity]);
+  }, [currentViewerIdentity?.role, currentViewerIdentity?.userId]);
 
   const reloadOverBreakNotes = useCallback(async () => {
+    if (!isAuthenticated || !user) {
+      setOverBreakNotes((prev) => (prev.length ? [] : prev));
+      return;
+    }
+
     try {
-      const rows = await getOverBreakNotes();
+      const rows = await getOverBreakNotes(user);
 
       if (user?.role === ROLES.SUPER_ADMIN) {
         setOverBreakNotes(rows);
@@ -749,7 +972,7 @@ export default function App() {
     } catch (err) {
       console.error("Failed to load over-break notes:", err);
     }
-  }, [user]);
+  }, [isAuthenticated, user]);
 
   const dismissToast = useCallback((toastId) => {
     setToastQueue((prev) => prev.filter((t) => t.id !== toastId));
@@ -872,9 +1095,24 @@ export default function App() {
   );
 
   const reloadActiveBreaks = useCallback(async () => {
+    if (!isAuthenticated || !user) {
+      setActiveBreaksByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      return;
+    }
+
     setLoadingBreaks(true);
 
     try {
+      const currentUid = String(
+        user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
+      ).trim();
+
+      if (String(user?.role || "").trim().toLowerCase() === ROLES.EMPLOYEE) {
+        const employeeBreak = currentUid ? await getActiveBreakForUser(currentUid) : null;
+        setActiveBreaksByUserId(employeeBreak ? { [currentUid]: employeeBreak } : {});
+        return;
+      }
+
       const rows = await getActiveBreaks();
       const next = {};
 
@@ -919,23 +1157,36 @@ export default function App() {
       setActiveBreaksByUserId(next);
     } catch (err) {
       console.error("Failed to load active breaks:", err);
-      setActiveBreaksByUserId({});
+      setActiveBreaksByUserId((prev) => (Object.keys(prev).length ? {} : prev));
     } finally {
       setLoadingBreaks(false);
     }
-  }, [reloadNotifications, reloadOverBreakNotes]);
+  }, [isAuthenticated, reloadNotifications, reloadOverBreakNotes, user]);
 
   const reloadBreakUsage = useCallback(async () => {
+    if (!isAuthenticated || !user) {
+      setBreakUsageByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      setBreakLogsByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      return;
+    }
+
     if (!validEmployees.length) {
-      setBreakUsageByUserId({});
-      setBreakLogsByUserId({});
+      setBreakUsageByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      setBreakLogsByUserId((prev) => (Object.keys(prev).length ? {} : prev));
       return;
     }
 
     setLoadingBreakUsage(true);
 
     try {
-      const items = validEmployees.map((emp) => String(getUserId(emp)));
+      const currentUid = String(
+        user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
+      ).trim();
+      const isEmployeeViewer = String(user?.role || "").trim().toLowerCase() === ROLES.EMPLOYEE;
+
+      const items = isEmployeeViewer
+        ? [currentUid].filter(Boolean)
+        : validEmployees.map((emp) => String(getUserId(emp)));
 
       const results = await mapWithConcurrency(items, 6, async (userId) => {
         const logs = await getBreakLogsForUserOnDate(userId, new Date());
@@ -963,7 +1214,7 @@ export default function App() {
     } finally {
       setLoadingBreakUsage(false);
     }
-  }, [validEmployees]);
+  }, [isAuthenticated, user, validEmployees]);
 
   const reloadEmployeeProfiles = useCallback(async () => {
     if (!validEmployees.length) {
@@ -989,7 +1240,7 @@ export default function App() {
   }, [validEmployees]);
 
   const reloadSpecialUsers = useCallback(async () => {
-    if (!canPostAnnouncements) {
+    if (!canLoadSpecialUsers) {
       setSpecialUsers([]);
       setSpecialUsersError("");
       return;
@@ -1008,7 +1259,29 @@ export default function App() {
     } finally {
       setLoadingSpecialUsers(false);
     }
-  }, [canPostAnnouncements]);
+  }, [canLoadSpecialUsers]);
+
+  const reloadPortalUserRequests = useCallback(async () => {
+    if (!canReviewPortalUserRequests) {
+      setPortalUserRequests([]);
+      setPortalUserRequestsError("");
+      return;
+    }
+
+    setLoadingPortalUserRequests(true);
+    setPortalUserRequestsError("");
+
+    try {
+      const rows = await getPortalUserRequests();
+      setPortalUserRequests(Array.isArray(rows) ? rows : []);
+    } catch (err) {
+      console.error("Failed to load portal user requests:", err);
+      setPortalUserRequests([]);
+      setPortalUserRequestsError(err?.message || "Failed to load pending user requests");
+    } finally {
+      setLoadingPortalUserRequests(false);
+    }
+  }, [canReviewPortalUserRequests]);
 
   const reloadEmployeePermissions = useCallback(async () => {
     if (user?.role !== ROLES.SUPER_ADMIN) {
@@ -1062,6 +1335,7 @@ export default function App() {
   const reloadAssignments = useCallback(async () => {
     if (!isAuthenticated || !user || !canAccessPage(user.role, "assignment", user?.allowedPages)) {
       setAssignments([]);
+      setArchivedAssignments([]);
       setAssignmentsError("");
       return;
     }
@@ -1070,18 +1344,22 @@ export default function App() {
     setAssignmentsError("");
 
     try {
-      const rows = await getAssignments();
-      const nextRows = Array.isArray(rows) ? rows : [];
-      setAssignments(nextRows);
+      const rows = await getAssignments({ includeArchived: true });
+      const allRows = Array.isArray(rows) ? rows : [];
+      const activeRows = allRows.filter((row) => !row?.archived);
+      const archivedRows = allRows.filter((row) => !!row?.archived);
+      setAssignments(activeRows);
+      setArchivedAssignments(archivedRows);
 
       try {
-        await createDeadlineAlertsForAssignments(nextRows);
+        await createDeadlineAlertsForAssignments(activeRows);
       } catch (err) {
         console.error("Failed to create assignment deadline alerts:", err);
       }
     } catch (err) {
       console.error("Failed to load assignments:", err);
       setAssignments([]);
+      setArchivedAssignments([]);
       setAssignmentsError(err?.message || "Failed to load assignments");
     } finally {
       setLoadingAssignments(false);
@@ -1187,11 +1465,28 @@ export default function App() {
   );
 
   const handleDeleteAssignment = useCallback(
-    async (assignmentId) => {
-      await deleteAssignment(assignmentId);
+    async (assignmentId, actor = {}) => {
+      await deleteAssignment(assignmentId, actor);
       await reloadAssignments();
     },
     [reloadAssignments]
+  );
+
+  const handleArchiveAssignment = useCallback(
+    async (assignmentId, actor = {}) => {
+      await archiveAssignment(assignmentId, actor);
+      await reloadAssignments();
+    },
+    [reloadAssignments]
+  );
+
+  const handleRepostAssignment = useCallback(
+    async (assignmentId, updates = {}, actor = {}) => {
+      await repostAssignment(assignmentId, updates, actor);
+      await reloadAssignments();
+      await reloadNotifications();
+    },
+    [reloadAssignments, reloadNotifications]
   );
 
   const handleMarkAssignmentCompleted = useCallback(
@@ -1228,6 +1523,253 @@ export default function App() {
       await reloadNotifications();
     },
     [reloadAssignments, reloadNotifications]
+  );
+
+  const handleSubmitPortalUserRequest = useCallback(
+    async (e) => {
+      e?.preventDefault?.();
+      if (!canRequestPortalUser || !user) return;
+
+      setRequestingNewUser(true);
+      try {
+        const result = await createPortalUserRequest({
+          firstName: newUserRequestForm.firstName,
+          lastName: newUserRequestForm.lastName,
+          email: newUserRequestForm.email,
+          role: newUserRequestForm.role,
+          note: newUserRequestForm.note,
+          requestedBy: user,
+        });
+
+        setShowUserRequestModal(false);
+        setNewUserRequestForm({
+          firstName: "",
+          lastName: "",
+          email: "",
+          role: ROLES.VISITOR,
+          note: "",
+        });
+
+        pushToast({
+          type: "success",
+          title: "Request Sent",
+          message: `Super Admin approval is required before ${
+            result?.email || "this user"
+          } is created.`,
+        });
+
+        await reloadNotifications();
+      } catch (err) {
+        console.error("Failed to submit portal user request:", err);
+        pushToast({
+          type: "error",
+          title: "Request Failed",
+          message: err?.message || "Could not submit user request.",
+        });
+      } finally {
+        setRequestingNewUser(false);
+      }
+    },
+    [canRequestPortalUser, newUserRequestForm, pushToast, reloadNotifications, user]
+  );
+
+  const handleApprovePortalUserRequest = useCallback(
+    async (requestId, payload = {}) => {
+      if (!canReviewPortalUserRequests || !user) return;
+
+      const normalizedRequestId = String(requestId || "").trim();
+      if (!normalizedRequestId) throw new Error("Missing request id");
+
+      setProcessingPortalUserRequest({
+        id: normalizedRequestId,
+        action: "approve",
+      });
+
+      try {
+        const result = await approvePortalUserRequest(normalizedRequestId, {
+          password: payload?.password || "",
+          approvedBy: user,
+        });
+
+        await reloadPortalUserRequests();
+        await reloadSpecialUsers();
+        await reloadNotifications();
+
+        const createdName = `${result?.user?.firstName || ""} ${result?.user?.lastName || ""}`.trim();
+        pushToast({
+          type: "success",
+          title: "Request Approved",
+          message: `${createdName || result?.user?.email || "User"} has been created.`,
+        });
+      } finally {
+        setProcessingPortalUserRequest({
+          id: "",
+          action: "",
+        });
+      }
+    },
+    [
+      canReviewPortalUserRequests,
+      pushToast,
+      reloadNotifications,
+      reloadPortalUserRequests,
+      reloadSpecialUsers,
+      user,
+    ]
+  );
+
+  const handleRejectPortalUserRequest = useCallback(
+    async (requestId, payload = {}) => {
+      if (!canReviewPortalUserRequests || !user) return;
+
+      const normalizedRequestId = String(requestId || "").trim();
+      if (!normalizedRequestId) throw new Error("Missing request id");
+
+      setProcessingPortalUserRequest({
+        id: normalizedRequestId,
+        action: "reject",
+      });
+
+      try {
+        await rejectPortalUserRequest(normalizedRequestId, {
+          reason: payload?.reason || "",
+          rejectedBy: user,
+        });
+
+        await reloadPortalUserRequests();
+        await reloadNotifications();
+
+        pushToast({
+          type: "success",
+          title: "Request Rejected",
+          message: "The user creation request has been rejected.",
+        });
+      } finally {
+        setProcessingPortalUserRequest({
+          id: "",
+          action: "",
+        });
+      }
+    },
+    [canReviewPortalUserRequests, pushToast, reloadNotifications, reloadPortalUserRequests, user]
+  );
+
+  const handleUpdateSpecialUserProfile = useCallback(
+    async (userId, payload = {}) => {
+      try {
+        const result = await updatePortalUserProfileDetails(userId, payload);
+        await reloadSpecialUsers();
+
+        const fullName = `${result?.firstName || ""} ${result?.lastName || ""}`.trim();
+        pushToast({
+          type: "success",
+          title: "Profile Updated",
+          message: `${fullName || "User profile"} details were updated.`,
+        });
+
+        return result;
+      } catch (err) {
+        pushToast({
+          type: "error",
+          title: "Update Failed",
+          message: err?.message || "Could not update user profile details.",
+        });
+        throw err;
+      }
+    },
+    [pushToast, reloadSpecialUsers]
+  );
+
+  const handleChangeSpecialUserEmail = useCallback(
+    async (userId, nextEmail) => {
+      try {
+        const result = await updatePortalUserEmail(userId, nextEmail);
+        await reloadSpecialUsers();
+
+        pushToast({
+          type: "success",
+          title: "Email Updated",
+          message: result?.message || `Profile email changed to ${result?.email || nextEmail}.`,
+        });
+
+        return result;
+      } catch (err) {
+        pushToast({
+          type: "error",
+          title: "Email Update Failed",
+          message: err?.message || "Could not change user email.",
+        });
+        throw err;
+      }
+    },
+    [pushToast, reloadSpecialUsers]
+  );
+
+  const handleSendSpecialUserPasswordReset = useCallback(
+    async (email) => {
+      try {
+        const result = await sendPortalUserPasswordResetEmail(email);
+        pushToast({
+          type: "success",
+          title: "Reset Email Sent",
+          message: result?.message || "Password reset email sent.",
+        });
+        return result;
+      } catch (err) {
+        pushToast({
+          type: "error",
+          title: "Reset Failed",
+          message: err?.message || "Could not send password reset email.",
+        });
+        throw err;
+      }
+    },
+    [pushToast]
+  );
+
+  const handleChangeOwnPassword = useCallback(
+    async ({ oldPassword, newPassword, confirmPassword } = {}) => {
+      const currentUserId = String(
+        user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? ""
+      ).trim();
+      const currentRole = String(user?.role || "").trim().toLowerCase();
+
+      try {
+        const result =
+          currentRole === ROLES.EMPLOYEE
+            ? await updateEmployeePortalPassword(currentUserId, {
+                oldPassword,
+                newPassword,
+                confirmPassword,
+              })
+            : await updatePortalUserPassword({
+                userId: currentUserId,
+                email: user?.email || "",
+                oldPassword,
+                newPassword,
+                confirmPassword,
+              });
+        if (!result?.success) {
+          throw new Error(result?.message || "Could not change password.");
+        }
+
+        pushToast({
+          type: "success",
+          title: "Password Updated",
+          message: result?.message || "Your password has been updated.",
+        });
+
+        return result;
+      } catch (err) {
+        pushToast({
+          type: "error",
+          title: "Password Update Failed",
+          message: err?.message || "Could not change password.",
+        });
+        throw err;
+      }
+    },
+    [pushToast, user?.email, user?.firebaseUid, user?.id, user?.uid, user?.userId]
   );
 
   const handlePostAnnouncement = useCallback(
@@ -1277,7 +1819,7 @@ export default function App() {
       setSavingAnnouncement(true);
       try {
         let portalUsers = Array.isArray(specialUsers) ? specialUsers : [];
-        if (!portalUsers.length) {
+        if (!portalUsers.length && canLoadSpecialUsers) {
           try {
             const rows = await getSpecialPortalUsers();
             portalUsers = Array.isArray(rows) ? rows : [];
@@ -1337,6 +1879,7 @@ export default function App() {
       announcementExpireAt,
       announcementPostAt,
       canPostAnnouncements,
+      canLoadSpecialUsers,
       currentViewerIdentity?.userId,
       pushToast,
       reloadAnnouncements,
@@ -1386,19 +1929,48 @@ export default function App() {
   );
 
   useEffect(() => {
+    periodicRefreshHandlersRef.current = {
+      reloadActiveBreaks,
+      reloadBreakUsage,
+      reloadNotifications,
+      reloadAnnouncements,
+      reloadOverBreakNotes,
+      reloadPortalUserRequests,
+    };
+  }, [
+    reloadActiveBreaks,
+    reloadBreakUsage,
+    reloadNotifications,
+    reloadAnnouncements,
+    reloadOverBreakNotes,
+    reloadPortalUserRequests,
+  ]);
+
+  useEffect(() => {
     let cancelled = false;
+    let running = false;
 
     const run = async () => {
-      if (cancelled) return;
-      await reloadActiveBreaks();
-      if (cancelled) return;
-      await reloadBreakUsage();
-      if (cancelled) return;
-      await reloadNotifications();
-      if (cancelled) return;
-      await reloadAnnouncements();
-      if (cancelled) return;
-      await reloadOverBreakNotes();
+      if (cancelled || running) return;
+
+      running = true;
+      try {
+        const handlers = periodicRefreshHandlersRef.current;
+        if (cancelled) return;
+        await handlers.reloadActiveBreaks();
+        if (cancelled) return;
+        await handlers.reloadBreakUsage();
+        if (cancelled) return;
+        await handlers.reloadNotifications();
+        if (cancelled) return;
+        await handlers.reloadAnnouncements();
+        if (cancelled) return;
+        await handlers.reloadOverBreakNotes();
+        if (cancelled) return;
+        await handlers.reloadPortalUserRequests();
+      } finally {
+        running = false;
+      }
     };
 
     run();
@@ -1411,7 +1983,7 @@ export default function App() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [reloadActiveBreaks, reloadBreakUsage, reloadNotifications, reloadAnnouncements, reloadOverBreakNotes]);
+  }, []);
 
   useEffect(() => {
     reloadEmployeeProfiles();
@@ -1420,6 +1992,10 @@ export default function App() {
   useEffect(() => {
     reloadSpecialUsers();
   }, [reloadSpecialUsers]);
+
+  useEffect(() => {
+    reloadPortalUserRequests();
+  }, [reloadPortalUserRequests]);
 
   useEffect(() => {
     reloadEmployeePermissions();
@@ -1495,6 +2071,20 @@ export default function App() {
       };
     });
   }, [validEmployees, employeePermissionsByUserId]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) {
+      lastAuthSessionKeyRef.current = "";
+      return;
+    }
+
+    const nextSessionKey = authSessionKey || "__authenticated__";
+    if (lastAuthSessionKeyRef.current === nextSessionKey) return;
+
+    lastAuthSessionKeyRef.current = nextSessionKey;
+    setActivePage(resolveDefaultActivePage(user));
+    setSelectedEmployeeId("");
+  }, [isAuthenticated, user, authSessionKey]);
 
   useEffect(() => {
     if (!user) return;
@@ -1581,6 +2171,7 @@ export default function App() {
         );
 
         const arr = Array.isArray(logs) ? logs : [];
+        logAbsentStatusScan(`full-history user ${uid}`, { [uid]: arr });
         setHistoryByUserId((p) => ({ ...p, [uid]: arr }));
         return arr;
       } catch (e) {
@@ -1757,6 +2348,7 @@ export default function App() {
         }
       }
 
+      logAbsentStatusScan(`range ${startDate} -> ${endDate}`, nextLogs);
       setLogsByUserId(nextLogs);
       setAttendanceErrorsByUserId(errs);
     } catch (e) {
@@ -1814,6 +2406,7 @@ export default function App() {
         next[userId] = results[idx].ok ? results[idx].value.logs : [];
       }
 
+      logAbsentStatusScan(`business-day ${todayBusinessKey}`, next);
       setTodayLogsByUserId(next);
     } catch (err) {
       if (err?.name !== "AbortError") {
@@ -1868,8 +2461,10 @@ export default function App() {
       breakUsageByUserId,
       employeeProfilesByUserId,
       assignments,
+      archivedAssignments,
       announcements,
       specialUsers,
+      portalUserRequests,
       employeePermissionsByUserId,
       notifications,
       overBreakNotes,
@@ -1893,6 +2488,7 @@ export default function App() {
         employeePermissions: loadingEmployeePermissions,
         assignments: loadingAssignments,
         announcements: loadingAnnouncements,
+        portalUserRequests: loadingPortalUserRequests,
       },
       errors: {
         users: usersError,
@@ -1903,6 +2499,7 @@ export default function App() {
         employeePermissions: employeePermissionsError,
         assignments: assignmentsError,
         announcements: announcementsError,
+        portalUserRequests: portalUserRequestsError,
       },
       reload: {
         schedules: reloadSchedules,
@@ -1913,6 +2510,7 @@ export default function App() {
         employeePermissions: reloadEmployeePermissions,
         assignments: reloadAssignments,
         announcements: reloadAnnouncements,
+        portalUserRequests: reloadPortalUserRequests,
         activeBreaks: reloadActiveBreaks,
         breakUsage: reloadBreakUsage,
         notifications: reloadNotifications,
@@ -1925,6 +2523,8 @@ export default function App() {
         createAssignment: handleCreateAssignment,
         updateAssignment: handleUpdateAssignment,
         deleteAssignment: handleDeleteAssignment,
+        archiveAssignment: handleArchiveAssignment,
+        repostAssignment: handleRepostAssignment,
         completeAssignment: handleMarkAssignmentCompleted,
         reviewAssignmentCompletion: handleReviewAssignmentCompletion,
         requestAssignmentAccess: handleRequestAssignmentAccess,
@@ -1949,8 +2549,10 @@ export default function App() {
       breakUsageByUserId,
       employeeProfilesByUserId,
       assignments,
+      archivedAssignments,
       announcements,
       specialUsers,
+      portalUserRequests,
       employeePermissionsByUserId,
       notifications,
       overBreakNotes,
@@ -1973,6 +2575,7 @@ export default function App() {
       loadingEmployeePermissions,
       loadingAssignments,
       loadingAnnouncements,
+      loadingPortalUserRequests,
       usersError,
       schedulesError,
       attendanceError,
@@ -1981,6 +2584,7 @@ export default function App() {
       employeePermissionsError,
       assignmentsError,
       announcementsError,
+      portalUserRequestsError,
       reloadSchedules,
       reloadAttendance,
       reloadTodayLogs,
@@ -1989,6 +2593,7 @@ export default function App() {
       reloadEmployeePermissions,
       reloadAssignments,
       reloadAnnouncements,
+      reloadPortalUserRequests,
       reloadActiveBreaks,
       reloadBreakUsage,
       reloadNotifications,
@@ -1999,6 +2604,8 @@ export default function App() {
       handleCreateAssignment,
       handleUpdateAssignment,
       handleDeleteAssignment,
+      handleArchiveAssignment,
+      handleRepostAssignment,
       handleMarkAssignmentCompleted,
       handleReviewAssignmentCompletion,
       handleRequestAssignmentAccess,
@@ -2030,6 +2637,15 @@ export default function App() {
     });
   };
 
+  if (isLoggingOut) {
+    return (
+      <div className="portal-logout-overlay" role="status" aria-live="polite" aria-busy="true">
+        <div className="portal-logout-spinner" />
+        <div className="portal-logout-text">Logging out...</div>
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return authScreen === "register" ? (
       <RegisterPortalUser onBackToLogin={() => setAuthScreen("login")} />
@@ -2043,7 +2659,7 @@ export default function App() {
       <Sidebar
         activePage={activePage}
         setActivePage={setActivePage}
-        loadingLive={loadingTodayLogs || loadingBreaks || loadingBreakUsage}
+        loadingLive={showLiveAgentsStartupLoading}
         liveAgents={liveAgentsForSidebar}
         userRole={user?.role}
         userAllowedPages={user?.allowedPages || []}
@@ -2056,7 +2672,9 @@ export default function App() {
           profileImagesByUserId={profileImagesByUserId}
           notifications={notifications}
           onNotificationClick={handleNotificationClick}
+          onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
           onOpenNotificationsPage={() => setActivePage("notifications")}
+          onChangeOwnPassword={handleChangeOwnPassword}
         />
 
         <div className="portal-topbar">
@@ -2075,13 +2693,23 @@ export default function App() {
               </button>
             ) : null}
 
+            {canRequestPortalUser ? (
+              <button
+                className="portal-btn portal-btn-primary"
+                onClick={handleOpenUserRequestModal}
+              >
+                <UserPlus size={16} strokeWidth={2} />
+                <span>Request New User</span>
+              </button>
+            ) : null}
+
             {canPostAnnouncements ? (
               <button
                 className="portal-btn portal-btn-secondary"
                 onClick={handleOpenAnnouncementModal}
               >
                 <Megaphone size={16} strokeWidth={2} />
-                <span>Post Note</span>
+                <span>Post Announcement</span>
               </button>
             ) : null}
 
@@ -2203,6 +2831,17 @@ export default function App() {
                   users={specialUsers}
                   loading={loadingSpecialUsers}
                   error={specialUsersError}
+                  userRequests={portalUserRequests}
+                  loadingRequests={loadingPortalUserRequests}
+                  requestsError={portalUserRequestsError}
+                  processingRequestId={processingPortalUserRequest.id}
+                  processingRequestAction={processingPortalUserRequest.action}
+                  onApproveRequest={handleApprovePortalUserRequest}
+                  onRejectRequest={handleRejectPortalUserRequest}
+                  onUpdateUserProfile={handleUpdateSpecialUserProfile}
+                  onChangeUserEmail={handleChangeSpecialUserEmail}
+                  onSendPasswordReset={handleSendSpecialUserPasswordReset}
+                  onReloadRequests={reloadPortalUserRequests}
                   onOpenControlPanel={() => setActivePage("control_panel")}
                   pageData={sharedPageData}
                 />
@@ -2266,6 +2905,9 @@ export default function App() {
                 loadingHistoryByUserId={loadingHistoryByUserId}
                 historyErrorByUserId={historyErrorByUserId}
                 breakLogsByUserId={breakLogsByUserId}
+                announcements={announcements}
+                loadingAnnouncements={loadingAnnouncements}
+                announcementsError={announcementsError}
                 viewerRole={user?.role || ""}
                 employeeProfilesByUserId={employeeProfilesByUserId}
                 attendanceResetTime={attendanceResetTime}
@@ -2352,6 +2994,7 @@ export default function App() {
                 employees={allEmployeesForSharedPages}
                 viewer={user}
                 assignments={assignments}
+                archivedAssignments={archivedAssignments}
                 loadingAssignments={loadingAssignments}
                 assignmentsError={assignmentsError}
                 employeeProfilesByUserId={employeeProfilesByUserId}
@@ -2359,6 +3002,8 @@ export default function App() {
                 onCreateAssignment={handleCreateAssignment}
                 onUpdateAssignment={handleUpdateAssignment}
                 onDeleteAssignment={handleDeleteAssignment}
+                onArchiveAssignment={handleArchiveAssignment}
+                onRepostAssignment={handleRepostAssignment}
                 onMarkAssignmentCompleted={handleMarkAssignmentCompleted}
                 onReviewAssignmentCompletion={handleReviewAssignmentCompletion}
                 onRequestAssignmentAccess={handleRequestAssignmentAccess}
@@ -2528,6 +3173,139 @@ export default function App() {
                 className="portal-dialog-btn portal-dialog-btn-dark"
               >
                 {savingAnnouncement ? "Posting..." : "Post Note"}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+
+      {showUserRequestModal && (
+        <>
+          <div
+            className="portal-modal-backdrop"
+            onClick={handleCloseUserRequestModal}
+          />
+
+          <form
+            onSubmit={handleSubmitPortalUserRequest}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="portal-user-request-title"
+            className="portal-dialog portal-dialog-user-request"
+          >
+            <h2 id="portal-user-request-title" className="portal-dialog-title portal-dialog-title-tight">
+              Request New User
+            </h2>
+
+            <p className="portal-dialog-subtext">
+              Submit the new user details. A Super Admin must approve this request before the account is created.
+            </p>
+
+            <div className="portal-user-request-grid">
+              <label className="portal-user-request-field">
+                <span className="portal-user-request-label">First name</span>
+                <input
+                  type="text"
+                  value={newUserRequestForm.firstName}
+                  onChange={(e) =>
+                    setNewUserRequestForm((prev) => ({
+                      ...prev,
+                      firstName: e.target.value,
+                    }))
+                  }
+                  className="portal-user-request-input"
+                  placeholder="Enter first name"
+                  required
+                />
+              </label>
+
+              <label className="portal-user-request-field">
+                <span className="portal-user-request-label">Last name</span>
+                <input
+                  type="text"
+                  value={newUserRequestForm.lastName}
+                  onChange={(e) =>
+                    setNewUserRequestForm((prev) => ({
+                      ...prev,
+                      lastName: e.target.value,
+                    }))
+                  }
+                  className="portal-user-request-input"
+                  placeholder="Enter last name"
+                  required
+                />
+              </label>
+            </div>
+
+            <label className="portal-user-request-field">
+              <span className="portal-user-request-label">Email</span>
+              <input
+                type="email"
+                value={newUserRequestForm.email}
+                onChange={(e) =>
+                  setNewUserRequestForm((prev) => ({
+                    ...prev,
+                    email: e.target.value,
+                  }))
+                }
+                className="portal-user-request-input"
+                placeholder="newuser@email.com"
+                required
+              />
+            </label>
+
+            <label className="portal-user-request-field">
+              <span className="portal-user-request-label">Role</span>
+              <select
+                value={newUserRequestForm.role}
+                onChange={(e) =>
+                  setNewUserRequestForm((prev) => ({
+                    ...prev,
+                    role: e.target.value,
+                  }))
+                }
+                className="portal-user-request-input"
+              >
+                {PORTAL_USER_REQUEST_ROLE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="portal-user-request-field">
+              <span className="portal-user-request-label">Note for Super Admin (optional)</span>
+              <textarea
+                value={newUserRequestForm.note}
+                onChange={(e) =>
+                  setNewUserRequestForm((prev) => ({
+                    ...prev,
+                    note: e.target.value,
+                  }))
+                }
+                rows={3}
+                className="portal-user-request-input portal-user-request-textarea"
+                placeholder="Why this user account is needed..."
+              />
+            </label>
+
+            <div className="portal-dialog-actions portal-dialog-actions-spaced">
+              <button
+                type="button"
+                onClick={handleCloseUserRequestModal}
+                disabled={requestingNewUser}
+                className="portal-dialog-btn portal-dialog-btn-cancel"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                disabled={requestingNewUser}
+                className="portal-dialog-btn portal-dialog-btn-dark"
+              >
+                {requestingNewUser ? "Submitting..." : "Submit Request"}
               </button>
             </div>
           </form>

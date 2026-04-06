@@ -6,6 +6,8 @@ import {
   serverTimestamp,
   Timestamp,
   doc,
+  query,
+  where,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { getBusinessDayKey } from "../utils/attendanceDate";
@@ -78,7 +80,9 @@ const normalizeYmd = (value) => {
 async function findExistingOverBreakByBreakLogId(breakLogId) {
   if (!breakLogId) return null;
 
-  const snap = await getDocs(collection(db, OVERBREAK_NOTES_COLLECTION));
+  const snap = await getDocs(
+    query(collection(db, OVERBREAK_NOTES_COLLECTION), where("breakLogId", "==", String(breakLogId)))
+  );
   const rows = snap.docs.map((d) => ({
     id: d.id,
     ...d.data(),
@@ -90,7 +94,9 @@ async function findExistingOverBreakByBreakLogId(breakLogId) {
 async function findExistingNotificationByBreakLogIdAndType(breakLogId, type) {
   if (!breakLogId || !type) return null;
 
-  const snap = await getDocs(collection(db, BREAK_NOTIFICATIONS_COLLECTION));
+  const snap = await getDocs(
+    query(collection(db, BREAK_NOTIFICATIONS_COLLECTION), where("breakLogId", "==", String(breakLogId)))
+  );
   const rows = snap.docs.map((d) => ({
     id: d.id,
     ...d.data(),
@@ -343,7 +349,9 @@ export async function getActiveBreakForUser(userId) {
   const uid = String(userId || "").trim();
   if (!uid) return null;
 
-  const snap = await getDocs(collection(db, BREAK_LOGS_COLLECTION));
+  const snap = await getDocs(
+    query(collection(db, BREAK_LOGS_COLLECTION), where("userId", "==", uid))
+  );
   const rows = snap.docs
     .map((row) => ({
       id: row.id,
@@ -376,7 +384,9 @@ export async function getBreakLogsForUserOnDate(userId, date = new Date()) {
   const start = startOfLocalDay(date).getTime();
   const end = endOfLocalDay(date).getTime();
 
-  const snap = await getDocs(collection(db, BREAK_LOGS_COLLECTION));
+  const snap = await getDocs(
+    query(collection(db, BREAK_LOGS_COLLECTION), where("userId", "==", uid))
+  );
 
   const rows = snap.docs
     .map((d) => ({
@@ -624,10 +634,15 @@ export async function getNotificationsForUser(user) {
     user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
   ).trim();
   const isAdminLike = role === "admin" || role === "super_admin" || role === "super admin";
+  const isSuperAdmin = role === "super_admin" || role === "super admin";
 
   if (!uid && !isAdminLike) return [];
 
-  const snap = await getDocs(collection(db, BREAK_NOTIFICATIONS_COLLECTION));
+  const snap = isAdminLike
+    ? await getDocs(collection(db, BREAK_NOTIFICATIONS_COLLECTION))
+    : await getDocs(
+      query(collection(db, BREAK_NOTIFICATIONS_COLLECTION), where("userId", "==", uid))
+    );
 
   const rows = snap.docs.map((d) => ({
     id: d.id,
@@ -635,8 +650,14 @@ export async function getNotificationsForUser(user) {
   }));
 
   const filtered = rows.filter((row) => {
-    const audience = String(row?.audience || "");
+    const audience = String(row?.audience || "").toLowerCase();
     const rowUserId = String(row?.userId || "");
+    const type = String(row?.type || "").toLowerCase();
+
+    if (type === "portal_user_request_pending") {
+      if (!isSuperAdmin) return false;
+      return rowUserId === uid || audience === "super_admin" || audience === "admin";
+    }
 
     if (isAdminLike) {
       return audience === "admin" || rowUserId === uid;
@@ -677,8 +698,23 @@ export async function markAllNotificationsRead(notificationIds = []) {
   await Promise.all(ids.map((id) => markNotificationRead(id)));
 }
 
-export async function getOverBreakNotes() {
-  const snap = await getDocs(collection(db, OVERBREAK_NOTES_COLLECTION));
+export async function getOverBreakNotes(user = null) {
+  const role = String(user?.role || "").toLowerCase();
+  const uid = String(
+    user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
+  ).trim();
+  const isPortalRole =
+    role === "super_admin" ||
+    role === "super admin" ||
+    role === "admin" ||
+    role === "accounting" ||
+    role === "visitor";
+
+  const snap = isPortalRole
+    ? await getDocs(collection(db, OVERBREAK_NOTES_COLLECTION))
+    : await getDocs(
+      query(collection(db, OVERBREAK_NOTES_COLLECTION), where("userId", "==", uid))
+    );
 
   const rows = snap.docs.map((d) => ({
     id: d.id,

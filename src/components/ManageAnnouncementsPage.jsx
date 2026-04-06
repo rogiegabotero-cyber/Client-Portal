@@ -98,6 +98,8 @@ export default function ManageAnnouncementsPage({
   const [repostingId, setRepostingId] = useState("");
   const [restoringId, setRestoringId] = useState("");
   const [hardDeletingId, setHardDeletingId] = useState("");
+  const [selectedSection, setSelectedSection] = useState("posted");
+  const [recycleDrawerOpen, setRecycleDrawerOpen] = useState(false);
   const [confirmState, setConfirmState] = useState({
     open: false,
     mode: "",
@@ -122,6 +124,19 @@ export default function ManageAnnouncementsPage({
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (!recycleDrawerOpen) return;
+
+    const handleEsc = (event) => {
+      if (event.key === "Escape") {
+        setRecycleDrawerOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [recycleDrawerOpen]);
 
   const allRows = useMemo(() => normalizeRows(announcementRows, nowMs), [announcementRows, nowMs]);
 
@@ -377,6 +392,71 @@ export default function ManageAnnouncementsPage({
     });
   };
 
+  const requestClearRecycleBin = () => {
+    setConfirmState({
+      open: true,
+      mode: "clear_bin",
+      row: null,
+    });
+  };
+
+  const clearRecycleBin = async () => {
+    if (!Array.isArray(recycleRows) || recycleRows.length === 0) {
+      onToast?.({
+        type: "warning",
+        title: "Recycle Bin Empty",
+        message: "There are no announcements to clear.",
+      });
+      return;
+    }
+
+    if (typeof onPermanentDeleteAnnouncement !== "function") {
+      onToast?.({
+        type: "error",
+        title: "Clear Failed",
+        message: "Permanent delete action is unavailable.",
+      });
+      return;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const row of recycleRows) {
+      try {
+        await onPermanentDeleteAnnouncement(row.id);
+        successCount += 1;
+      } catch (err) {
+        failCount += 1;
+        console.error("Failed to clear recycle bin item:", err);
+      }
+    }
+
+    if (failCount === 0) {
+      onToast?.({
+        type: "success",
+        title: "Recycle Bin Cleared",
+        message: "All announcements were permanently deleted.",
+      });
+      return;
+    }
+
+    if (successCount > 0) {
+      onToast?.({
+        type: "warning",
+        title: "Partially Cleared",
+        message: `${successCount} announcement(s) deleted, ${failCount} failed.`,
+      });
+      return;
+    }
+
+    onToast?.({
+      type: "error",
+      title: "Clear Failed",
+      message: "Could not clear recycle bin.",
+    });
+  };
+
   const closeConfirmDialog = () => {
     if (confirmBusy) return;
     setConfirmState({
@@ -405,6 +485,15 @@ export default function ManageAnnouncementsPage({
       };
     }
 
+    if (confirmState.mode === "clear_bin") {
+      return {
+        title: "Clear Recycle Bin?",
+        message: "This will permanently delete everything in recycle bin. This action cannot be undone.",
+        confirmText: "Delete All",
+        tone: "danger",
+      };
+    }
+
     return {
       title: "Confirm Action",
       message: "Are you sure you want to continue?",
@@ -415,13 +504,14 @@ export default function ManageAnnouncementsPage({
 
   const handleConfirmDialog = async () => {
     const row = confirmState.row;
-    if (!row) return;
 
     setConfirmBusy(true);
     try {
-      if (confirmState.mode === "move_to_bin") {
+      if (confirmState.mode === "clear_bin") {
+        await clearRecycleBin();
+      } else if (confirmState.mode === "move_to_bin" && row) {
         await moveAnnouncementToRecycleBin(row);
-      } else if (confirmState.mode === "delete_forever") {
+      } else if (confirmState.mode === "delete_forever" && row) {
         await permanentlyDeleteFromRecycleBin(row);
       }
     } finally {
@@ -579,68 +669,32 @@ export default function ManageAnnouncementsPage({
     </section>
   );
 
-  const renderRecycleBinSection = (rows) => (
-    <section className="ma-section">
-      <div className="ma-section-head">
-        <div className="ma-section-title">
-          <Trash2 size={16} />
-          <span>Recycle Bin</span>
-        </div>
-        <span className="ma-count">{rows.length}</span>
-      </div>
+  const renderSelectedSection = () => {
+    if (selectedSection === "scheduled") {
+      return renderSection(
+        "Scheduled to Post",
+        <Clock3 size={16} />,
+        scheduledRows,
+        "No scheduled announcements."
+      );
+    }
 
-      {rows.length === 0 ? (
-        <div className="ma-empty">Recycle bin is empty.</div>
-      ) : (
-        <div className="ma-list">
-          {rows.map((row) => {
-            const isRestoring = restoringId === row.id;
-            const isHardDeleting = hardDeletingId === row.id;
+    if (selectedSection === "expired") {
+      return renderSection(
+        "Expired Announcements",
+        <Archive size={16} />,
+        expiredRows,
+        "No expired announcements."
+      );
+    }
 
-            return (
-              <article key={row.id} className="ma-card recycle">
-                <div className="ma-card-top">
-                  <div className="ma-card-meta">
-                    <span className="ma-pill recycle">in bin</span>
-                    <span>By {row.createdBy}</span>
-                  </div>
-                  <div className="ma-card-time">
-                    <span>Deleted: {formatDateTime(row.deletedAtMs, businessTimeZone)}</span>
-                    <span>Deleted by: {row.deletedBy || "-"}</span>
-                  </div>
-                </div>
-
-                <div className="ma-headline">{row.headline || "Announcement"}</div>
-                <div className="ma-note">{row.note || "No note content."}</div>
-
-                <div className="ma-actions">
-                  <button
-                    type="button"
-                    className="ma-btn primary"
-                    onClick={() => restoreFromRecycleBin(row)}
-                    disabled={isRestoring || isHardDeleting}
-                  >
-                    <RotateCcw size={15} />
-                    <span>{isRestoring ? "Restoring..." : "Restore"}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="ma-btn danger"
-                    onClick={() => requestDeleteForeverFromRecycleBin(row)}
-                    disabled={isRestoring || isHardDeleting}
-                  >
-                    <Trash2 size={15} />
-                    <span>{isHardDeleting ? "Deleting..." : "Delete Forever"}</span>
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
+    return renderSection(
+      "Posted Announcements",
+      <PlayCircle size={16} />,
+      activeRows,
+      "No active announcements."
+    );
+  };
 
   return (
     <div className="ma-page">
@@ -664,28 +718,145 @@ export default function ManageAnnouncementsPage({
       {loadError ? <div className="ma-error">{loadError}</div> : null}
 
       <div className="ma-summary">
-        <div className="ma-summary-card">
+        <button
+          type="button"
+          className={`ma-summary-card ma-summary-card-button ${
+            selectedSection === "scheduled" ? "is-active" : ""
+          }`}
+          onClick={() => setSelectedSection("scheduled")}
+          aria-pressed={selectedSection === "scheduled"}
+        >
           <Clock3 size={16} />
           <span>Scheduled: {scheduledRows.length}</span>
-        </div>
-        <div className="ma-summary-card">
+        </button>
+        <button
+          type="button"
+          className={`ma-summary-card ma-summary-card-button ${
+            selectedSection === "posted" ? "is-active" : ""
+          }`}
+          onClick={() => setSelectedSection("posted")}
+          aria-pressed={selectedSection === "posted"}
+        >
           <PlayCircle size={16} />
           <span>Posted: {activeRows.length}</span>
-        </div>
-        <div className="ma-summary-card">
+        </button>
+        <button
+          type="button"
+          className={`ma-summary-card ma-summary-card-button ${
+            selectedSection === "expired" ? "is-active" : ""
+          }`}
+          onClick={() => setSelectedSection("expired")}
+          aria-pressed={selectedSection === "expired"}
+        >
           <Archive size={16} />
           <span>Expired: {expiredRows.length}</span>
-        </div>
-        <div className="ma-summary-card">
+        </button>
+        <button
+          type="button"
+          className="ma-summary-card ma-summary-card-button"
+          onClick={() => setRecycleDrawerOpen(true)}
+          aria-label="Open recycle bin"
+        >
           <Trash2 size={16} />
           <span>Recycle Bin: {recycleRows.length}</span>
-        </div>
+        </button>
       </div>
 
-      {renderSection("Scheduled to Post", <Clock3 size={16} />, scheduledRows, "No scheduled announcements.")}
-      {renderSection("Posted Announcements", <PlayCircle size={16} />, activeRows, "No active announcements.")}
-      {renderSection("Expired Announcements", <Archive size={16} />, expiredRows, "No expired announcements.")}
-      {renderRecycleBinSection(recycleRows)}
+      {renderSelectedSection()}
+
+      {recycleDrawerOpen ? (
+        <>
+          <button
+            type="button"
+            className="ma-recycle-drawer-backdrop"
+            onClick={() => setRecycleDrawerOpen(false)}
+            aria-label="Close recycle bin drawer"
+          />
+
+          <aside className="ma-recycle-drawer" role="dialog" aria-modal="true" aria-label="Recycle bin">
+            <div className="ma-recycle-drawer-head">
+              <div className="ma-section-title">
+                <Trash2 size={16} />
+                <span>Recycle Bin</span>
+              </div>
+              <button
+                type="button"
+                className="ma-recycle-drawer-close"
+                onClick={() => setRecycleDrawerOpen(false)}
+                aria-label="Close recycle bin drawer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="ma-recycle-drawer-body">
+              <div className="ma-recycle-toolbar">
+                <span>{recycleRows.length} item(s) in recycle bin</span>
+                <button
+                  type="button"
+                  className="ma-btn danger ma-recycle-delete-all-btn"
+                  onClick={requestClearRecycleBin}
+                  disabled={recycleRows.length === 0 || confirmBusy}
+                >
+                  <Trash2 size={15} />
+                  <span>Delete All</span>
+                </button>
+              </div>
+
+              {recycleRows.length === 0 ? (
+                <div className="ma-empty">Recycle bin is empty.</div>
+              ) : (
+                <div className="ma-list">
+                  {recycleRows.map((row) => {
+                    const isRestoring = restoringId === row.id;
+                    const isHardDeleting = hardDeletingId === row.id;
+
+                    return (
+                      <article key={row.id} className="ma-card recycle">
+                        <div className="ma-card-top">
+                          <div className="ma-card-meta">
+                            <span className="ma-pill recycle">in bin</span>
+                            <span>By {row.createdBy}</span>
+                          </div>
+                          <div className="ma-card-time">
+                            <span>Deleted: {formatDateTime(row.deletedAtMs, businessTimeZone)}</span>
+                            <span>Deleted by: {row.deletedBy || "-"}</span>
+                          </div>
+                        </div>
+
+                        <div className="ma-headline">{row.headline || "Announcement"}</div>
+                        <div className="ma-note">{row.note || "No note content."}</div>
+
+                        <div className="ma-actions">
+                          <button
+                            type="button"
+                            className="ma-btn primary"
+                            onClick={() => restoreFromRecycleBin(row)}
+                            disabled={isRestoring || isHardDeleting}
+                          >
+                            <RotateCcw size={15} />
+                            <span>{isRestoring ? "Restoring..." : "Restore"}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="ma-btn danger"
+                            onClick={() => requestDeleteForeverFromRecycleBin(row)}
+                            disabled={isRestoring || isHardDeleting}
+                          >
+                            <Trash2 size={15} />
+                            <span>{isHardDeleting ? "Deleting..." : "Delete Forever"}</span>
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </aside>
+        </>
+      ) : null}
 
       <ConfirmModal
         open={confirmState.open}

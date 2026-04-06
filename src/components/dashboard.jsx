@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./dashboard.css";
+import { flushSync } from "react-dom";
 import { getBusinessDayKey } from "../utils/attendanceDate";
 import { getBreakLogsByUserIdsInRange } from "../services/breakService";
 import { getDisplayName, getUserId, pick, safeLower } from "../utils/common";
@@ -21,6 +22,7 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
+  LabelList,
   LineChart,
   Line,
   XAxis,
@@ -36,6 +38,11 @@ const shortAgentLabel = (name) => {
   if (!raw) return "-";
   const first = raw.split(/\s+/)[0] || raw;
   return first.length > 12 ? `${first.slice(0, 11)}.` : first;
+};
+
+const formatHoursValue = (value) => {
+  const hours = Number(value);
+  return Number.isFinite(hours) ? hours.toFixed(2) : "0.00";
 };
 
 const isValidTs = (log) => Number.isFinite(tsMs(pickTs(log))) || Number.isFinite(tsMs(pickOutTs(log)));
@@ -169,6 +176,32 @@ const enumerateYmdRange = (startYmd, endYmd) => {
   return out;
 };
 
+const normalizeYmdRange = (startYmd, endYmd, fallbackYmd = "") => {
+  const isValidYmd = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+
+  const fallback = isValidYmd(fallbackYmd) ? String(fallbackYmd) : "";
+  let start = isValidYmd(startYmd) ? String(startYmd) : "";
+  let end = isValidYmd(endYmd) ? String(endYmd) : "";
+
+  if (!start && !end) {
+    return { start: fallback, end: fallback };
+  }
+  if (!start) start = end;
+  if (!end) end = start;
+  if (!start || !end) return { start: "", end: "" };
+  if (start <= end) return { start, end };
+  return { start: end, end: start };
+};
+
+const countInclusiveDaysInYmdRange = (startYmd, endYmd) => {
+  const start = parseYmdToUtcNoon(startYmd);
+  const end = parseYmdToUtcNoon(endYmd);
+  if (!start || !end) return 0;
+  const diffMs = end.getTime() - start.getTime();
+  if (!Number.isFinite(diffMs) || diffMs < 0) return 0;
+  return Math.floor(diffMs / 86400000) + 1;
+};
+
 const addDaysYmd = (ymd, deltaDays) => {
   const d = parseYmdToUtcNoon(ymd);
   if (!d) return ymd;
@@ -213,6 +246,121 @@ const prettyDayLabel = (ymd) => {
   const d = new Date(`${ymd}T12:00:00Z`);
   if (Number.isNaN(d.getTime())) return ymd;
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
+};
+
+const sanitizeFileNameSegment = (value, fallback = "") => {
+  const cleaned = String(value || "")
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || fallback;
+};
+
+const extractDepartmentName = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const match = raw.match(/^dept_(.+)_\d+$/i);
+  if (match && match[1]) {
+    return String(match[1]).trim();
+  }
+
+  return raw;
+};
+
+const WEEKDAY_LABELS_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const shortWeekdayLabelFromYmd = (ymd) => {
+  const d = parseYmdToUtcNoon(ymd);
+  if (!d) return "-";
+  return WEEKDAY_LABELS_SHORT[d.getUTCDay()] || "-";
+};
+
+const ATTENDANCE_NOTE_KEYS = [
+  "notes",
+  "note",
+  "attendanceNotes",
+  "attendanceNote",
+  "comment",
+  "comments",
+  "remarks",
+  "remark",
+  "reason",
+  "details",
+  "description",
+];
+
+const getAttendanceNoteFromLog = (log) => {
+  const statusText = String(
+    pick(log || {}, ["status", "attendanceStatus", "dailyStatus", "remark"], "")
+  ).trim();
+  const rawNoteText = String(pick(log || {}, ATTENDANCE_NOTE_KEYS, "") || "").trim();
+  if (!rawNoteText) return "";
+  if (rawNoteText.toLowerCase() === statusText.toLowerCase()) return "";
+  return rawNoteText;
+};
+
+const getAttendanceNotesFromDayLogs = (dayLogs = []) => {
+  const logs = Array.isArray(dayLogs) ? [...dayLogs] : [];
+  if (!logs.length) return "";
+
+  logs.sort((a, b) => eventTsMsFromLog(b) - eventTsMsFromLog(a));
+
+  const seen = new Set();
+  const notes = [];
+
+  for (const log of logs) {
+    const note = getAttendanceNoteFromLog(log);
+    if (!note) continue;
+    const key = note.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    notes.push(note);
+  }
+
+  return notes.join(" | ");
+};
+
+const getRawAttendanceStatus = (log) =>
+  safeLower(
+    pick(log || {}, ["status", "attendanceStatus", "dailyStatus", "remark"], "")
+  ).trim();
+
+const getAttendanceLogDedupeKey = (log = {}) => {
+  const explicitId = String(
+    pick(log || {}, ["id", "_id", "logId", "attendanceLogId"], "")
+  ).trim();
+  if (explicitId) return `id:${explicitId}`;
+
+  const inTs = String(pickTs(log) || "").trim();
+  const outTs = String(pickOutTs(log) || "").trim();
+  const type = safeLower(pick(log || {}, ["type", "logType", "eventType"], "")).trim();
+  const status = getRawAttendanceStatus(log);
+  const userId = String(
+    pick(log || {}, ["userId", "employeeUserId", "uid", "employeeId"], "")
+  ).trim();
+  const fallback = `${userId}|${inTs}|${outTs}|${type}|${status}`;
+  if (fallback.replace(/\|/g, "").trim()) return fallback;
+
+  return `json:${JSON.stringify(log || {})}`;
+};
+
+const mergeAttendanceLogs = (...logLists) => {
+  const merged = [];
+  const seen = new Set();
+
+  for (const list of logLists) {
+    if (!Array.isArray(list)) continue;
+    for (const log of list) {
+      if (!log || typeof log !== "object") continue;
+      const key = getAttendanceLogDedupeKey(log);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(log);
+    }
+  }
+
+  return merged;
 };
 
 const enumerateMonthKeys = (startMonthKey, endMonthKey) => {
@@ -367,30 +515,24 @@ const resolveDailyStatus = ({
   const hasLogs = logs.length > 0;
 
   if (hasLogs) {
-    if (logs.some((l) => safeLower(pick(l, ["status"], "")).includes("no schedule"))) {
+    const statuses = logs.map((log) => getRawAttendanceStatus(log)).filter(Boolean);
+
+    if (statuses.some((s) => s.includes("no schedule"))) {
       return "No Schedule";
+    }
+    if (statuses.some((s) => s === "ncns" || s.includes("no show"))) {
+      return "No Show";
     }
 
     const hasOut = logs.some((l) => isClockedOutLog(l));
     const hasIn = logs.some((l) => isIn(l));
 
     if (hasOut) return "Completed";
+    if (statuses.some((s) => s.includes("on break"))) return "On Break";
+    if (hasIn || statuses.some((s) => s.includes("live"))) return "Live";
 
-    if (hasIn && !hasOut) {
-      const schedItem = getScheduleItemForDay(schedulesByUserId, userId, dayKey);
-      const schedEndMs = resolveScheduledEndUtcMsForDayKey(schedItem, dayKey, businessTimeZone);
-
-      const todayKey = String(endDate || "");
-      const endOfDayMs = new Date(`${dayKey}T23:59:59.999Z`).getTime();
-      const referenceNow = dayKey === todayKey ? nowMs : endOfDayMs;
-
-      const GRACE_MS = 10 * 60 * 1000;
-
-      if (Number.isFinite(schedEndMs) && referenceNow > schedEndMs + GRACE_MS) {
-        return "Completed";
-      }
-
-      return "Live";
+    if (statuses.some((s) => s.includes("scheduled"))) {
+      return "Scheduled";
     }
 
     return "No Log";
@@ -415,7 +557,7 @@ const resolveDailyStatus = ({
 };
 
 /* ------------------------ payable hours helpers ------------------------ */
-const computeWorkedMinutesForDay = (logs, liveNowMs = null) => {
+const computeWorkedMinutesForDay = (logs, liveNowMs = null, { applyDiff = true } = {}) => {
   const arr = Array.isArray(logs) ? logs : [];
   if (!arr.length) return null;
 
@@ -446,6 +588,7 @@ const computeWorkedMinutesForDay = (logs, liveNowMs = null) => {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
 
   const totalMinutesBetweenInOut = Math.round((end - start) / 60000);
+  if (!applyDiff) return totalMinutesBetweenInOut;
 
   const diffRaw = getDiffRawFromLogs(sorted);
   const diffMinutes = Number(diffRaw);
@@ -465,6 +608,7 @@ const computeWorkedMinutesForDay = (logs, liveNowMs = null) => {
 };
 
 const MAX_NO_SCHEDULE_MINUTES_PER_DAY = 10 * 60;
+const EARLY_CLOCK_OUT_GRACE_MINUTES = 10;
 
 const computePayableMinutesForDay = ({
   dayLogs = [],
@@ -481,10 +625,12 @@ const computePayableMinutesForDay = ({
   const hasNoScheduleLog = logs.some((log) =>
     safeLower(pick(log, ["status"], "")).includes("no schedule")
   );
+  const liveNowForDay =
+    String(dayKey) === String(endDate || "") ? nowMs : null;
 
   const workedMinutes = computeWorkedMinutesForDay(
     logs,
-    String(dayKey) === String(endDate || "") ? nowMs : null
+    liveNowForDay
   );
 
   if (!Number.isFinite(workedMinutes) || workedMinutes <= 0) return null;
@@ -501,7 +647,14 @@ const computePayableMinutesForDay = ({
   );
 
   if (Number.isFinite(scheduledMinutes) && scheduledMinutes > 0) {
-    return Math.min(workedMinutes, scheduledMinutes);
+    const cappedWorkedMinutes = Math.min(workedMinutes, scheduledMinutes);
+    const minutesShort = scheduledMinutes - cappedWorkedMinutes;
+
+    if (minutesShort >= 0 && minutesShort <= EARLY_CLOCK_OUT_GRACE_MINUTES) {
+      return scheduledMinutes;
+    }
+
+    return cappedWorkedMinutes;
   }
 
   return workedMinutes;
@@ -626,6 +779,7 @@ const ATTENDANCE_SCORE_WEIGHTS = {
 };
 const ATTENDANCE_SCORE_BEST_DAY_POINTS = 1.2;
 const AGENT_ATTENDANCE_MONTH_ALL = "ALL";
+const PAYABLE_MONTH_SELECT_NONE = "";
 
 const SUMMARY_ROWS_PREVIEW = 20;
 const AGENT_DONUTS_PREVIEW = 24;
@@ -787,7 +941,7 @@ const PayableHoursTooltip = ({ active, payload, label }) => {
         {label}
       </div>
       <div className="dashTooltipLine">
-        Payable Hours: <strong>{Number(row.hours || 0).toFixed(2)}</strong>
+        Payable Hours: <strong>{formatHoursValue(row.hours)}</strong>
       </div>
       <div className="dashTooltipLine">
         Completed Duties: <strong>{Number(row.completedCount || 0)}</strong>
@@ -814,6 +968,9 @@ export default function Dashboard({
   loadingHistoryByUserId = {},
   historyErrorByUserId = {},
   breakLogsByUserId = {},
+  announcements = [],
+  loadingAnnouncements = false,
+  announcementsError = "",
   viewerRole = "",
   employeeProfilesByUserId = {},
   attendanceResetTime = "05:00",
@@ -824,16 +981,28 @@ export default function Dashboard({
   const [selectedPerfUserId, setSelectedPerfUserId] = useState("");
   const [payableGraphWindow, setPayableGraphWindow] = useState("week");
   const [payableGraphUserId, setPayableGraphUserId] = useState("ALL");
+  const [payableDisplayMode, setPayableDisplayMode] = useState("graph");
+  const [payableCustomStartDate, setPayableCustomStartDate] = useState(() =>
+    firstDayOfMonthYmd(String(endDate || ""))
+  );
+  const [payableCustomEndDate, setPayableCustomEndDate] = useState(() => String(endDate || ""));
+  const [selectedPayableMonth, setSelectedPayableMonth] = useState(() =>
+    monthKeyFromYmd(endDate || "")
+  );
   const [selectedAgentAttendanceMonth, setSelectedAgentAttendanceMonth] = useState(() =>
     monthKeyFromYmd(endDate || "")
   );
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printChartSize, setPrintChartSize] = useState({ width: 900, height: 330 });
   const [showAllSummaryRows, setShowAllSummaryRows] = useState(false);
   const [showAllAgentRates, setShowAllAgentRates] = useState(false);
   const attendancePieRef = useRef(null);
   const attendanceHoleRef = useRef(null);
   const pieTooltipRef = useRef(null);
+  const payableChartWrapRef = useRef(null);
   const agentDonutRefs = useRef(new Map());
   const requestedAllHistoryRef = useRef(new Set());
+  const originalDocumentTitleRef = useRef("");
   const breakRangeRequestRef = useRef(0);
   const breakRangeCacheRef = useRef(new Map());
   const [rangeBreakLogsByUserId, setRangeBreakLogsByUserId] = useState({});
@@ -851,13 +1020,97 @@ export default function Dashboard({
 
   const normalizedViewerRole = safeLower(viewerRole);
   const canViewBreakLog =
-    normalizedViewerRole === "admin" || normalizedViewerRole === "super_admin";
+    normalizedViewerRole === "admin" ||
+    normalizedViewerRole === "super_admin" ||
+    normalizedViewerRole === "super admin" ||
+    normalizedViewerRole === "accounting";
+  const canViewPayablePanel =
+    normalizedViewerRole !== "visitor" && normalizedViewerRole !== "visitors";
 
   useEffect(() => {
     const id = requestAnimationFrame(() => {
       setChartReady(true);
     });
     return () => cancelAnimationFrame(id);
+  }, []);
+
+  const measurePayableChartForPrint = () => {
+    const node = payableChartWrapRef.current;
+    if (!node) return { width: 900, height: 330 };
+
+    const rect = typeof node.getBoundingClientRect === "function" ? node.getBoundingClientRect() : null;
+    const widthRaw = Number(rect?.width || node.offsetWidth || 0);
+    const heightRaw = Number(rect?.height || node.offsetHeight || 0);
+
+    const width = Math.max(640, Math.floor(widthRaw || 0));
+    const height = Math.max(220, Math.floor(heightRaw || 0));
+
+    setPrintChartSize((prev) =>
+      prev.width === width && prev.height === height ? prev : { width, height }
+    );
+
+    return { width, height };
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const restoreDocumentTitle = () => {
+      if (typeof document === "undefined") return;
+      if (!originalDocumentTitleRef.current) return;
+      document.title = originalDocumentTitleRef.current;
+      originalDocumentTitleRef.current = "";
+    };
+
+    const handleBeforePrint = () => {
+      flushSync(() => {
+        measurePayableChartForPrint();
+        setIsPrinting(true);
+      });
+    };
+    const handleAfterPrint = () => {
+      setIsPrinting(false);
+      restoreDocumentTitle();
+    };
+
+    window.addEventListener("beforeprint", handleBeforePrint);
+    window.addEventListener("afterprint", handleAfterPrint);
+
+    const mediaQuery =
+      typeof window.matchMedia === "function" ? window.matchMedia("print") : null;
+    const handleMediaQueryChange = (event) => {
+      const matches = !!event?.matches;
+      if (matches) {
+        flushSync(() => {
+          measurePayableChartForPrint();
+          setIsPrinting(true);
+        });
+        return;
+      }
+      setIsPrinting(false);
+      restoreDocumentTitle();
+    };
+
+    if (mediaQuery) {
+      if (typeof mediaQuery.addEventListener === "function") {
+        mediaQuery.addEventListener("change", handleMediaQueryChange);
+      } else if (typeof mediaQuery.addListener === "function") {
+        mediaQuery.addListener(handleMediaQueryChange);
+      }
+    }
+
+    return () => {
+      window.removeEventListener("beforeprint", handleBeforePrint);
+      window.removeEventListener("afterprint", handleAfterPrint);
+      if (mediaQuery) {
+        if (typeof mediaQuery.removeEventListener === "function") {
+          mediaQuery.removeEventListener("change", handleMediaQueryChange);
+        } else if (typeof mediaQuery.removeListener === "function") {
+          mediaQuery.removeListener(handleMediaQueryChange);
+        }
+      }
+      restoreDocumentTitle();
+    };
   }, []);
 
   const setHoursWindowAndCollapseLists = (nextWindow) => {
@@ -876,6 +1129,141 @@ export default function Dashboard({
     () => (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e)),
     [employees]
   );
+
+  const defaultPayableCustomStartDate = useMemo(() => {
+    const currentEnd = String(endDate || "");
+    return currentEnd ? firstDayOfMonthYmd(currentEnd) : "";
+  }, [endDate]);
+
+  const defaultPayableCustomEndDate = useMemo(() => String(endDate || ""), [endDate]);
+
+  const effectivePayableCustomStartDate = useMemo(() => {
+    const current = String(payableCustomStartDate || "");
+    return /^\d{4}-\d{2}-\d{2}$/.test(current)
+      ? current
+      : defaultPayableCustomStartDate;
+  }, [payableCustomStartDate, defaultPayableCustomStartDate]);
+
+  const effectivePayableCustomEndDate = useMemo(() => {
+    const current = String(payableCustomEndDate || "");
+    return /^\d{4}-\d{2}-\d{2}$/.test(current)
+      ? current
+      : defaultPayableCustomEndDate;
+  }, [payableCustomEndDate, defaultPayableCustomEndDate]);
+
+  const availablePayableMonths = useMemo(() => {
+    const months = new Set();
+    const appendMonth = (monthKey) => {
+      if (/^\d{4}-\d{2}$/.test(String(monthKey || ""))) {
+        months.add(String(monthKey));
+      }
+    };
+
+    appendMonth(monthKeyFromYmd(endDate || ""));
+
+    const targetEmployees =
+      payableGraphUserId === "ALL"
+        ? validEmployees
+        : validEmployees.filter((emp) => String(getUserId(emp)) === String(payableGraphUserId));
+
+    for (const emp of targetEmployees) {
+      const userId = String(getUserId(emp));
+      const rangeLogs = Array.isArray(logsByUserId?.[userId]) ? logsByUserId[userId] : [];
+      const historyLogs = Array.isArray(historyByUserId?.[userId]) ? historyByUserId[userId] : [];
+      const sourceLogs = historyLogs.length ? historyLogs : rangeLogs;
+
+      for (const log of sourceLogs) {
+        const inMs = tsMs(pickTs(log));
+        const outMs = tsMs(pickOutTs(log));
+        const baseTs = Number.isFinite(inMs) ? inMs : outMs;
+        if (!Number.isFinite(baseTs)) continue;
+
+        const dayKey = getBusinessDayKey(baseTs, attendanceResetTime, businessTimeZone);
+        appendMonth(monthKeyFromYmd(dayKey));
+      }
+    }
+
+    return Array.from(months).sort((a, b) => b.localeCompare(a));
+  }, [
+    payableGraphUserId,
+    validEmployees,
+    logsByUserId,
+    historyByUserId,
+    endDate,
+    attendanceResetTime,
+    businessTimeZone,
+  ]);
+
+  const effectiveSelectedPayableMonth = useMemo(() => {
+    if (
+      /^\d{4}-\d{2}$/.test(String(selectedPayableMonth || "")) &&
+      availablePayableMonths.includes(String(selectedPayableMonth))
+    ) {
+      return String(selectedPayableMonth);
+    }
+    if (availablePayableMonths.length) return availablePayableMonths[0];
+    const fallback = monthKeyFromYmd(endDate || "");
+    return /^\d{4}-\d{2}$/.test(fallback) ? fallback : PAYABLE_MONTH_SELECT_NONE;
+  }, [availablePayableMonths, selectedPayableMonth, endDate]);
+
+  const payableMonthOptions = useMemo(() => {
+    if (availablePayableMonths.length) return availablePayableMonths;
+    return /^\d{4}-\d{2}$/.test(effectiveSelectedPayableMonth)
+      ? [effectiveSelectedPayableMonth]
+      : [];
+  }, [availablePayableMonths, effectiveSelectedPayableMonth]);
+
+  const payableYearOptions = useMemo(() => {
+    const years = new Set();
+    for (const monthKey of payableMonthOptions) {
+      const year = String(monthKey || "").slice(0, 4);
+      if (/^\d{4}$/.test(year)) years.add(year);
+    }
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [payableMonthOptions]);
+
+  const effectiveSelectedPayableYear = useMemo(() => {
+    const fromMonth = String(effectiveSelectedPayableMonth || "").slice(0, 4);
+    if (/^\d{4}$/.test(fromMonth)) return fromMonth;
+    if (payableYearOptions.length) return payableYearOptions[0];
+
+    const fallbackYear = String(endDate || "").slice(0, 4);
+    return /^\d{4}$/.test(fallbackYear) ? fallbackYear : "";
+  }, [effectiveSelectedPayableMonth, payableYearOptions, endDate]);
+
+  const handlePayableMonthSelect = (monthKey) => {
+    const value = String(monthKey || "");
+    setSelectedPayableMonth(value);
+    if (!/^\d{4}-\d{2}$/.test(value)) return;
+
+    const monthStart = `${value}-01`;
+    const activeEndDate = String(endDate || "");
+    const activeEndMonth = monthKeyFromYmd(activeEndDate);
+    const monthEnd =
+      value === activeEndMonth && activeEndDate
+        ? activeEndDate
+        : lastDayOfMonthYmd(monthStart);
+
+    setPayableCustomStartDate(monthStart);
+    setPayableCustomEndDate(monthEnd);
+    setPayableGraphWindow("custom");
+  };
+
+  const handlePayableYearSelect = (yearValue) => {
+    const year = String(yearValue || "");
+    if (!/^\d{4}$/.test(year)) return;
+
+    const yearMonths = payableMonthOptions.filter((monthKey) =>
+      String(monthKey).startsWith(`${year}-`)
+    );
+
+    if (yearMonths.length) {
+      handlePayableMonthSelect(yearMonths[0]);
+      return;
+    }
+
+    handlePayableMonthSelect(`${year}-01`);
+  };
 
   const effectiveSelectedPerfUserId = useMemo(() => {
     if (!validEmployees.length) return "";
@@ -1173,6 +1561,12 @@ export default function Dashboard({
   useEffect(() => {
     if (!onFetchFullHistory || !validEmployees.length) return;
 
+    const customRange = normalizeYmdRange(
+      effectivePayableCustomStartDate,
+      effectivePayableCustomEndDate,
+      String(endDate || "")
+    );
+    const customNeedDays = Math.max(1, countInclusiveDaysInYmdRange(customRange.start, customRange.end));
     const needDays =
       payableGraphWindow === "day"
         ? 1
@@ -1182,9 +1576,19 @@ export default function Dashboard({
             ? 16
             : payableGraphWindow === "month"
               ? 31
+              : payableGraphWindow === "custom"
+                ? customNeedDays
               : Infinity;
 
-    const needHistory = payableGraphWindow === "all" || Number(rangeDays) < needDays;
+    const customNeedsOlderHistory =
+      payableGraphWindow === "custom" &&
+      customRange.start &&
+      /^\d{4}-\d{2}-\d{2}$/.test(String(startDate || "")) &&
+      customRange.start < String(startDate);
+    const needHistory =
+      payableGraphWindow === "all" ||
+      customNeedsOlderHistory ||
+      Number(rangeDays) < needDays;
     if (!needHistory) return;
 
     const targetEmployees =
@@ -1206,6 +1610,10 @@ export default function Dashboard({
     loadingHistoryByUserId,
     onFetchFullHistory,
     rangeDays,
+    startDate,
+    endDate,
+    effectivePayableCustomStartDate,
+    effectivePayableCustomEndDate,
   ]);
 
   const attendanceContextByUserId = useMemo(() => {
@@ -1217,7 +1625,7 @@ export default function Dashboard({
 
       const rangeLogs = Array.isArray(logsByUserId?.[userId]) ? logsByUserId[userId] : [];
       const histLogs = Array.isArray(historyByUserId?.[userId]) ? historyByUserId[userId] : [];
-      const logsForAttendance = histLogs.length ? histLogs : rangeLogs;
+      const logsForAttendance = mergeAttendanceLogs(rangeLogs, histLogs);
       const byDay = buildByDayMap(logsForAttendance, attendanceResetTime, businessTimeZone);
 
       ctx[userId] = {
@@ -1278,7 +1686,7 @@ export default function Dashboard({
     for (const r of rows) {
       const s = safeLower(r.status);
       if (s === "completed") counts.completed += 1;
-      else if (s === "live") counts.live += 1;
+      else if (s === "live" || s === "on break") counts.live += 1;
       else if (s === "no show") counts.noShow += 1;
       else if (s === "scheduled") counts.scheduled += 1;
       else if (s === "day off") counts.dayOff += 1;
@@ -1326,7 +1734,7 @@ export default function Dashboard({
     }
     if (!availableAgentAttendanceMonths.length) return AGENT_ATTENDANCE_MONTH_ALL;
     return availableAgentAttendanceMonths[0];
-  }, [availableAgentAttendanceMonths, selectedAgentAttendanceMonth, endDate]);
+  }, [availableAgentAttendanceMonths, selectedAgentAttendanceMonth]);
 
   const agentAttendanceDayKeys = useMemo(() => {
     if (effectiveSelectedAgentAttendanceMonth === AGENT_ATTENDANCE_MONTH_ALL) {
@@ -1761,12 +2169,37 @@ export default function Dashboard({
     }
 
     if (payableGraphWindow === "month") {
-      const start = firstDayOfMonthYmd(end);
+      const monthKey =
+        /^\d{4}-\d{2}$/.test(String(effectiveSelectedPayableMonth || ""))
+          ? String(effectiveSelectedPayableMonth)
+          : monthKeyFromYmd(end);
+      const start = `${monthKey}-01`;
+      const monthEnd =
+        monthKey === monthKeyFromYmd(end) ? end : lastDayOfMonthYmd(start);
       return {
-        label: "Monthly",
+        label: `Month (${prettyMonthLabel(monthKey)})`,
         start,
-        end,
-        dayKeys: enumerateYmdRange(start, end),
+        end: monthEnd,
+        dayKeys: enumerateYmdRange(start, monthEnd),
+        isMonthly: false,
+        monthKeys: [],
+      };
+    }
+
+    if (payableGraphWindow === "custom") {
+      const customRange = normalizeYmdRange(
+        effectivePayableCustomStartDate,
+        effectivePayableCustomEndDate,
+        end
+      );
+      return {
+        label: "Custom Range",
+        start: customRange.start,
+        end: customRange.end,
+        dayKeys:
+          customRange.start && customRange.end
+            ? enumerateYmdRange(customRange.start, customRange.end)
+            : [],
         isMonthly: false,
         monthKeys: [],
       };
@@ -1802,6 +2235,9 @@ export default function Dashboard({
     payableGraphWindow,
     payableGraphUserId,
     endDate,
+    effectiveSelectedPayableMonth,
+    effectivePayableCustomStartDate,
+    effectivePayableCustomEndDate,
     validEmployees,
     historyByUserId,
     logsByUserId,
@@ -1833,6 +2269,7 @@ export default function Dashboard({
 
       return {
         userId,
+        employeeName: getDisplayName(emp),
         employeeStartDateYmd,
         byDay: buildByDayMap(logsForHours, attendanceResetTime, businessTimeZone),
       };
@@ -1841,6 +2278,7 @@ export default function Dashboard({
     const computeDayTotals = (dayKey) => {
       let totalMinutes = 0;
       let completedCount = 0;
+      const detailRows = [];
 
       for (const ctx of employeeContexts) {
         if (ctx.employeeStartDateYmd && String(dayKey) < String(ctx.employeeStartDateYmd)) {
@@ -1863,20 +2301,35 @@ export default function Dashboard({
         if (Number.isFinite(payableMinutes) && payableMinutes > 0) {
           totalMinutes += payableMinutes;
           completedCount += 1;
+          detailRows.push({
+            dayKey,
+            dayShort: shortWeekdayLabelFromYmd(dayKey),
+            attendanceNote: getAttendanceNotesFromDayLogs(dayLogs),
+            userId: ctx.userId,
+            employeeName: ctx.employeeName,
+            hours: payableMinutes / 60,
+          });
         }
       }
 
-      return { totalMinutes, completedCount };
+      return { totalMinutes, completedCount, detailRows };
     };
+
+    const sortPrintRows = (rows = []) =>
+      [...rows].sort(
+        (a, b) =>
+          String(a.dayKey || "").localeCompare(String(b.dayKey || "")) ||
+          String(a.employeeName || "").localeCompare(String(b.employeeName || ""))
+      );
 
     if (payableGraphPeriod.isMonthly) {
       const endMonthKey = monthKeyFromYmd(payableGraphPeriod.end);
+      const monthPrintRows = [];
 
       const monthRows = payableGraphPeriod.monthKeys.map((monthKey) => {
         const monthStart = `${monthKey}-01`;
-        const monthEnd = monthKey === endMonthKey
-          ? payableGraphPeriod.end
-          : lastDayOfMonthYmd(monthStart);
+        const monthEnd =
+          monthKey === endMonthKey ? payableGraphPeriod.end : lastDayOfMonthYmd(monthStart);
         const monthDays = enumerateYmdRange(monthStart, monthEnd);
 
         let totalMinutes = 0;
@@ -1886,6 +2339,14 @@ export default function Dashboard({
           const dayTotals = computeDayTotals(dayKey);
           totalMinutes += dayTotals.totalMinutes;
           completedCount += dayTotals.completedCount;
+          if (dayTotals.detailRows.length) {
+            monthPrintRows.push(
+              ...dayTotals.detailRows.map((detailRow) => ({
+                ...detailRow,
+                monthKey,
+              }))
+            );
+          }
         }
 
         return {
@@ -1924,6 +2385,7 @@ export default function Dashboard({
 
       return {
         rows: filteredRowsForDisplay,
+        printRows: sortPrintRows(monthPrintRows),
         totalHours,
         totalCompleted,
         label: payableGraphPeriod.label,
@@ -1936,8 +2398,12 @@ export default function Dashboard({
       };
     }
 
+    const dayPrintRows = [];
     const dayRows = payableGraphPeriod.dayKeys.map((dayKey) => {
       const dayTotals = computeDayTotals(dayKey);
+      if (dayTotals.detailRows.length) {
+        dayPrintRows.push(...dayTotals.detailRows);
+      }
 
       return {
         dayKey,
@@ -1964,9 +2430,12 @@ export default function Dashboard({
       (sum, row) => sum + Number(row.completedCount || 0),
       0
     );
+    const visibleDayKeys = new Set(filteredRowsForDisplay.map((row) => row.dayKey));
+    const filteredPrintRows = dayPrintRows.filter((row) => visibleDayKeys.has(row.dayKey));
 
     return {
       rows: filteredRowsForDisplay,
+      printRows: sortPrintRows(filteredPrintRows),
       totalHours,
       totalCompleted,
       label: payableGraphPeriod.label,
@@ -2110,6 +2579,63 @@ export default function Dashboard({
     return "No break logs for all time";
   }, [hoursWindow]);
 
+  const sidebarAnnouncements = useMemo(() => {
+    const rows = Array.isArray(announcements) ? announcements : [];
+    const nowForWindowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+
+    const list = rows
+      .map((item) => {
+        const text = String(
+          pick(item, ["note", "announcement", "announcementNote", "message", "text"], "")
+        ).trim();
+        if (!text) return null;
+
+        const headline = String(pick(item, ["headline", "title", "subject"], "")).trim() || "Announcement";
+        const createdAtMs = toMillisFromFirestoreValue(item?.createdAt);
+        const publishAtMs = toMillisFromFirestoreValue(item?.publishAt);
+        const expiresAtMs = toMillisFromFirestoreValue(item?.expiresAt);
+        const deletedAtMs = toMillisFromFirestoreValue(item?.deletedAt);
+
+        if (Number.isFinite(deletedAtMs)) return null;
+        if (Number.isFinite(publishAtMs) && nowForWindowMs < publishAtMs) return null;
+        if (Number.isFinite(expiresAtMs) && nowForWindowMs > expiresAtMs) return null;
+
+        const postedAtMs =
+          Number.isFinite(publishAtMs) ? publishAtMs : Number.isFinite(createdAtMs) ? createdAtMs : NaN;
+        const preview =
+          text.length > 140 ? `${text.slice(0, 140).trimEnd()}...` : text;
+
+        return {
+          id:
+            String(item?.id || "").trim() ||
+            `${headline}-${String(item?.createdByUserId || "").trim()}-${Number.isFinite(postedAtMs) ? postedAtMs : "now"}`,
+          headline,
+          preview,
+          postedAtMs,
+        };
+      })
+      .filter(Boolean);
+
+    list.sort((a, b) => {
+      const aMs = Number.isFinite(a.postedAtMs) ? a.postedAtMs : 0;
+      const bMs = Number.isFinite(b.postedAtMs) ? b.postedAtMs : 0;
+      return bMs - aMs;
+    });
+
+    return list.slice(0, 6);
+  }, [announcements, nowMs]);
+
+  const formatSidebarAnnouncementDate = (ms) => {
+    if (!Number.isFinite(ms)) return "Recent";
+    return new Date(ms).toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
+    });
+  };
+
   const agentsOnBreak = useMemo(() => {
     const out = [];
 
@@ -2162,6 +2688,209 @@ export default function Dashboard({
   const selectedPerfError = effectiveSelectedPerfUserId
     ? historyErrorByUserId?.[String(effectiveSelectedPerfUserId)] || ""
     : "";
+
+  const selectedPayableEmployees = useMemo(
+    () =>
+      payableGraphUserId === "ALL"
+        ? validEmployees
+        : validEmployees.filter((emp) => String(getUserId(emp)) === String(payableGraphUserId)),
+    [payableGraphUserId, validEmployees]
+  );
+
+  const payableGraphUserLabel = useMemo(() => {
+    if (payableGraphUserId === "ALL") return "Whole Team";
+    const selected = validEmployees.find(
+      (emp) => String(getUserId(emp)) === String(payableGraphUserId)
+    );
+    return selected ? getDisplayName(selected) : "Selected Employee";
+  }, [payableGraphUserId, validEmployees]);
+
+  const payablePrintDepartment = useMemo(() => {
+    const departments = Array.from(
+      new Set(
+        selectedPayableEmployees
+          .map((emp) =>
+            sanitizeFileNameSegment(
+              extractDepartmentName(
+                pick(emp || {}, ["department", "departmentName"], "")
+              ),
+              ""
+            )
+          )
+          .filter(Boolean)
+      )
+    );
+
+    if (departments.length === 1) return departments[0];
+    if (departments.length > 1) return "Multiple Departments";
+
+    const envDepartmentId = sanitizeFileNameSegment(
+      extractDepartmentName(import.meta.env.VITE_HYACINTH_DEPARTMENT_ID),
+      ""
+    );
+    return envDepartmentId || "Department";
+  }, [selectedPayableEmployees]);
+
+  const payablePrintRangeSegment = useMemo(() => {
+    const start = String(payableHoursChart?.start || payableGraphPeriod?.start || "");
+    const end = String(payableHoursChart?.end || payableGraphPeriod?.end || "");
+
+    if (start && end) return start === end ? start : `${start}_to_${end}`;
+    return start || end || "DateRange";
+  }, [
+    payableHoursChart?.start,
+    payableHoursChart?.end,
+    payableGraphPeriod?.start,
+    payableGraphPeriod?.end,
+  ]);
+
+  const payablePrintFileName = useMemo(
+    () => `${payablePrintDepartment}_${payablePrintRangeSegment}_Payable Hours`,
+    [payablePrintDepartment, payablePrintRangeSegment]
+  );
+
+  const payablePrintRowsByEmployee = useMemo(() => {
+    const sourceRows = Array.isArray(payableHoursChart.printRows) ? payableHoursChart.printRows : [];
+    if (!sourceRows.length) return [];
+
+    const byEmployee = new Map();
+    for (const row of sourceRows) {
+      const userId = String(row?.userId || "");
+      if (!userId) continue;
+      if (!byEmployee.has(userId)) byEmployee.set(userId, []);
+      byEmployee.get(userId).push(row);
+    }
+
+    const orderedEmployeeIds = selectedPayableEmployees
+      .map((emp) => String(getUserId(emp)))
+      .filter((userId, idx, arr) => userId && arr.indexOf(userId) === idx);
+
+    const fallbackEmployeeIds = Array.from(byEmployee.keys()).sort((a, b) => a.localeCompare(b));
+    const targetEmployeeIds = orderedEmployeeIds.length ? orderedEmployeeIds : fallbackEmployeeIds;
+
+    return targetEmployeeIds
+      .map((userId) => {
+        const rows = [...(byEmployee.get(userId) || [])].sort((a, b) =>
+          String(a?.dayKey || "").localeCompare(String(b?.dayKey || ""))
+        );
+        if (!rows.length) return null;
+
+        const employeeName =
+          rows[0]?.employeeName ||
+          getDisplayName(selectedPayableEmployees.find((emp) => String(getUserId(emp)) === userId)) ||
+          `User ${userId}`;
+
+        return {
+          userId,
+          employeeName,
+          rows,
+        };
+      })
+      .filter(Boolean);
+  }, [payableHoursChart.printRows, selectedPayableEmployees]);
+
+  const payableTableColumnDayKeys = useMemo(() => {
+    const periodDayKeys = (Array.isArray(payableGraphPeriod.dayKeys) ? payableGraphPeriod.dayKeys : [])
+      .map((key) => String(key || "").trim())
+      .filter(Boolean);
+    if (periodDayKeys.length) return periodDayKeys;
+
+    const fallbackDayKeys = (Array.isArray(payableHoursChart.rows) ? payableHoursChart.rows : [])
+      .map((row) => String(row?.dayKey || "").trim())
+      .filter(Boolean);
+    if (!fallbackDayKeys.length) return [];
+
+    return Array.from(new Set(fallbackDayKeys)).sort((a, b) => a.localeCompare(b));
+  }, [payableGraphPeriod.dayKeys, payableHoursChart.rows]);
+
+  const payableTableMatrixRows = useMemo(() => {
+    const sourceRows = Array.isArray(payableHoursChart.printRows) ? payableHoursChart.printRows : [];
+    const targetDayKeys = payableTableColumnDayKeys;
+    if (!targetDayKeys.length) return [];
+
+    const hoursByUserIdByDayKey = new Map();
+    for (const row of sourceRows) {
+      const userId = String(row?.userId || "").trim();
+      const dayKey = String(row?.dayKey || "").trim();
+      if (!userId || !dayKey) continue;
+
+      if (!hoursByUserIdByDayKey.has(userId)) {
+        hoursByUserIdByDayKey.set(userId, new Map());
+      }
+
+      const byDay = hoursByUserIdByDayKey.get(userId);
+      const prev = Number(byDay.get(dayKey) || 0);
+      byDay.set(dayKey, prev + Number(row?.hours || 0));
+    }
+
+    return selectedPayableEmployees.map((employee) => {
+      const userId = String(getUserId(employee) || "").trim();
+      const employeeName = getDisplayName(employee);
+      const employeeStartDateYmd = getEmployeeStartDateYmd(employeeProfilesByUserId, userId);
+      const dayMap = hoursByUserIdByDayKey.get(userId) || new Map();
+
+      let totalHours = 0;
+      const dayValues = targetDayKeys.map((dayKey) => {
+        if (employeeStartDateYmd && String(dayKey) < String(employeeStartDateYmd)) {
+          return null;
+        }
+        const value = Number(dayMap.get(dayKey) || 0);
+        if (Number.isFinite(value) && value > 0) totalHours += value;
+        return Number.isFinite(value) ? value : 0;
+      });
+
+      return {
+        userId,
+        employeeName,
+        dayValues,
+        totalHours,
+      };
+    });
+  }, [
+    payableHoursChart.printRows,
+    payableTableColumnDayKeys,
+    selectedPayableEmployees,
+    employeeProfilesByUserId,
+  ]);
+
+  const PRINT_BAR_SIZE = 14;
+  const PRINT_BAR_GAP = 7;
+  const printBarChartHeight = (() => {
+    const rowCount = Math.max(1, Number(payableHoursChart?.rows?.length || 0));
+    const rowsHeight = rowCount * (PRINT_BAR_SIZE + PRINT_BAR_GAP);
+    const contentHeight = rowsHeight + 54;
+    const measuredHeight = Number(printChartSize?.height || 0);
+    return Math.max(260, contentHeight, measuredHeight);
+  })();
+
+  const handlePrintPayableWindow = () => {
+    if (typeof window === "undefined") return;
+
+    if (typeof document !== "undefined") {
+      if (!originalDocumentTitleRef.current) {
+        originalDocumentTitleRef.current = document.title;
+      }
+      document.title = payablePrintFileName;
+    }
+
+    flushSync(() => {
+      measurePayableChartForPrint();
+      setIsPrinting(true);
+    });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          window.print();
+        } catch {
+          if (typeof document !== "undefined" && originalDocumentTitleRef.current) {
+            document.title = originalDocumentTitleRef.current;
+            originalDocumentTitleRef.current = "";
+          }
+          setIsPrinting(false);
+        }
+      });
+    });
+  };
 
   return (
     <div className="dashX">
@@ -2457,6 +3186,61 @@ export default function Dashboard({
             </>
           ) : null}
 
+          <div className="panelHead center">Announcements</div>
+
+          <div className="panelBody">
+            <div className="updateBody">
+              <div className="updateBox">
+                <div className="payTableWrap">
+                  <table className="payTable">
+                    <thead>
+                      <tr>
+                        <th className="payThLeft">Announcement</th>
+                        <th className="payThRight">Posted</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loadingAnnouncements ? (
+                        <tr>
+                          <td className="payEmpty" colSpan={2}>
+                            Loading announcements...
+                          </td>
+                        </tr>
+                      ) : announcementsError ? (
+                        <tr>
+                          <td className="payEmpty" colSpan={2}>
+                            {announcementsError}
+                          </td>
+                        </tr>
+                      ) : sidebarAnnouncements.length === 0 ? (
+                        <tr>
+                          <td className="payEmpty" colSpan={2}>
+                            No active announcements.
+                          </td>
+                        </tr>
+                      ) : (
+                        sidebarAnnouncements.map((item) => (
+                          <tr key={`dash-announcement-${item.id}`}>
+                            <td className="payTdName">
+                              <div className="dashAnnouncementHeadline">{item.headline}</div>
+                              <div className="dashAnnouncementPreview">{item.preview}</div>
+                            </td>
+                            <td
+                              className="payTdHours"
+                              title={formatSidebarAnnouncementDate(item.postedAtMs)}
+                            >
+                              {formatSidebarAnnouncementDate(item.postedAtMs)}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </aside>
 
         
@@ -2532,15 +3316,16 @@ export default function Dashboard({
         )}
       </div>
 
+      {canViewPayablePanel ? (
       <div className="panel p-payable">
-        <div className="panelHead center">Dashboard Window</div>
+        <div className="panelHead center">Accounting Window</div>
 
         <div className="panelBody">
           <div className="updateBody">
             <div className="updateBox" id="updateBox1">
               <div className="updateItem">Daily Payable Hours Graph</div>
 
-              <div className="payableWindowBtns">
+              <div className="payableWindowBtns noPrint">
                 <div className="buttons-div">
                   <button
                     type="button"
@@ -2562,6 +3347,13 @@ export default function Dashboard({
                     onClick={() => setPayableGraphWindow("month")}
                   >
                     Monthly
+                  </button>
+                  <button
+                    type="button"
+                    className={`windowBtn ${payableGraphWindow === "custom" ? "isActive" : ""}`}
+                    onClick={() => setPayableGraphWindow("custom")}
+                  >
+                    Custom
                   </button>
                   <button
                     type="button"
@@ -2589,8 +3381,62 @@ export default function Dashboard({
                       );
                     })}
                   </select>
+
+                  <div className="payableManualFilters">
+                    <label className="payableDateField" htmlFor="payable-range-from">
+                      <span>From</span>
+                      <input
+                        id="payable-range-from"
+                        className="payableDateInput"
+                        type="date"
+                        value={effectivePayableCustomStartDate}
+                        onChange={(e) => {
+                          setPayableCustomStartDate(e.target.value);
+                          setPayableGraphWindow("custom");
+                        }}
+                      />
+                    </label>
+                    <label className="payableDateField" htmlFor="payable-range-to">
+                      <span>To</span>
+                      <input
+                        id="payable-range-to"
+                        className="payableDateInput"
+                        type="date"
+                        value={effectivePayableCustomEndDate}
+                        onChange={(e) => {
+                          setPayableCustomEndDate(e.target.value);
+                          setPayableGraphWindow("custom");
+                        }}
+                      />
+                    </label>
+                    <label className="payableYearField" htmlFor="payable-year-select">
+                      <span>Year</span>
+                      <select
+                        id="payable-year-select"
+                        className="payableMonthSelect"
+                        value={effectiveSelectedPayableYear}
+                        onChange={(e) => handlePayableYearSelect(e.target.value)}
+                      >
+                        <option value={PAYABLE_MONTH_SELECT_NONE}>Select year</option>
+                        {payableYearOptions.map((yearValue) => (
+                          <option key={`payable-year-${yearValue}`} value={yearValue}>
+                            {yearValue}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    className="windowBtn payablePrintBtn"
+                    onClick={handlePrintPayableWindow}
+                  >
+                    Print
+                  </button>
                 </div>
               </div>
+
+              
 
               
 
@@ -2601,6 +3447,22 @@ export default function Dashboard({
                   <div className="payableSummarySub">
                     {payableHoursChart.start} -&gt; {payableHoursChart.end}
                   </div>
+                  <div className="payableViewToggle noPrint" role="group" aria-label="Payable display mode">
+                    <button
+                      type="button"
+                      className={`payableViewBtn ${payableDisplayMode === "graph" ? "isActive" : ""}`}
+                      onClick={() => setPayableDisplayMode("graph")}
+                    >
+                      Graph
+                    </button>
+                    <button
+                      type="button"
+                      className={`payableViewBtn ${payableDisplayMode === "table" ? "isActive" : ""}`}
+                      onClick={() => setPayableDisplayMode("table")}
+                    >
+                      Table
+                    </button>
+                  </div>
                   {payableGraphWindow === "15" ? (
                     <div className="payableSummaryMeta">
                       Cutoff: {cutoffLabelForYmd(endDate)}
@@ -2610,7 +3472,7 @@ export default function Dashboard({
 
                 <div className="payableSummaryPanel total">
                   <div className="payableSummaryLabel">Total Payable Hours</div>
-                  <div className="payableSummaryMain">{payableHoursChart.totalHours.toFixed(2)} hrs</div>
+                  <div className="payableSummaryMain">{formatHoursValue(payableHoursChart.totalHours)} hrs</div>
                 </div>
 
                 <div className="payableSummaryPanel duties">
@@ -2626,42 +3488,239 @@ export default function Dashboard({
               ) : null}
               {anyHistoryErrors ? <div className="sideError">{anyHistoryErrors}</div> : null}
 
-              <div className="payableChartWrap">
-                {chartReady ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart
-                      data={payableHoursChart.rows}
-                      margin={{ top: 10, right: 50, left: 0, bottom: 10 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.08)" />
-                      <XAxis
-                        dataKey="label"
-                        tick={{fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
-                        interval={0}
-                      />
-                      <YAxis
-                        allowDecimals
-                        tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
-                      />
-                      <Tooltip content={<PayableHoursTooltip />} />
-                      <Line
-                        type="monotone"
-                        dataKey="hours"
-                        stroke="#66bb6a"
-                        strokeWidth={3}
-                        dot={{ r: 4 }}
-                        activeDot={{ r: 6 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+              <div className="payablePrintHeader printOnly">
+                <div className="payablePrintTitle">Daily Payable Hours</div>
+                <div className="payablePrintSub">
+                  Employee: {payableGraphUserLabel} | Range: {payableHoursChart.start} -&gt;{" "}
+                  {payableHoursChart.end}
+                </div>
+              </div>
+
+              {payableDisplayMode === "table" && !isPrinting ? (
+                <div className="payTableWrap payableScreenTableWrap">
+                  <table className="payTable">
+                    <thead>
+                      <tr>
+                        <th className="payThLeft payableMatrixNameCol">Name</th>
+                        {payableTableColumnDayKeys.map((dayKey) => (
+                          <th
+                            key={`payable-day-column-${dayKey}`}
+                            className="payThRight payableMatrixDateHead"
+                            title={prettyDayLabel(dayKey)}
+                          >
+                            {dayKey}
+                          </th>
+                        ))}
+                        <th className="payThRight payableMatrixTotalCol">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payableTableMatrixRows.length === 0 ||
+                      payableTableColumnDayKeys.length === 0 ? (
+                        <tr>
+                          <td
+                            className="payEmpty"
+                            colSpan={Math.max(2, payableTableColumnDayKeys.length + 2)}
+                          >
+                            No payable data in this range.
+                          </td>
+                        </tr>
+                      ) : (
+                        payableTableMatrixRows.map((row) => (
+                          <tr key={`payable-screen-row-${row.userId || row.employeeName}`}>
+                            <td className="payTdName payableMatrixNameCol">{row.employeeName}</td>
+                            {payableTableColumnDayKeys.map((dayKey, colIdx) => {
+                              const value = row.dayValues[colIdx];
+                              const isUnavailable = value === null;
+                              return (
+                                <td
+                                  key={`payable-cell-${row.userId}-${dayKey}`}
+                                  className={`payTdHours ${isUnavailable ? "payableMatrixMuted" : ""}`}
+                                >
+                                  {isUnavailable ? "-" : formatHoursValue(value)}
+                                </td>
+                              );
+                            })}
+                            <td className="payTdHours payableMatrixTotalCol">
+                              {formatHoursValue(row.totalHours)}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="payableChartWrap" ref={payableChartWrapRef}>
+                  {chartReady ? (
+                    isPrinting ? (
+                      <BarChart
+                        width={printChartSize.width}
+                        height={printBarChartHeight}
+                        data={payableHoursChart.rows}
+                        layout="vertical"
+                        margin={{ top: 10, right: 56, left: 20, bottom: 10 }}
+                        barCategoryGap={PRINT_BAR_GAP}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.08)" />
+                        <XAxis
+                          type="number"
+                          dataKey="hours"
+                          domain={[0, "auto"]}
+                          tickFormatter={formatHoursValue}
+                          tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="label"
+                          width={84}
+                          interval={0}
+                          allowDecimals
+                          tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
+                        />
+                        <Tooltip content={<PayableHoursTooltip />} />
+                        <Bar
+                          dataKey="hours"
+                          fill="#66bb6a"
+                          radius={[0, 6, 6, 0]}
+                          barSize={PRINT_BAR_SIZE}
+                          minPointSize={4}
+                          isAnimationActive={false}
+                        >
+                          <LabelList
+                            dataKey="hours"
+                            position="right"
+                            formatter={formatHoursValue}
+                            fill="rgba(0, 0, 0, 0.82)"
+                            fontSize={11}
+                          />
+                        </Bar>
+                      </BarChart>
+                    ) : (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                          data={payableHoursChart.rows}
+                          margin={{ top: 10, right: 50, left: 0, bottom: 10 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.08)" />
+                          <XAxis
+                            dataKey="label"
+                            tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
+                            interval={0}
+                          />
+                          <YAxis
+                            allowDecimals
+                            tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
+                          />
+                          <Tooltip content={<PayableHoursTooltip />} />
+                          <Line
+                            type="monotone"
+                            dataKey="hours"
+                            stroke="#66bb6a"
+                            strokeWidth={3}
+                            dot={{ r: 4 }}
+                            activeDot={{ r: 6 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    )
+                  ) : (
+                    <div className="perfEmpty">Preparing chart...</div>
+                  )}
+                </div>
+              )}
+
+              <div className="payablePrintTableWrap printOnly">
+                <div className="payablePrintMetaLine">
+                  Selected Employee: <strong>{payableGraphUserLabel}</strong>
+                </div>
+                {payableGraphUserId === "ALL" ? (
+                  <div className="payablePrintDayGroups">
+                    {payablePrintRowsByEmployee.length === 0 ? (
+                      <div className="payEmpty">No completed payable hours in the selected range.</div>
+                    ) : (
+                      payablePrintRowsByEmployee.map((employeeGroup) => (
+                        <div
+                          key={`payable-print-employee-${employeeGroup.userId}`}
+                          className="payablePrintDayGroup"
+                        >
+                          <div className="payablePrintDayTitle">
+                            {employeeGroup.employeeName}
+                          </div>
+                          <table className="payablePrintTable">
+                            <thead>
+                              <tr>
+                                <th className="payThLeft">Date</th>
+                                <th className="payThLeft">Day</th>
+                                <th className="payThRight">Completed Hours</th>
+                                <th className="payThLeft">Notes</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {employeeGroup.rows.length === 0 ? (
+                                <tr>
+                                  <td className="payEmpty" colSpan={4}>
+                                    No completed payable hours.
+                                  </td>
+                                </tr>
+                              ) : (
+                                employeeGroup.rows.map((row) => (
+                                  <tr key={`payable-print-${employeeGroup.userId}-${row.dayKey}`}>
+                                    <td className="payTdName">{row.dayKey}</td>
+                                    <td className="payTdName">
+                                      {row.dayShort || shortWeekdayLabelFromYmd(row.dayKey)}
+                                    </td>
+                                    <td className="payTdHours">{formatHoursValue(row.hours)}</td>
+                                    <td className="payTdName">{row.attendanceNote || "-"}</td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 ) : (
-                  <div className="perfEmpty">Preparing chart...</div>
+                  <table className="payablePrintTable">
+                    <thead>
+                      <tr>
+                        <th className="payThLeft">Date</th>
+                        <th className="payThLeft">Day</th>
+                        <th className="payThLeft">Employee</th>
+                        <th className="payThRight">Completed Hours</th>
+                        <th className="payThLeft">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payableHoursChart.printRows.length === 0 ? (
+                        <tr>
+                          <td className="payEmpty" colSpan={5}>
+                            No completed payable hours in this range.
+                          </td>
+                        </tr>
+                      ) : (
+                        payableHoursChart.printRows.map((row) => (
+                          <tr key={`payable-print-${row.dayKey}-${row.userId}`}>
+                            <td className="payTdName">{row.dayKey}</td>
+                            <td className="payTdName">
+                              {row.dayShort || shortWeekdayLabelFromYmd(row.dayKey)}
+                            </td>
+                            <td className="payTdName">{row.employeeName}</td>
+                            <td className="payTdHours">{formatHoursValue(row.hours)}</td>
+                            <td className="payTdName">{row.attendanceNote || "-"}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 )}
               </div>
             </div>
           </div>
         </div>
       </div>
+      ) : null}
 
       <div className="panel p-heat">
         <div className="panelHead">

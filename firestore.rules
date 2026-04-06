@@ -1,18 +1,236 @@
-rules_version='2'
+rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function normalizedTokenRole() {
+      return isSignedIn() && request.auth.token.role is string
+        ? request.auth.token.role.lower()
+        : "";
+    }
+
+    function signedInUserProfile() {
+      return isSignedIn()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        : null;
+    }
+
+    function currentUserId() {
+      if (!isSignedIn()) return "";
+
+      if (request.auth.token.userId is string && request.auth.token.userId != "") {
+        return request.auth.token.userId;
+      }
+
+      let profile = signedInUserProfile();
+
+      if (profile != null && profile.userId is string && profile.userId != "") {
+        return profile.userId;
+      }
+
+      if (profile != null && profile.employeeId is string && profile.employeeId != "") {
+        return profile.employeeId;
+      }
+
+      return request.auth.uid;
+    }
+
+    function normalizedProfileRole() {
+      let profile = signedInUserProfile();
+      return profile != null && profile.role is string
+        ? profile.role.lower()
+        : "";
+    }
+
+    function normalizedPermissionRole() {
+      let userId = currentUserId();
+      let permission = userId != ""
+        ? get(/databases/$(database)/documents/user_permissions/$(userId)).data
+        : null;
+
+      return permission != null && permission.role is string
+        ? permission.role.lower()
+        : "";
+    }
+
+    function normalizedRole() {
+      let tokenRole = normalizedTokenRole();
+      if (tokenRole != "") return tokenRole;
+
+      let profileRole = normalizedProfileRole();
+      if (profileRole != "") return profileRole;
+
+      return normalizedPermissionRole();
+    }
+
+    function isSelf(id) {
+      return isSignedIn() && (
+        request.auth.uid == id ||
+        currentUserId() == id
+      );
+    }
+
+    function isSuperAdmin() {
+      return normalizedRole() == "super_admin";
+    }
+
+    function isAdmin() {
+      return normalizedRole() == "admin";
+    }
+
+    function isAccounting() {
+      return normalizedRole() == "accounting";
+    }
+
+    function isVisitor() {
+      return normalizedRole() == "visitor";
+    }
+
+    function isEmployee() {
+      return normalizedRole() == "employee";
+    }
+
+    function isPortalRole() {
+      return isSuperAdmin() || isAdmin() || isAccounting() || isVisitor();
+    }
+
+    function hasKnownRole() {
+      return isPortalRole() || isEmployee();
+    }
+
+    function canManageAnnouncements() {
+      return isSuperAdmin() || isAdmin() || isVisitor();
+    }
+
+    function canManageAssignments() {
+      return isSuperAdmin() || isAdmin();
+    }
+
+    function isAssignmentParticipant(data) {
+      return (
+        data.employeeUserId is string &&
+        data.employeeUserId == currentUserId()
+      ) || (
+        data.employeeUserIds is list &&
+        data.employeeUserIds.hasAny([currentUserId()])
+      ) || (
+        data.accessApprovedUserIds is list &&
+        data.accessApprovedUserIds.hasAny([currentUserId()])
+      );
+    }
+
+    function canEmployeeMarkNotificationReadOnly() {
+      return request.resource.data.userId is string &&
+        request.resource.data.userId == currentUserId() &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "read",
+          "readAt",
+          "readAtClient",
+          "updatedAt",
+          "updatedAtClient",
+        ]);
+    }
+
+    match /users/{userId} {
+      allow read: if isSuperAdmin() || isSelf(userId);
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    match /user_permissions/{userId} {
+      allow read, create, update, delete: if isSuperAdmin();
+    }
+
+    match /portal_user_requests/{requestId} {
+      allow read: if isSuperAdmin() ||
+        (isAdmin() &&
+          resource.data.requestedByUserId is string &&
+          resource.data.requestedByUserId == currentUserId());
+
+      allow create: if isAdmin() &&
+        request.resource.data.requestedByUserId is string &&
+        request.resource.data.requestedByUserId == currentUserId();
+
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /portal_active_sessions/{sessionUserId} {
+      allow read, create, update, delete: if isSelf(sessionUserId);
+    }
+
+    match /employee_profiles/{userId} {
+      allow read: if isPortalRole() || (isEmployee() && isSelf(userId));
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    match /employee_announcements/{announcementId} {
+      allow read: if hasKnownRole();
+      allow create, update, delete: if canManageAnnouncements();
+    }
+
+    match /employeeAssignments/{assignmentId} {
+      allow read: if isPortalRole() ||
+        (isEmployee() && isAssignmentParticipant(resource.data));
+      allow create, delete: if canManageAssignments();
+      allow update: if canManageAssignments() ||
+        (isEmployee() && isAssignmentParticipant(resource.data));
+    }
+
+    match /break_logs/{breakId} {
+      allow read: if isPortalRole() ||
+        (isEmployee() &&
+          resource.data.userId is string &&
+          resource.data.userId == currentUserId());
+
+      allow create: if (isEmployee() &&
+          request.resource.data.userId is string &&
+          request.resource.data.userId == currentUserId()) ||
+        isPortalRole();
+
+      allow update: if (isEmployee() &&
+          resource.data.userId is string &&
+          resource.data.userId == currentUserId() &&
+          request.resource.data.userId is string &&
+          request.resource.data.userId == currentUserId()) ||
+        isPortalRole();
+
+      allow delete: if isSuperAdmin();
+    }
+
+    match /over_break_notes/{noteId} {
+      allow read: if isPortalRole() ||
+        (isEmployee() &&
+          resource.data.userId is string &&
+          resource.data.userId == currentUserId());
+
+      allow create, update: if isPortalRole();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /break_notifications/{notificationId} {
+      allow read: if isPortalRole() ||
+        (isEmployee() &&
+          resource.data.userId is string &&
+          resource.data.userId == currentUserId());
+
+      allow create: if isPortalRole() ||
+        (isEmployee() &&
+          request.resource.data.userId is string &&
+          request.resource.data.userId == currentUserId());
+
+      allow update: if isPortalRole() ||
+        (isEmployee() &&
+          resource.data.userId is string &&
+          resource.data.userId == currentUserId() &&
+          canEmployeeMarkNotificationReadOnly());
+
+      allow delete: if isSuperAdmin();
+    }
+
     match /{document=**} {
-      // This rule allows anyone with your database reference to view, edit,
-      // and delete all data in your database. It is useful for getting
-      // started, but it is configured to expire after 30 days because it
-      // leaves your app open to attackers. At that time, all client
-      // requests to your database will be denied.
-      //
-      // Make sure to write security rules for your app before that time, or
-      // else all client requests to your database will be denied until you
-      // update your rules.
-      allow read, write: if request.time < timestamp.date(2026, 4, 4);
+      allow read, write: if false;
     }
   }
 }

@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { getStoredSession, loginUser, logoutUser } from "./authService";
+import {
+  clearSession,
+  getStoredSession,
+  isStoredSessionStillValid,
+  loginUser,
+  logoutUser,
+  subscribeToSessionValidity,
+} from "./authService";
 import { AuthContext } from "./auth-context";
 
 export function AuthProvider({ children }) {
@@ -7,11 +14,57 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const stored = getStoredSession();
-    if (stored?.isAuthenticated) {
-      setSession(stored);
-    }
+    let cancelled = false;
+
+    const verifyStoredSession = async () => {
+      const stored = getStoredSession();
+      if (!stored?.isAuthenticated) return;
+
+      const stillValid = await isStoredSessionStillValid(stored);
+      if (cancelled) return;
+
+      if (stillValid) {
+        setSession(stored);
+      } else {
+        clearSession();
+        setSession(null);
+      }
+    };
+
+    verifyStoredSession();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!session?.isAuthenticated) return undefined;
+
+    const hasSessionIdentity =
+      !!String(session?.user?.userId || "").trim() &&
+      !!String(session?.user?.sessionKey || "").trim();
+
+    if (!hasSessionIdentity) {
+      clearSession();
+      setSession(null);
+      return undefined;
+    }
+
+    let handled = false;
+    const unsubscribe = subscribeToSessionValidity(session, () => {
+      if (handled) return;
+      handled = true;
+      clearSession();
+      setSession(null);
+    });
+
+    return () => {
+      handled = true;
+      if (typeof unsubscribe === "function") {
+        unsubscribe();
+      }
+    };
+  }, [session]);
 
   const signIn = async (credentials) => {
     setLoading(true);
@@ -27,7 +80,7 @@ export function AuthProvider({ children }) {
   const signOut = async () => {
     setLoading(true);
     try {
-      await logoutUser();
+      await logoutUser(session?.user || null);
       setSession(null);
     } finally {
       setLoading(false);
