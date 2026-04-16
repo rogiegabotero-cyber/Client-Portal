@@ -92,10 +92,6 @@ export default function LoginPage() {
           </div>
           <div className="login-brand-box">
             <h2>Welcome</h2>
-            <p>
-              This portal supports Employee, Admin, Accounting, Visitor, and Super Admin access
-              with page restrictions based on role.
-            </p>
           </div>
         </div>
       </div>

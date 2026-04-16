@@ -481,3 +481,174 @@ exports.changeOwnPassword = onCall(callableRuntimeOptions, async (request) => {
     throw new HttpsError("internal", "Could not update password.");
   }
 });
+
+exports.adminResetEmployeePassword = onCall(callableRuntimeOptions, async (request) => {
+  if (!request.auth?.uid) {
+    throw new HttpsError("unauthenticated", "You must be signed in.");
+  }
+
+  const actorUid = toText(request.auth.uid);
+  const actorTokenRole = normalizeRole(request.auth.token?.role);
+  let actorRole = actorTokenRole;
+
+  if (!actorRole) {
+    const actorSnap = await db.collection(USERS_COLLECTION).doc(actorUid).get();
+    const actorData = actorSnap.exists ? actorSnap.data() || {} : {};
+    actorRole = normalizeRole(actorData?.role);
+  }
+
+  if (actorRole !== ROLES.SUPER_ADMIN) {
+    throw new HttpsError(
+      "permission-denied",
+      "Only Super Admin can update employee password."
+    );
+  }
+
+  const userId = toText(request?.data?.userId);
+  const incomingEmail = normalizeEmail(request?.data?.email);
+  const incomingName = toText(request?.data?.name);
+  const incomingEmployeeId = toText(request?.data?.employeeId);
+  const newPassword = toText(request?.data?.newPassword);
+
+  if (!userId) {
+    throw new HttpsError("invalid-argument", "Employee user id is required.");
+  }
+  if (!newPassword) {
+    throw new HttpsError("invalid-argument", "New password is required.");
+  }
+  if (newPassword.length < 6) {
+    throw new HttpsError(
+      "invalid-argument",
+      "New password must be at least 6 characters."
+    );
+  }
+
+  const targetRef = db.collection(USERS_COLLECTION).doc(userId);
+  const targetSnap = await targetRef.get();
+  const targetData = targetSnap.exists ? targetSnap.data() || {} : {};
+  const targetRole = normalizeRole(targetData?.role);
+
+  if (targetRole && targetRole !== ROLES.EMPLOYEE) {
+    throw new HttpsError("failed-precondition", "Selected user is not an employee.");
+  }
+
+  const resolvedEmail = normalizeEmail(incomingEmail || targetData?.email);
+  if (!resolvedEmail) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Employee email is required to create Firebase Authentication account."
+    );
+  }
+
+  const resolvedName =
+    incomingName ||
+    buildDisplayName(targetData, resolvedEmail || userId) ||
+    resolvedEmail ||
+    userId;
+  const resolvedEmployeeId = incomingEmployeeId || toText(targetData?.employeeId) || userId;
+  const allowedPages = normalizeAllowedPages(targetData?.allowedPages, ROLES.EMPLOYEE);
+
+  let authUserCreated = false;
+  let authUserUpdated = false;
+
+  try {
+    const authUser = await admin.auth().getUser(userId);
+    const updatePayload = {
+      password: newPassword,
+    };
+
+    if (resolvedEmail && normalizeEmail(authUser?.email) !== resolvedEmail) {
+      updatePayload.email = resolvedEmail;
+    }
+    if (resolvedName && toText(authUser?.displayName) !== resolvedName) {
+      updatePayload.displayName = resolvedName;
+    }
+
+    await admin.auth().updateUser(userId, updatePayload);
+    authUserUpdated = true;
+  } catch (error) {
+    const code = toText(error?.code);
+    if (code !== "auth/user-not-found") {
+      if (code === "auth/email-already-exists") {
+        throw new HttpsError(
+          "already-exists",
+          "This email already belongs to another Authentication user."
+        );
+      }
+      logger.error("adminResetEmployeePassword auth lookup/update failed", {
+        userId,
+        code,
+        message: toText(error?.message),
+      });
+      throw new HttpsError("internal", "Could not update Authentication user.");
+    }
+
+    try {
+      await admin.auth().createUser({
+        uid: userId,
+        email: resolvedEmail,
+        password: newPassword,
+        displayName: resolvedName || undefined,
+      });
+      authUserCreated = true;
+    } catch (createError) {
+      const createCode = toText(createError?.code);
+      if (createCode === "auth/email-already-exists") {
+        throw new HttpsError(
+          "already-exists",
+          "This email already belongs to another Authentication user."
+        );
+      }
+      logger.error("adminResetEmployeePassword auth create failed", {
+        userId,
+        code: createCode,
+        message: toText(createError?.message),
+      });
+      throw new HttpsError("internal", "Could not create Authentication user.");
+    }
+  }
+
+  const passwordSecret = buildPasswordSecret(newPassword);
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  await targetRef.set(
+    {
+      uid: userId,
+      userId,
+      employeeId: resolvedEmployeeId,
+      email: resolvedEmail,
+      name: resolvedName,
+      role: ROLES.EMPLOYEE,
+      allowedPages,
+      portalPasswordSalt: passwordSecret.salt,
+      portalPasswordHash: passwordSecret.hash,
+      portalPasswordUpdatedAt: now,
+      updatedAt: now,
+      ...(targetSnap.exists ? {} : { createdAt: now }),
+    },
+    { merge: true }
+  );
+
+  await db.collection(USER_PERMISSIONS_COLLECTION).doc(userId).set(
+    {
+      userId,
+      employeeId: resolvedEmployeeId,
+      email: resolvedEmail,
+      name: resolvedName,
+      role: ROLES.EMPLOYEE,
+      allowedPages,
+      portalPasswordSalt: passwordSecret.salt,
+      portalPasswordHash: passwordSecret.hash,
+      portalPasswordUpdatedAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+
+  return {
+    success: true,
+    userId,
+    authUserCreated,
+    authUserUpdated,
+  };
+});

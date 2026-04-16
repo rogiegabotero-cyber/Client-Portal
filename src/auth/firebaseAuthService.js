@@ -1,5 +1,5 @@
 import { deleteApp, initializeApp } from "firebase/app";
-import { auth, db } from "../firebase";
+import app, { auth, db } from "../firebase";
 import {
   EmailAuthProvider,
   createUserWithEmailAndPassword,
@@ -11,9 +11,11 @@ import {
   updatePassword,
   deleteUser,
 } from "firebase/auth";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -36,6 +38,7 @@ const ACTIVE_SESSIONS_COLLECTION = "portal_active_sessions";
 const REQUEST_ROLE_OPTIONS = [ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
 const PORTAL_ROLE_OPTIONS = [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
 const PASSWORD_HASH_PREFIX = "portal_v1";
+const functions = getFunctions(app, "us-central1");
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 const normalizePortalRole = (value) => String(value || "").trim().toLowerCase();
@@ -352,7 +355,7 @@ export async function createPortalUserRequest({
           type: "portal_user_request_pending",
           title,
           message,
-          targetPage: "special_users",
+          targetPage: "control_panel",
           actorUserId: requester.userId,
           actorName: requester.name,
           extra: {
@@ -757,6 +760,249 @@ export async function updatePortalUserProfileDetails(userId, payload = {}) {
   };
 }
 
+export async function transferEmployeeToPortalRole(userId, role, employeeData = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedRole = normalizePortalRole(role);
+  const supportedRoles = [ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
+
+  if (!normalizedUserId) throw new Error("User id is required");
+  if (!supportedRoles.includes(normalizedRole)) {
+    throw new Error("Invalid transfer role");
+  }
+
+  const userRef = doc(db, "users", normalizedUserId);
+  const userSnap = await getDoc(userRef);
+  const existing = userSnap.exists() ? userSnap.data() || {} : {};
+
+  const incomingEmail = normalizeEmail(employeeData?.email || "");
+  const existingEmail = normalizeEmail(existing?.email || "");
+  const finalEmail = incomingEmail || existingEmail;
+  const incomingFullName = String(employeeData?.name || "").trim();
+  const existingFirstName = String(existing?.firstName || "").trim();
+  const existingLastName = String(existing?.lastName || "").trim();
+  const rawFirstName = String(employeeData?.firstName || "").trim();
+  const rawLastName = String(employeeData?.lastName || "").trim();
+
+  const splitName = incomingFullName.split(/\s+/).filter(Boolean);
+  const firstNameFromFull = splitName[0] || "";
+  const lastNameFromFull = splitName.slice(1).join(" ");
+  const emailNameFallback = finalEmail ? finalEmail.split("@")[0] : "";
+  const finalFirstName =
+    rawFirstName || existingFirstName || firstNameFromFull || emailNameFallback || "Portal";
+  const finalLastName = rawLastName || existingLastName || lastNameFromFull || "User";
+  const finalDisplayName =
+    incomingFullName || String(existing?.name || "").trim() || `${finalFirstName} ${finalLastName}`.trim();
+  const finalAllowedPages = DEFAULT_ROLE_PAGES[normalizedRole] || [];
+
+  const userPayload = {
+    uid: normalizedUserId,
+    userId: normalizedUserId,
+    role: normalizedRole,
+    firstName: finalFirstName,
+    lastName: finalLastName,
+    name: finalDisplayName,
+    allowedPages: finalAllowedPages,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (finalEmail) {
+    userPayload.email = finalEmail;
+  }
+
+  const employeeId = String(
+    employeeData?.employeeId || employeeData?.employee_id || existing?.employeeId || ""
+  ).trim();
+  if (employeeId) {
+    userPayload.employeeId = employeeId;
+  }
+
+  await setDoc(userRef, userPayload, { merge: true });
+
+  await setDoc(
+    doc(db, "user_permissions", normalizedUserId),
+    {
+      userId: normalizedUserId,
+      role: normalizedRole,
+      allowedPages: finalAllowedPages,
+      name: finalDisplayName,
+      email: finalEmail,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    userId: normalizedUserId,
+    role: normalizedRole,
+    firstName: finalFirstName,
+    lastName: finalLastName,
+    name: finalDisplayName,
+    email: finalEmail,
+    allowedPages: finalAllowedPages,
+  };
+}
+
+export async function transferPortalUserToEmployeeRole(userId, userData = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) throw new Error("User id is required");
+
+  const userRef = doc(db, "users", normalizedUserId);
+  const userSnap = await getDoc(userRef);
+  const existing = userSnap.exists() ? userSnap.data() || {} : {};
+
+  const incomingEmail = normalizeEmail(userData?.email || "");
+  const existingEmail = normalizeEmail(existing?.email || "");
+  const finalEmail = incomingEmail || existingEmail;
+  const incomingFullName = String(userData?.name || "").trim();
+  const existingFirstName = String(existing?.firstName || "").trim();
+  const existingLastName = String(existing?.lastName || "").trim();
+  const rawFirstName = String(userData?.firstName || "").trim();
+  const rawLastName = String(userData?.lastName || "").trim();
+
+  const splitName = incomingFullName.split(/\s+/).filter(Boolean);
+  const firstNameFromFull = splitName[0] || "";
+  const lastNameFromFull = splitName.slice(1).join(" ");
+  const emailNameFallback = finalEmail ? finalEmail.split("@")[0] : "";
+  const finalFirstName =
+    rawFirstName || existingFirstName || firstNameFromFull || emailNameFallback || "Employee";
+  const finalLastName = rawLastName || existingLastName || lastNameFromFull || "User";
+  const finalDisplayName =
+    incomingFullName || String(existing?.name || "").trim() || `${finalFirstName} ${finalLastName}`.trim();
+  const finalAllowedPages = DEFAULT_ROLE_PAGES[ROLES.EMPLOYEE] || [];
+
+  const userPayload = {
+    uid: normalizedUserId,
+    userId: normalizedUserId,
+    role: ROLES.EMPLOYEE,
+    firstName: finalFirstName,
+    lastName: finalLastName,
+    name: finalDisplayName,
+    allowedPages: finalAllowedPages,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (finalEmail) {
+    userPayload.email = finalEmail;
+  }
+
+  const employeeId = String(
+    userData?.employeeId || userData?.employee_id || existing?.employeeId || ""
+  ).trim();
+  if (employeeId) {
+    userPayload.employeeId = employeeId;
+  }
+
+  await setDoc(userRef, userPayload, { merge: true });
+
+  await setDoc(
+    doc(db, "user_permissions", normalizedUserId),
+    {
+      userId: normalizedUserId,
+      role: ROLES.EMPLOYEE,
+      allowedPages: finalAllowedPages,
+      name: finalDisplayName,
+      email: finalEmail,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    userId: normalizedUserId,
+    role: ROLES.EMPLOYEE,
+    firstName: finalFirstName,
+    lastName: finalLastName,
+    name: finalDisplayName,
+    email: finalEmail,
+    allowedPages: finalAllowedPages,
+  };
+}
+
+export async function deleteAdminPortalUser(userId) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) throw new Error("User id is required");
+
+  const userRef = doc(db, "users", normalizedUserId);
+  const userSnap = await getDoc(userRef);
+  if (!userSnap.exists()) {
+    throw new Error("User profile not found.");
+  }
+
+  const profile = userSnap.data() || {};
+  const role = normalizePortalRole(profile?.role || "");
+
+  if (role === ROLES.SUPER_ADMIN) {
+    throw new Error("Super Admin cannot be deleted from this action.");
+  }
+  if (role !== ROLES.ADMIN) {
+    throw new Error("Only admin users can be deleted from this action.");
+  }
+
+  await Promise.all([
+    deleteDoc(doc(db, "users", normalizedUserId)),
+    deleteDoc(doc(db, "user_permissions", normalizedUserId)),
+    deleteDoc(doc(db, ACTIVE_SESSIONS_COLLECTION, normalizedUserId)),
+  ]);
+
+  return {
+    userId: normalizedUserId,
+    role,
+    email: normalizeEmail(profile?.email || ""),
+  };
+}
+
+export async function adminUpdateEmployeePortalPassword({
+  userId,
+  newPassword,
+  employeeData = {},
+} = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  const nextPassword = String(newPassword || "").trim();
+
+  if (!normalizedUserId) throw new Error("User id is required");
+  if (!nextPassword) throw new Error("New password is required");
+  if (nextPassword.length < 6) throw new Error("New password must be at least 6 characters.");
+  const normalizedName = String(employeeData?.name || "").trim();
+  const normalizedEmail = normalizeEmail(employeeData?.email || "");
+  const normalizedEmployeeId = String(
+    employeeData?.employeeId || employeeData?.employee_id || ""
+  ).trim();
+
+  try {
+    const callable = httpsCallable(functions, "adminResetEmployeePassword");
+    const response = await callable({
+      userId: normalizedUserId,
+      email: normalizedEmail,
+      name: normalizedName,
+      employeeId: normalizedEmployeeId,
+      newPassword: nextPassword,
+    });
+
+    const payload = response?.data || {};
+    if (payload?.success === false) {
+      throw new Error(payload?.message || "Could not update employee password.");
+    }
+
+    return {
+      userId: String(payload?.userId || normalizedUserId),
+      role: ROLES.EMPLOYEE,
+      authUserCreated: !!payload?.authUserCreated,
+      authUserUpdated: !!payload?.authUserUpdated,
+    };
+  } catch (error) {
+    const code = String(error?.code || "").toLowerCase();
+    const message = String(error?.message || "").trim();
+
+    if (code === "functions/unavailable") {
+      throw new Error(
+        "Password update service is unavailable. Deploy functions and try again."
+      );
+    }
+
+    throw new Error(message || "Could not update employee password.");
+  }
+}
+
 export async function sendPortalUserPasswordResetEmail(email) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) throw new Error("Email is required");
@@ -855,25 +1101,44 @@ export async function verifyEmployeePortalPassword(
 }
 
 export async function updateEmployeeAllowedPages(userId, allowedPages, employeeData = {}) {
+  const normalizedUserId = String(userId || "").trim();
   const cleanPages = Array.isArray(allowedPages)
     ? allowedPages.filter((page) => PAGE_KEYS.includes(page))
     : [];
+  const safeName = String(employeeData?.name || "").trim();
+  const safeEmail = normalizeEmail(employeeData?.email);
 
-  await setDoc(
-    doc(db, "user_permissions", String(userId)),
-    {
-      userId: String(userId),
-      role: ROLES.EMPLOYEE,
-      allowedPages: cleanPages,
-      name: employeeData?.name || "",
-      email: employeeData?.email || "",
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
+  // Keep employee permissions in sync across both collections.
+  await Promise.all([
+    setDoc(
+      doc(db, "user_permissions", normalizedUserId),
+      {
+        userId: normalizedUserId,
+        role: ROLES.EMPLOYEE,
+        allowedPages: cleanPages,
+        name: safeName,
+        email: safeEmail,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ),
+    setDoc(
+      doc(db, "users", normalizedUserId),
+      {
+        uid: normalizedUserId,
+        userId: normalizedUserId,
+        role: ROLES.EMPLOYEE,
+        allowedPages: cleanPages,
+        ...(safeName ? { name: safeName } : {}),
+        ...(safeEmail ? { email: safeEmail } : {}),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ]);
 
   return {
-    userId: String(userId),
+    userId: normalizedUserId,
     allowedPages: cleanPages,
   };
 }

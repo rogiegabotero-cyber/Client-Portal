@@ -19,9 +19,7 @@ export const PAGE_KEYS = [
   "perf_weekly",
   "perf_monthly",
   "invoices",
-  "special_users",
   "register_portal_user",
-  "manage_employee",
   "control_panel",
 ];
 

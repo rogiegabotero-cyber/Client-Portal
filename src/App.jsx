@@ -10,17 +10,24 @@ import EmployeeDashboard from "./components/employee_dashboard";
 import NotificationsPage from "./components/NotificationsPage";
 import LoginPage from "./components/LoginPage";
 import RegisterPortalUser from "./components/RegisterPortalUser";
-import SpecialUsersPage from "./components/SpecialUsersPage";
 import ControlPanelPage from "./components/ControlPanelPage";
-import ManageEmployee from "./components/ManageEmployee";
 
 import "./App.css";
 import HyacinthAttendanceAPI from "./api/hyacinthAttendanceApi";
 import { useAuth } from "./auth/useAuth";
-import { canAccessPage, DEFAULT_ROLE_PAGES, ROLES, getAllowedPages } from "./auth/roleUtils";
+import {
+  canAccessPage,
+  DEFAULT_ROLE_PAGES,
+  PAGE_KEYS,
+  ROLES,
+  getAllowedPages,
+  normalizeRole,
+} from "./auth/roleUtils";
 import {
   approvePortalUserRequest,
+  adminUpdateEmployeePortalPassword,
   createPortalUserRequest,
+  deleteAdminPortalUser,
   getEmployeePermission,
   getPortalUserRequests,
   getSpecialPortalUsers,
@@ -31,11 +38,21 @@ import {
   updatePortalUserEmail,
   updatePortalUserPassword,
   updatePortalUserProfileDetails,
+  transferEmployeeToPortalRole,
+  transferPortalUserToEmployeeRole,
   updatePortalUserAllowedPages,
 } from "./auth/firebaseAuthService";
 import {
-  getActiveBreakForUser,
+  DAILY_BREAK_LIMIT_MINUTES,
   getActiveBreaks,
+  archiveAllNotifications,
+  archiveAllOverBreakNotes,
+  archiveNotification,
+  archiveOverBreakNote,
+  deleteAllNotifications,
+  deleteAllOverBreakNotes,
+  deleteNotification,
+  deleteOverBreakNote,
   getBreakLogsForUserOnDate,
   calculateBreakUsageMinutes,
   ensureBreakReminder,
@@ -43,6 +60,9 @@ import {
   getNotificationsForUser,
   markNotificationRead,
   markAllNotificationsRead,
+  resetAllNotificationData,
+  restoreNotification,
+  restoreOverBreakNote,
   getOverBreakNotes,
 } from "./services/breakService";
 import {
@@ -101,7 +121,7 @@ import {
   tsMs,
 } from "./utils/attendanceLog";
 
-import { UserPlus, LogOut, Megaphone } from "lucide-react";
+import { UserPlus, LogOut, Megaphone, CalendarCheck, ClipboardList, X } from "lucide-react";
 import InvoicesPage from "./components/InvoicesPage";
 import AssignmentPage from "./components/AssignmentPage";
 import PerformanceReportPage from "./components/PerformanceReportPage";
@@ -128,6 +148,24 @@ const PORTAL_USER_REQUEST_ROLE_OPTIONS = [
   { value: ROLES.ACCOUNTING, label: "Accounting" },
   { value: ROLES.VISITOR, label: "Visitor" },
 ];
+const PERFORMANCE_PAGE_KEYS = ["perf_daily", "perf_weekly", "perf_monthly"];
+const PERFORMANCE_STATUS_SERIES = [
+  { key: "early", label: "Early", color: "#4b9fea" },
+  { key: "onTime", label: "On Time", color: "#66bb6a" },
+  { key: "late", label: "Late", color: "#f39c12" },
+  { key: "pto", label: "PTO", color: "#8e44ad" },
+  { key: "absent", label: "Absent", color: "#e74c3c" },
+  { key: "ncns", label: "NCNS", color: "#4b5563" },
+];
+const PERFORMANCE_STATUS_FILTER_ITEMS = [{ key: "ALL", label: "All" }, ...PERFORMANCE_STATUS_SERIES];
+const PERFORMANCE_STATUS_LABEL_BY_KEY = PERFORMANCE_STATUS_SERIES.reduce((acc, item) => {
+  acc[item.key] = item.label;
+  return acc;
+}, {});
+const CORE_PAGE_KEYS = PAGE_KEYS.filter(
+  (page) => page !== "control_panel" && !PERFORMANCE_PAGE_KEYS.includes(page)
+);
+const ROLE_BULK_MANAGED_PAGE_KEYS = PAGE_KEYS.filter((page) => page !== "control_panel");
 
 const toPreviewText = (value, maxLen = 140) => {
   const cleaned = String(value || "").replace(/\s+/g, " ").trim();
@@ -144,6 +182,44 @@ const addDaysYmd = (ymd, deltaDays) => {
   if (Number.isNaN(d.getTime())) return ymd;
   d.setUTCDate(d.getUTCDate() + Number(deltaDays || 0));
   return d.toISOString().slice(0, 10);
+};
+
+const enumerateYmdRange = (start, end) => {
+  if (!start || !end || start > end) return [];
+
+  const out = [];
+  let cur = start;
+  while (cur <= end) {
+    out.push(cur);
+    const next = addDaysYmd(cur, 1);
+    if (!next || next === cur) break;
+    cur = next;
+  }
+  return out;
+};
+
+const startOfWeekYmd = (ymd) => {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return "";
+  const dow = d.getUTCDay();
+  const back = dow === 0 ? 6 : dow - 1;
+  return addDaysYmd(ymd, -back);
+};
+
+const dayKeyFromMsInZone = (ms, timeZone) => {
+  if (!Number.isFinite(ms)) return "";
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(ms));
+
+  const map = {};
+  for (const part of parts) map[part.type] = part.value;
+  if (!map.year || !map.month || !map.day) return "";
+  return `${map.year}-${map.month}-${map.day}`;
 };
 
 const getLogEventTs = (log) => {
@@ -185,6 +261,106 @@ const getAttendanceStatusText = (log) =>
   String(
     pick(log || {}, ["status", "attendanceStatus", "dailyStatus", "remark"], "")
   ).trim();
+
+const buildPieConicGradient = (slices, total) => {
+  const safeTotal = Math.max(1, Number(total) || 0);
+  let cur = 0;
+
+  const parts = slices.map((s) => {
+    const val = Math.max(0, Number(s.value) || 0);
+    const deg = (val / safeTotal) * 360;
+    const a0 = cur;
+    const a1 = cur + deg;
+    cur = a1;
+    return `${s.color} ${a0}deg ${a1}deg`;
+  });
+
+  if (cur < 360) parts.push(`rgba(255,255,255,0.08) ${cur}deg 360deg`);
+  return `conic-gradient(${parts.join(", ")})`;
+};
+
+const normalizePerformanceAttendanceStatus = (raw) => {
+  const s = String(raw || "").toLowerCase();
+  if (!s) return "";
+  if (s.includes("early")) return "early";
+  if (s.includes("on-time") || s.includes("on time") || s.includes("ontime") || s.includes("present")) {
+    return "onTime";
+  }
+  if (s.includes("late")) return "late";
+  if (s.includes("pto") || s.includes("leave")) return "pto";
+  if (s.includes("absent")) return "absent";
+  if (s.includes("ncns") || s.includes("no show") || s.includes("no-show") || s.includes("no call")) {
+    return "ncns";
+  }
+  return "";
+};
+
+const toDateInputValue = (value) => {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    return "";
+  }
+
+  if (typeof value?.toDate === "function") {
+    const d = value.toDate();
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? "" : value.toISOString().slice(0, 10);
+  }
+
+  return "";
+};
+
+const formatYmdForDisplay = (ymd, timeZone = "UTC") => {
+  if (!ymd) return "-";
+  const d = new Date(`${String(ymd)}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return String(ymd);
+
+  return new Intl.DateTimeFormat([], {
+    timeZone: String(timeZone || "").trim() || "UTC",
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+  }).format(d);
+};
+
+const formatTsForDisplay = (ts, timeZone = "UTC") => {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts);
+
+  return new Intl.DateTimeFormat([], {
+    timeZone: String(timeZone || "").trim() || "UTC",
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+};
+
+const formatTimeForDisplay = (ts, timeZone = "UTC") => {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts);
+
+  return new Intl.DateTimeFormat([], {
+    timeZone: String(timeZone || "").trim() || "UTC",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+};
+
+const getEmployeePositionLabel = (employee = {}, profile = {}) =>
+  pick(employee, ["position", "role", "jobTitle"], "") ||
+  pick(profile, ["position", "role", "jobTitle"], "") ||
+  "Unassigned Position";
 
 const containsAbsentStatus = (statusText) =>
   String(statusText || "").trim().toLowerCase().includes("absent");
@@ -269,10 +445,8 @@ const PAGE_HEADER_TITLES = {
   attendance: "Attendance",
   schedule: "Schedule",
   assignment: "Assignment Management",
-  manage_employee: "Employee Profile Center",
   control_panel: "Control Panel",
   register_portal_user: "Register Portal User",
-  special_users: "Special Users",
   notifications: "Notifications",
   manage_announcements: "Manage Announcements",
   perf_daily: "Performance Report (Daily)",
@@ -343,7 +517,7 @@ const getDefaultAnnouncementWindow = () => {
 };
 
 export default function App() {
-  const { user, isAuthenticated, signOut } = useAuth();
+  const { user, isAuthenticated, authReady, signOut } = useAuth();
 
   const [authScreen, setAuthScreen] = useState("login");
 
@@ -426,6 +600,14 @@ export default function App() {
     taskId: "",
     requestId: 0,
   });
+  const [assignmentCreateRequest, setAssignmentCreateRequest] = useState({
+    assigneeUserId: "",
+    requestId: 0,
+  });
+  const [attendanceOpenRequest, setAttendanceOpenRequest] = useState({
+    userId: "",
+    requestId: 0,
+  });
   const [announcements, setAnnouncements] = useState([]);
   const [loadingAnnouncements, setLoadingAnnouncements] = useState(false);
   const [announcementsError, setAnnouncementsError] = useState("");
@@ -456,6 +638,9 @@ export default function App() {
     action: "",
   });
   const [selectedNotification, setSelectedNotification] = useState(null);
+  const [selectedLiveAgentId, setSelectedLiveAgentId] = useState("");
+  const [showLiveAgentModal, setShowLiveAgentModal] = useState(false);
+  const [liveAgentLogStatus, setLiveAgentLogStatus] = useState("ALL");
 
   const authSessionKey = useMemo(() => {
     if (!isAuthenticated || !user) return "";
@@ -473,7 +658,9 @@ export default function App() {
   const [breakLogsByUserId, setBreakLogsByUserId] = useState({});
 
   const [notifications, setNotifications] = useState([]);
+  const [archivedNotifications, setArchivedNotifications] = useState([]);
   const [overBreakNotes, setOverBreakNotes] = useState([]);
+  const [archivedOverBreakNotes, setArchivedOverBreakNotes] = useState([]);
   const [profileImagesByUserId, setProfileImagesByUserId] = useState({});
   const [toastQueue, setToastQueue] = useState([]);
   const seenToastIdsRef = useRef(new Set());
@@ -493,18 +680,39 @@ export default function App() {
     () => String(user?.role || "").trim().toLowerCase().replace(/\s+/g, "_"),
     [user?.role]
   );
-  const canRequestPortalUser = useMemo(() => viewerRole === ROLES.ADMIN, [viewerRole]);
+  const canManageUserAdministration = useMemo(() => {
+    if (!isAuthenticated || !user) return false;
+    return (
+      canAccessPage(user.role, "control_panel", user?.allowedPages) ||
+      canAccessPage(user.role, "register_portal_user", user?.allowedPages)
+    );
+  }, [isAuthenticated, user]);
+  const canRequestPortalUser = useMemo(() => {
+    if (!isAuthenticated || !user) return false;
+    const role = normalizeRole(user.role);
+    return role === ROLES.ADMIN;
+  }, [isAuthenticated, user]);
   const canReviewPortalUserRequests = useMemo(
-    () => viewerRole === ROLES.SUPER_ADMIN,
-    [viewerRole]
+    () => canManageUserAdministration,
+    [canManageUserAdministration]
   );
   const canLoadSpecialUsers = useMemo(
-    () => viewerRole === ROLES.SUPER_ADMIN,
-    [viewerRole]
+    () => canManageUserAdministration,
+    [canManageUserAdministration]
   );
   const canPostAnnouncements = useMemo(
-    () => viewerRole === ROLES.VISITOR || viewerRole === ROLES.ADMIN || viewerRole === ROLES.SUPER_ADMIN,
-    [viewerRole]
+    () =>
+      !!user &&
+      canAccessPage(user.role, "manage_announcements", user?.allowedPages),
+    [user]
+  );
+  const canAccessNotificationArchive = useMemo(
+    () => !!isAuthenticated && !!user,
+    [isAuthenticated, user]
+  );
+  const canManageNotificationArchive = useMemo(
+    () => normalizeRole(user?.role) === ROLES.SUPER_ADMIN,
+    [user?.role]
   );
 
   const handleLogoutClick = useCallback(() => {
@@ -621,6 +829,39 @@ export default function App() {
     });
   }, []);
 
+  const handleConsumeAssignmentCreateRequest = useCallback((requestId) => {
+    const targetRequestId = Number(requestId || 0);
+    if (!targetRequestId) return;
+
+    setAssignmentCreateRequest((prev) => {
+      if (Number(prev?.requestId || 0) !== targetRequestId) return prev;
+      return { assigneeUserId: "", requestId: 0 };
+    });
+  }, []);
+
+  const handleConsumeAttendanceOpenRequest = useCallback((requestId) => {
+    const targetRequestId = Number(requestId || 0);
+    if (!targetRequestId) return;
+
+    setAttendanceOpenRequest((prev) => {
+      if (Number(prev?.requestId || 0) !== targetRequestId) return prev;
+      return { userId: "", requestId: 0 };
+    });
+  }, []);
+
+  const handleOpenLiveAgentModal = useCallback((agent) => {
+    const userId = String(agent?.id || agent?.userId || "").trim();
+    if (!userId) return;
+
+    setSelectedLiveAgentId(userId);
+    setLiveAgentLogStatus("ALL");
+    setShowLiveAgentModal(true);
+  }, []);
+
+  const handleCloseLiveAgentModal = useCallback(() => {
+    setShowLiveAgentModal(false);
+  }, []);
+
   const isLiveAgentsLoadingNow =
     loadingUsers || loadingTodayLogs || loadingBreaks || loadingBreakUsage;
   const showLiveAgentsStartupLoading = !hasCompletedInitialLiveAgentsLoading;
@@ -688,6 +929,37 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedNotification]);
+
+  useEffect(() => {
+    if (!showLiveAgentModal) return;
+
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setShowLiveAgentModal(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showLiveAgentModal]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const lockClass = "portal-scroll-lock";
+    if (showLiveAgentModal) {
+      document.documentElement.classList.add(lockClass);
+      document.body.classList.add(lockClass);
+    } else {
+      document.documentElement.classList.remove(lockClass);
+      document.body.classList.remove(lockClass);
+    }
+
+    return () => {
+      document.documentElement.classList.remove(lockClass);
+      document.body.classList.remove(lockClass);
+    };
+  }, [showLiveAgentModal]);
 
   useEffect(() => {
     let active = true;
@@ -890,19 +1162,28 @@ export default function App() {
   );
 
   const reloadNotifications = useCallback(async () => {
-    const viewerRole = String(currentViewerIdentity?.role || "").toLowerCase();
-    const isAdminLike = viewerRole === ROLES.SUPER_ADMIN || viewerRole === ROLES.ADMIN;
-
-    if (!currentViewerIdentity?.userId && !isAdminLike) {
+    if (!isAuthenticated || !user) {
       setNotifications((prev) => (prev.length ? [] : prev));
+      setArchivedNotifications((prev) => (prev.length ? [] : prev));
+      return;
+    }
+
+    if (!currentViewerIdentity?.userId) {
+      setNotifications((prev) => (prev.length ? [] : prev));
+      setArchivedNotifications((prev) => (prev.length ? [] : prev));
       return;
     }
 
     try {
-      const rows = await getNotificationsForUser(currentViewerIdentity);
-      const list = Array.isArray(rows) ? rows : [];
+      const [activeRowsRaw, archivedRowsRaw] = await Promise.all([
+        getNotificationsForUser(currentViewerIdentity, { archived: false }),
+        getNotificationsForUser(currentViewerIdentity, { archived: true }),
+      ]);
+      const activeList = Array.isArray(activeRowsRaw) ? activeRowsRaw : [];
+      const archivedList = Array.isArray(archivedRowsRaw) ? archivedRowsRaw : [];
       const announcementRows = announcementsRef.current;
-      const enrichedRows = list.map((row) => {
+      const enrichRows = (rows = []) =>
+        rows.map((row) => {
         if (!isAnnouncementNotification(row?.type)) return row;
         if (String(row?.message || "").trim()) return row;
 
@@ -927,9 +1208,13 @@ export default function App() {
         };
       });
 
-      setNotifications(enrichedRows);
+      const enrichedActiveRows = enrichRows(activeList);
+      const enrichedArchivedRows = enrichRows(archivedList);
 
-      const unread = enrichedRows.filter((row) => !row?.read);
+      setNotifications(enrichedActiveRows);
+      setArchivedNotifications(enrichedArchivedRows);
+
+      const unread = enrichedActiveRows.filter((row) => !row?.read);
       const freshUnread = unread.filter((row) => !seenToastIdsRef.current.has(row.id));
 
       if (freshUnread.length > 0) {
@@ -948,27 +1233,22 @@ export default function App() {
     } catch (err) {
       console.error("Failed to load notifications:", err);
     }
-  }, [currentViewerIdentity?.role, currentViewerIdentity?.userId]);
+  }, [currentViewerIdentity, isAuthenticated, user]);
 
   const reloadOverBreakNotes = useCallback(async () => {
     if (!isAuthenticated || !user) {
       setOverBreakNotes((prev) => (prev.length ? [] : prev));
+      setArchivedOverBreakNotes((prev) => (prev.length ? [] : prev));
       return;
     }
 
     try {
-      const rows = await getOverBreakNotes(user);
-
-      if (user?.role === ROLES.SUPER_ADMIN) {
-        setOverBreakNotes(rows);
-        return;
-      }
-
-      const currentUid = String(
-        user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
-      );
-
-      setOverBreakNotes(rows.filter((row) => String(row?.userId || "") === currentUid));
+      const [activeRowsRaw, archivedRowsRaw] = await Promise.all([
+        getOverBreakNotes(user, { archived: false }),
+        getOverBreakNotes(user, { archived: true }),
+      ]);
+      setOverBreakNotes(Array.isArray(activeRowsRaw) ? activeRowsRaw : []);
+      setArchivedOverBreakNotes(Array.isArray(archivedRowsRaw) ? archivedRowsRaw : []);
     } catch (err) {
       console.error("Failed to load over-break notes:", err);
     }
@@ -1094,6 +1374,364 @@ export default function App() {
     [reloadNotifications]
   );
 
+  const handleResetAllNotificationsData = useCallback(async () => {
+    if (!canManageNotificationArchive) return;
+
+    try {
+      await resetAllNotificationData();
+      pushToast({
+        type: "success",
+        title: "Notifications Reset",
+        message: "All notification data for all users has been deleted.",
+      });
+    } catch (err) {
+      console.error("Failed to reset all notification data:", err);
+      pushToast({
+        type: "error",
+        title: "Reset Failed",
+        message: err?.message || "Could not reset notification data.",
+      });
+    } finally {
+      await Promise.all([reloadNotifications(), reloadOverBreakNotes()]);
+    }
+  }, [canManageNotificationArchive, pushToast, reloadNotifications, reloadOverBreakNotes]);
+
+  const handleArchiveNotification = useCallback(
+    async (notificationId) => {
+      if (!canAccessNotificationArchive) return;
+      const id = String(notificationId || "").trim();
+      if (!id) return;
+
+      try {
+        await archiveNotification(id, {
+          userId: currentViewerIdentity?.userId || "",
+          name: user?.name || user?.displayName || user?.email || "Portal User",
+          role: user?.role || "",
+        });
+
+        pushToast({
+          type: "success",
+          title: "Moved to Archive",
+          message: "Notification moved to archive.",
+        });
+      } catch (err) {
+        console.error("Failed to archive notification:", err);
+        pushToast({
+          type: "error",
+          title: "Archive Failed",
+          message: err?.message || "Could not move notification to archive.",
+        });
+      } finally {
+        await reloadNotifications();
+      }
+    },
+    [
+      canAccessNotificationArchive,
+      currentViewerIdentity?.userId,
+      pushToast,
+      reloadNotifications,
+      user?.displayName,
+      user?.email,
+      user?.name,
+      user?.role,
+    ]
+  );
+
+  const handleArchiveAllNotifications = useCallback(
+    async (ids = []) => {
+      if (!canAccessNotificationArchive) return;
+
+      const notificationIds = Array.from(
+        new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean))
+      );
+      if (!notificationIds.length) return;
+
+      try {
+        await archiveAllNotifications(notificationIds, {
+          userId: currentViewerIdentity?.userId || "",
+          name: user?.name || user?.displayName || user?.email || "Portal User",
+          role: user?.role || "",
+        });
+
+        pushToast({
+          type: "success",
+          title: "Inbox Archived",
+          message: `${notificationIds.length} notification(s) moved to archive.`,
+        });
+      } catch (err) {
+        console.error("Failed to archive all notifications:", err);
+        pushToast({
+          type: "error",
+          title: "Archive Failed",
+          message: err?.message || "Could not move inbox to archive.",
+        });
+      } finally {
+        await reloadNotifications();
+      }
+    },
+    [
+      canAccessNotificationArchive,
+      currentViewerIdentity?.userId,
+      pushToast,
+      reloadNotifications,
+      user?.displayName,
+      user?.email,
+      user?.name,
+      user?.role,
+    ]
+  );
+
+  const handleArchiveOverBreakNote = useCallback(
+    async (noteId) => {
+      if (!canAccessNotificationArchive) return;
+      const id = String(noteId || "").trim();
+      if (!id) return;
+
+      try {
+        await archiveOverBreakNote(id, {
+          userId: currentViewerIdentity?.userId || "",
+          name: user?.name || user?.displayName || user?.email || "Portal User",
+          role: user?.role || "",
+        });
+
+        pushToast({
+          type: "success",
+          title: "Moved to Archive",
+          message: "Over-break record moved to archive.",
+        });
+      } catch (err) {
+        console.error("Failed to archive over-break record:", err);
+        pushToast({
+          type: "error",
+          title: "Archive Failed",
+          message: err?.message || "Could not move over-break record to archive.",
+        });
+      } finally {
+        await reloadOverBreakNotes();
+      }
+    },
+    [
+      canAccessNotificationArchive,
+      currentViewerIdentity?.userId,
+      pushToast,
+      reloadOverBreakNotes,
+      user?.displayName,
+      user?.email,
+      user?.name,
+      user?.role,
+    ]
+  );
+
+  const handleArchiveAllOverBreakNotes = useCallback(
+    async (ids = []) => {
+      if (!canAccessNotificationArchive) return;
+
+      const noteIds = Array.from(
+        new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean))
+      );
+      if (!noteIds.length) return;
+
+      try {
+        await archiveAllOverBreakNotes(noteIds, {
+          userId: currentViewerIdentity?.userId || "",
+          name: user?.name || user?.displayName || user?.email || "Portal User",
+          role: user?.role || "",
+        });
+
+        pushToast({
+          type: "success",
+          title: "Over-break Archived",
+          message: `${noteIds.length} record(s) moved to archive.`,
+        });
+      } catch (err) {
+        console.error("Failed to archive all over-break notes:", err);
+        pushToast({
+          type: "error",
+          title: "Archive Failed",
+          message: err?.message || "Could not move over-break records to archive.",
+        });
+      } finally {
+        await reloadOverBreakNotes();
+      }
+    },
+    [
+      canAccessNotificationArchive,
+      currentViewerIdentity?.userId,
+      pushToast,
+      reloadOverBreakNotes,
+      user?.displayName,
+      user?.email,
+      user?.name,
+      user?.role,
+    ]
+  );
+
+  const handleRestoreArchivedNotification = useCallback(
+    async (notificationId) => {
+      if (!canAccessNotificationArchive) return;
+      const id = String(notificationId || "").trim();
+      if (!id) return;
+
+      try {
+        await restoreNotification(id);
+        pushToast({
+          type: "success",
+          title: "Restored",
+          message: "Notification moved back to inbox.",
+        });
+      } catch (err) {
+        console.error("Failed to restore notification:", err);
+        pushToast({
+          type: "error",
+          title: "Restore Failed",
+          message: err?.message || "Could not restore notification.",
+        });
+      } finally {
+        await reloadNotifications();
+      }
+    },
+    [canAccessNotificationArchive, pushToast, reloadNotifications]
+  );
+
+  const handleDeleteArchivedNotification = useCallback(
+    async (notificationId) => {
+      if (!canManageNotificationArchive) return;
+      const id = String(notificationId || "").trim();
+      if (!id) return;
+
+      try {
+        await deleteNotification(id);
+        pushToast({
+          type: "success",
+          title: "Deleted",
+          message: "Notification deleted permanently.",
+        });
+      } catch (err) {
+        console.error("Failed to delete notification:", err);
+        pushToast({
+          type: "error",
+          title: "Delete Failed",
+          message: err?.message || "Could not delete notification.",
+        });
+      } finally {
+        await reloadNotifications();
+      }
+    },
+    [canManageNotificationArchive, pushToast, reloadNotifications]
+  );
+
+  const handleDeleteAllArchivedNotifications = useCallback(
+    async (ids = []) => {
+      if (!canManageNotificationArchive) return;
+      const notificationIds = Array.from(
+        new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean))
+      );
+      if (!notificationIds.length) return;
+
+      try {
+        await deleteAllNotifications(notificationIds);
+        pushToast({
+          type: "success",
+          title: "Deleted",
+          message: `${notificationIds.length} archived notification(s) deleted permanently.`,
+        });
+      } catch (err) {
+        console.error("Failed to delete all archived notifications:", err);
+        pushToast({
+          type: "error",
+          title: "Delete Failed",
+          message: err?.message || "Could not delete archived notifications.",
+        });
+      } finally {
+        await reloadNotifications();
+      }
+    },
+    [canManageNotificationArchive, pushToast, reloadNotifications]
+  );
+
+  const handleRestoreArchivedOverBreakNote = useCallback(
+    async (noteId) => {
+      if (!canAccessNotificationArchive) return;
+      const id = String(noteId || "").trim();
+      if (!id) return;
+
+      try {
+        await restoreOverBreakNote(id);
+        pushToast({
+          type: "success",
+          title: "Restored",
+          message: "Over-break record restored.",
+        });
+      } catch (err) {
+        console.error("Failed to restore over-break record:", err);
+        pushToast({
+          type: "error",
+          title: "Restore Failed",
+          message: err?.message || "Could not restore over-break record.",
+        });
+      } finally {
+        await reloadOverBreakNotes();
+      }
+    },
+    [canAccessNotificationArchive, pushToast, reloadOverBreakNotes]
+  );
+
+  const handleDeleteArchivedOverBreakNote = useCallback(
+    async (noteId) => {
+      if (!canManageNotificationArchive) return;
+      const id = String(noteId || "").trim();
+      if (!id) return;
+
+      try {
+        await deleteOverBreakNote(id);
+        pushToast({
+          type: "success",
+          title: "Deleted",
+          message: "Over-break record deleted permanently.",
+        });
+      } catch (err) {
+        console.error("Failed to delete over-break record:", err);
+        pushToast({
+          type: "error",
+          title: "Delete Failed",
+          message: err?.message || "Could not delete over-break record.",
+        });
+      } finally {
+        await reloadOverBreakNotes();
+      }
+    },
+    [canManageNotificationArchive, pushToast, reloadOverBreakNotes]
+  );
+
+  const handleDeleteAllArchivedOverBreakNotes = useCallback(
+    async (ids = []) => {
+      if (!canManageNotificationArchive) return;
+      const noteIds = Array.from(
+        new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean))
+      );
+      if (!noteIds.length) return;
+
+      try {
+        await deleteAllOverBreakNotes(noteIds);
+        pushToast({
+          type: "success",
+          title: "Deleted",
+          message: `${noteIds.length} archived over-break record(s) deleted permanently.`,
+        });
+      } catch (err) {
+        console.error("Failed to delete all archived over-break records:", err);
+        pushToast({
+          type: "error",
+          title: "Delete Failed",
+          message: err?.message || "Could not delete archived over-break records.",
+        });
+      } finally {
+        await reloadOverBreakNotes();
+      }
+    },
+    [canManageNotificationArchive, pushToast, reloadOverBreakNotes]
+  );
+
   const reloadActiveBreaks = useCallback(async () => {
     if (!isAuthenticated || !user) {
       setActiveBreaksByUserId((prev) => (Object.keys(prev).length ? {} : prev));
@@ -1103,16 +1741,6 @@ export default function App() {
     setLoadingBreaks(true);
 
     try {
-      const currentUid = String(
-        user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
-      ).trim();
-
-      if (String(user?.role || "").trim().toLowerCase() === ROLES.EMPLOYEE) {
-        const employeeBreak = currentUid ? await getActiveBreakForUser(currentUid) : null;
-        setActiveBreaksByUserId(employeeBreak ? { [currentUid]: employeeBreak } : {});
-        return;
-      }
-
       const rows = await getActiveBreaks();
       const next = {};
 
@@ -1179,14 +1807,7 @@ export default function App() {
     setLoadingBreakUsage(true);
 
     try {
-      const currentUid = String(
-        user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
-      ).trim();
-      const isEmployeeViewer = String(user?.role || "").trim().toLowerCase() === ROLES.EMPLOYEE;
-
-      const items = isEmployeeViewer
-        ? [currentUid].filter(Boolean)
-        : validEmployees.map((emp) => String(getUserId(emp)));
+      const items = validEmployees.map((emp) => String(getUserId(emp)));
 
       const results = await mapWithConcurrency(items, 6, async (userId) => {
         const logs = await getBreakLogsForUserOnDate(userId, new Date());
@@ -1217,6 +1838,12 @@ export default function App() {
   }, [isAuthenticated, user, validEmployees]);
 
   const reloadEmployeeProfiles = useCallback(async () => {
+    if (!isAuthenticated || !user) {
+      setEmployeeProfilesByUserId({});
+      setEmployeeProfilesError("");
+      return;
+    }
+
     if (!validEmployees.length) {
       setEmployeeProfilesByUserId({});
       setEmployeeProfilesError("");
@@ -1237,10 +1864,10 @@ export default function App() {
     } finally {
       setLoadingEmployeeProfiles(false);
     }
-  }, [validEmployees]);
+  }, [isAuthenticated, user, validEmployees]);
 
   const reloadSpecialUsers = useCallback(async () => {
-    if (!canLoadSpecialUsers) {
+    if (!isAuthenticated || !user || !canLoadSpecialUsers) {
       setSpecialUsers([]);
       setSpecialUsersError("");
       return;
@@ -1259,10 +1886,10 @@ export default function App() {
     } finally {
       setLoadingSpecialUsers(false);
     }
-  }, [canLoadSpecialUsers]);
+  }, [canLoadSpecialUsers, isAuthenticated, user]);
 
   const reloadPortalUserRequests = useCallback(async () => {
-    if (!canReviewPortalUserRequests) {
+    if (!isAuthenticated || !user || !canReviewPortalUserRequests) {
       setPortalUserRequests([]);
       setPortalUserRequestsError("");
       return;
@@ -1281,10 +1908,14 @@ export default function App() {
     } finally {
       setLoadingPortalUserRequests(false);
     }
-  }, [canReviewPortalUserRequests]);
+  }, [canReviewPortalUserRequests, isAuthenticated, user]);
 
   const reloadEmployeePermissions = useCallback(async () => {
-    if (user?.role !== ROLES.SUPER_ADMIN) {
+    if (
+      !isAuthenticated ||
+      !user ||
+      !canAccessPage(user.role, "control_panel", user?.allowedPages)
+    ) {
       setEmployeePermissionsByUserId({});
       setEmployeePermissionsError("");
       return;
@@ -1330,7 +1961,7 @@ export default function App() {
     } finally {
       setLoadingEmployeePermissions(false);
     }
-  }, [user?.role, validEmployees]);
+  }, [isAuthenticated, user, validEmployees]);
 
   const reloadAssignments = useCallback(async () => {
     if (!isAuthenticated || !user || !canAccessPage(user.role, "assignment", user?.allowedPages)) {
@@ -1446,6 +2077,203 @@ export default function App() {
 
     return result;
   }, []);
+
+  const handleTransferEmployeeToPortalRole = useCallback(
+    async ({ userId, role, employeeData = {} } = {}) => {
+      const uid = String(userId || "").trim();
+      if (!uid) throw new Error("Missing employee user id");
+
+      return transferEmployeeToPortalRole(uid, role, employeeData);
+    },
+    []
+  );
+
+  const handleTransferSpecialUserToEmployeeRole = useCallback(
+    async ({ userId, userData = {} } = {}) => {
+      const uid = String(userId || "").trim();
+      if (!uid) throw new Error("Missing user id");
+
+      return transferPortalUserToEmployeeRole(uid, userData);
+    },
+    []
+  );
+
+  const handleDeleteAdminPortalUser = useCallback(async ({ userId } = {}) => {
+    const uid = String(userId || "").trim();
+    if (!uid) throw new Error("Missing user id");
+
+    return deleteAdminPortalUser(uid);
+  }, []);
+
+  const handleAdminUpdateEmployeePassword = useCallback(
+    async ({ userId, newPassword, employeeData = {} } = {}) => {
+      const uid = String(userId || "").trim();
+      if (!uid) throw new Error("Missing employee user id");
+
+      return adminUpdateEmployeePortalPassword({
+        userId: uid,
+        newPassword,
+        employeeData,
+      });
+    },
+    []
+  );
+
+  const handleApplyRoleCorePagesToAll = useCallback(
+    async ({ role, corePages = [], performancePages = [] } = {}) => {
+      const normalizedRole = normalizeRole(role);
+      const cleanCorePages = Array.from(
+        new Set(
+          (Array.isArray(corePages) ? corePages : [])
+            .map((page) => String(page || "").trim().toLowerCase())
+            .filter((page) => CORE_PAGE_KEYS.includes(page))
+        )
+      );
+      const cleanPerformancePages = Array.from(
+        new Set(
+          (Array.isArray(performancePages) ? performancePages : [])
+            .map((page) => String(page || "").trim().toLowerCase())
+            .filter((page) => PERFORMANCE_PAGE_KEYS.includes(page))
+        )
+      );
+      const nextRoleManagedPages = Array.from(
+        new Set([...cleanCorePages, ...cleanPerformancePages]).values()
+      ).filter((page) => ROLE_BULK_MANAGED_PAGE_KEYS.includes(page));
+
+      const mergeWithNonCorePages = (existingAllowedPages = []) => {
+        const preserved = (Array.isArray(existingAllowedPages) ? existingAllowedPages : []).filter(
+          (page) =>
+            PAGE_KEYS.includes(page) &&
+            !ROLE_BULK_MANAGED_PAGE_KEYS.includes(page)
+        );
+        return Array.from(new Set([...nextRoleManagedPages, ...preserved]));
+      };
+
+      if (normalizedRole === ROLES.EMPLOYEE) {
+        const targets = validEmployees
+          .map((emp) => {
+            const uid = String(getUserId(emp) || "").trim();
+            if (!uid) return null;
+
+            const permission = employeePermissionsByUserId?.[uid] || {};
+            const existingAllowedPages =
+              Array.isArray(permission?.allowedPages) && permission.allowedPages.length > 0
+                ? permission.allowedPages
+                : DEFAULT_ROLE_PAGES[ROLES.EMPLOYEE] || [];
+
+            return {
+              uid,
+              name: getDisplayName(emp),
+              email: pick(emp, ["email"], ""),
+              allowedPages: mergeWithNonCorePages(existingAllowedPages),
+            };
+          })
+          .filter(Boolean);
+
+        const results = await mapWithConcurrency(targets, 8, async (target) => {
+          await updateEmployeeAllowedPages(target.uid, target.allowedPages, {
+            name: target.name,
+            email: target.email,
+          });
+          return target;
+        });
+
+        const succeeded = [];
+        const failed = [];
+        for (let idx = 0; idx < results.length; idx += 1) {
+          const result = results[idx];
+          if (result?.ok) {
+            succeeded.push(result.value);
+          } else {
+            failed.push(targets[idx]?.uid || `index_${idx}`);
+          }
+        }
+
+        if (succeeded.length) {
+          setEmployeePermissionsByUserId((prev) => {
+            const next = { ...(prev || {}) };
+            for (const item of succeeded) {
+              next[item.uid] = {
+                ...(next[item.uid] || {}),
+                userId: item.uid,
+                role: ROLES.EMPLOYEE,
+                name: item.name || next[item.uid]?.name || "",
+                email: item.email || next[item.uid]?.email || "",
+                allowedPages: item.allowedPages,
+              };
+            }
+            return next;
+          });
+        }
+
+        return {
+          role: normalizedRole,
+          updatedCount: succeeded.length,
+          failedCount: failed.length,
+        };
+      }
+
+      const supportedSpecialRoles = [ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
+      if (!supportedSpecialRoles.includes(normalizedRole)) {
+        throw new Error("Choose Admin, Accounting, Visitor, or Employee.");
+      }
+
+      const targets = (Array.isArray(specialUsers) ? specialUsers : [])
+        .filter((row) => normalizeRole(row?.role) === normalizedRole)
+        .map((row) => {
+          const uid = String(row?.uid || row?.id || "").trim();
+          if (!uid) return null;
+
+          const existingAllowedPages =
+            Array.isArray(row?.allowedPages) && row.allowedPages.length > 0
+              ? row.allowedPages
+              : DEFAULT_ROLE_PAGES[normalizedRole] || [];
+
+          return {
+            uid,
+            allowedPages: mergeWithNonCorePages(existingAllowedPages),
+          };
+        })
+        .filter(Boolean);
+
+      const results = await mapWithConcurrency(targets, 8, async (target) => {
+        await updatePortalUserAllowedPages(target.uid, target.allowedPages);
+        return target;
+      });
+
+      const succeeded = [];
+      const failed = [];
+      for (let idx = 0; idx < results.length; idx += 1) {
+        const result = results[idx];
+        if (result?.ok) {
+          succeeded.push(result.value);
+        } else {
+          failed.push(targets[idx]?.uid || `index_${idx}`);
+        }
+      }
+
+      if (succeeded.length) {
+        const byId = new Map(succeeded.map((item) => [item.uid, item.allowedPages]));
+        setSpecialUsers((prev) =>
+          (Array.isArray(prev) ? prev : []).map((row) => {
+            const uid = String(row?.uid || row?.id || "").trim();
+            if (!uid || !byId.has(uid)) return row;
+            return {
+              ...row,
+              allowedPages: byId.get(uid),
+            };
+          })
+        );
+      }
+
+      return {
+        role: normalizedRole,
+        updatedCount: succeeded.length,
+        failedCount: failed.length,
+      };
+    },
+    [employeePermissionsByUserId, specialUsers, validEmployees]
+  );
 
   const handleCreateAssignment = useCallback(
     async (payload = {}) => {
@@ -1769,7 +2597,7 @@ export default function App() {
         throw err;
       }
     },
-    [pushToast, user?.email, user?.firebaseUid, user?.id, user?.uid, user?.userId]
+    [pushToast, user?.email, user?.firebaseUid, user?.id, user?.role, user?.uid, user?.userId]
   );
 
   const handlePostAnnouncement = useCallback(
@@ -2042,8 +2870,22 @@ export default function App() {
   const employeeDashboardEmployees = useMemo(() => {
     if (!user) return [];
 
-    if (user.role === ROLES.EMPLOYEE) {
-      return dashboardEmployees.filter((emp) => String(getUserId(emp)) === String(user.userId));
+    const normalizedRole = normalizeRole(user?.role);
+    const currentUserId = String(
+      getUserId(user) ||
+        user?.userId ||
+        user?.uid ||
+        user?.id ||
+        user?.firebaseUid ||
+        user?.employeeId ||
+        ""
+    ).trim();
+
+    if (normalizedRole === ROLES.EMPLOYEE) {
+      return dashboardEmployees.filter((emp) => {
+        const employeeUserId = String(getUserId(emp) || emp?.userId || emp?.id || "").trim();
+        return employeeUserId === currentUserId;
+      });
     }
 
     return dashboardEmployees;
@@ -2051,8 +2893,23 @@ export default function App() {
 
   const attendanceAndScheduleEmployees = useMemo(() => dashboardEmployees, [dashboardEmployees]);
 
+  const specialUserIdSet = useMemo(
+    () =>
+      new Set(
+        (Array.isArray(specialUsers) ? specialUsers : [])
+          .map((row) => String(row?.uid || row?.id || "").trim())
+          .filter(Boolean)
+      ),
+    [specialUsers]
+  );
+
   const controlPanelEmployees = useMemo(() => {
-    return validEmployees.map((emp) => {
+    return validEmployees
+      .filter((emp) => {
+        const uid = String(getUserId(emp) || "").trim();
+        return !!uid && !specialUserIdSet.has(uid);
+      })
+      .map((emp) => {
       const uid = String(getUserId(emp) || "");
       const permission = employeePermissionsByUserId?.[uid] || {};
 
@@ -2070,7 +2927,7 @@ export default function App() {
             : DEFAULT_ROLE_PAGES[ROLES.EMPLOYEE] || [],
       };
     });
-  }, [validEmployees, employeePermissionsByUserId]);
+  }, [validEmployees, employeePermissionsByUserId, specialUserIdSet]);
 
   useEffect(() => {
     if (!isAuthenticated || !user) {
@@ -2099,6 +2956,26 @@ export default function App() {
   }, [user, activePage]);
 
   useEffect(() => {
+    if (!user) return;
+
+    const normalizedRole = normalizeRole(user?.role);
+    const currentUserId = String(
+      getUserId(user) ||
+        user?.userId ||
+        user?.uid ||
+        user?.id ||
+        user?.firebaseUid ||
+        user?.employeeId ||
+        ""
+    ).trim();
+
+    if (normalizedRole === ROLES.EMPLOYEE) {
+      if (String(selectedEmployeeId) !== currentUserId) {
+        setSelectedEmployeeId(currentUserId);
+      }
+      return;
+    }
+
     if (selectedEmployeeId) {
       const exists = employeeDashboardEmployees.some(
         (e) => String(getUserId(e) ?? "") === String(selectedEmployeeId)
@@ -2113,7 +2990,7 @@ export default function App() {
     if (String(selectedEmployeeId) !== first) {
       setSelectedEmployeeId(first);
     }
-  }, [employeeDashboardEmployees, selectedEmployeeId]);
+  }, [employeeDashboardEmployees, selectedEmployeeId, user]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -2191,6 +3068,14 @@ export default function App() {
     },
     [api, endDate, historyByUserId]
   );
+
+  useEffect(() => {
+    if (!showLiveAgentModal) return;
+    const uid = String(selectedLiveAgentId || "").trim();
+    if (!uid) return;
+
+    fetchFullHistoryForUser(uid).catch(() => {});
+  }, [showLiveAgentModal, selectedLiveAgentId, fetchFullHistoryForUser]);
 
   useEffect(() => {
     const syncBusinessDay = () => {
@@ -2445,6 +3330,221 @@ export default function App() {
     return live.sort((a, b) => a.name.localeCompare(b.name));
   }, [employees, validEmployees, isUserLiveNow, isUserOnBreak]);
 
+  const canUseAssignTaskShortcut = useMemo(() => {
+    if (!user) return false;
+    const role = normalizeRole(user.role);
+    if (role !== ROLES.ADMIN && role !== ROLES.SUPER_ADMIN) return false;
+    return canAccessPage(user.role, "assignment", user?.allowedPages);
+  }, [user]);
+
+  const liveAgentWeeklyWindow = useMemo(() => {
+    const end = String(endDate || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      return {
+        start: "",
+        end: "",
+        dayKeySet: new Set(),
+      };
+    }
+
+    const start = startOfWeekYmd(end);
+    const weekEnd = addDaysYmd(start, 6);
+    const endForWeek = weekEnd > end ? end : weekEnd;
+    const dayKeys = enumerateYmdRange(start, endForWeek);
+
+    return {
+      start,
+      end: endForWeek,
+      dayKeySet: new Set(dayKeys),
+    };
+  }, [endDate]);
+
+  const selectedLiveAgent = useMemo(() => {
+    const uid = String(selectedLiveAgentId || "").trim();
+    if (!uid) return null;
+
+    const employee =
+      dashboardEmployees.find((emp) => String(getUserId(emp) || "") === uid) || null;
+    if (!employee) return null;
+
+    const profile = employeeProfilesByUserId?.[uid] || {};
+    const sidebarLiveEntry =
+      liveAgentsForSidebar.find((entry) => String(entry?.id || "") === uid) || null;
+
+    const profileImg = String(profileImagesByUserId?.[uid] || "").trim() || getProfileImageUrl(employee);
+    const position = getEmployeePositionLabel(employee, profile);
+
+    const joinedYmd = toDateInputValue(
+      profile?.startDate ||
+        employee?.startDate ||
+        employee?.dateJoined ||
+        employee?.joinedDate ||
+        ""
+    );
+    const joinedFallbackMs = toMillis(profile?.createdAt ?? employee?.createdAt ?? null);
+
+    const rangeLogs = Array.isArray(logsByUserId?.[uid]) ? logsByUserId[uid] : [];
+    const historyLogs = Array.isArray(historyByUserId?.[uid]) ? historyByUserId[uid] : [];
+
+    const tableSourceLogs = historyLogs.length ? historyLogs : rangeLogs;
+    const attendanceRows = [];
+
+    for (const log of tableSourceLogs) {
+      const tsValue = pick(log, ["timestamp", "createdAt", "time"], null);
+      const ts = toMillis(tsValue);
+      if (!Number.isFinite(ts)) continue;
+
+      const dayKey = dayKeyFromMsInZone(ts, businessTimeZone);
+      if (!liveAgentWeeklyWindow.dayKeySet.has(dayKey)) continue;
+
+      const statusText = pick(log, ["status", "attendanceStatus", "dailyStatus", "remark"], "");
+      const statusKey = normalizePerformanceAttendanceStatus(statusText);
+      if (!statusKey) continue;
+
+      const rawNoteText = pick(
+        log,
+        [
+          "notes",
+          "note",
+          "attendanceNotes",
+          "attendanceNote",
+          "comment",
+          "comments",
+          "remarks",
+          "remark",
+          "reason",
+          "details",
+          "description",
+        ],
+        ""
+      );
+      const noteText =
+        String(rawNoteText || "").trim().toLowerCase() ===
+        String(statusText || "").trim().toLowerCase()
+          ? ""
+          : String(rawNoteText || "").trim();
+
+      attendanceRows.push({
+        userId: uid,
+        employeeName: getDisplayName(employee),
+        dayKey,
+        statusKey,
+        statusText: statusText || PERFORMANCE_STATUS_LABEL_BY_KEY[statusKey] || "",
+        noteText,
+        ts,
+      });
+    }
+
+    attendanceRows.sort((a, b) => b.ts - a.ts);
+    const breakdownCounts = PERFORMANCE_STATUS_SERIES.reduce((acc, item) => {
+      acc[item.key] = 0;
+      return acc;
+    }, {});
+
+    for (const row of attendanceRows) {
+      if (breakdownCounts[row.statusKey] !== undefined) {
+        breakdownCounts[row.statusKey] += 1;
+      }
+    }
+    const breakdownTotal = attendanceRows.length;
+    const breakdownPieBackground = buildPieConicGradient(
+      PERFORMANCE_STATUS_SERIES.map((item) => ({
+        color: item.color,
+        value: breakdownCounts[item.key],
+      })),
+      breakdownTotal
+    );
+
+    const filteredRows =
+      liveAgentLogStatus === "ALL"
+        ? attendanceRows
+        : attendanceRows.filter((row) => row.statusKey === liveAgentLogStatus);
+
+    const breakLimitMinutes = Math.max(1, Number(DAILY_BREAK_LIMIT_MINUTES) || 60);
+    const breakUsage = breakUsageByUserId?.[uid] || {};
+    const breakUsedMinutes = Math.max(0, Number(breakUsage?.totalMinutes || 0));
+    const breakMinutesLeft = Math.max(0, breakLimitMinutes - breakUsedMinutes);
+    const breakRemainingPct = Math.min(
+      100,
+      Math.max(0, (breakMinutesLeft / Math.max(1, breakLimitMinutes)) * 100)
+    );
+    const breakHue = Math.round((breakMinutesLeft / Math.max(1, breakLimitMinutes)) * 120);
+    const breakRingColor = `hsl(${breakHue} 78% 42%)`;
+    const breakRingBackground = `conic-gradient(${breakRingColor} ${breakRemainingPct}%, #e2e8f0 0)`;
+
+    return {
+      userId: uid,
+      name: getDisplayName(employee),
+      email: pick(employee, ["email"], "") || uid,
+      position,
+      status: sidebarLiveEntry?.status || (isUserOnBreak(uid) ? "On Break" : "Live"),
+      joinedText: joinedYmd
+        ? formatYmdForDisplay(joinedYmd, businessTimeZone)
+        : Number.isFinite(joinedFallbackMs)
+          ? formatTsForDisplay(joinedFallbackMs, businessTimeZone)
+          : "-",
+      profileImg,
+      breakdownCounts,
+      breakdownTotal,
+      breakdownPieBackground,
+      breakdownRangeLabel:
+        liveAgentWeeklyWindow.start && liveAgentWeeklyWindow.end
+          ? `${liveAgentWeeklyWindow.start} -> ${liveAgentWeeklyWindow.end}`
+          : "-",
+      recentLogs: filteredRows,
+      totalRecentLogs: attendanceRows.length,
+      hasLogStatusFilter: liveAgentLogStatus !== "ALL",
+      hasHistory: historyLogs.length > 0,
+      historyLoading: !!loadingHistoryByUserId?.[uid],
+      historyError: String(historyErrorByUserId?.[uid] || ""),
+      breakLimitMinutes,
+      breakUsedMinutes,
+      breakMinutesLeft,
+      breakRemainingPct,
+      breakRingBackground,
+    };
+  }, [
+    selectedLiveAgentId,
+    dashboardEmployees,
+    employeeProfilesByUserId,
+    liveAgentsForSidebar,
+    profileImagesByUserId,
+    logsByUserId,
+    historyByUserId,
+    liveAgentLogStatus,
+    businessTimeZone,
+    loadingHistoryByUserId,
+    historyErrorByUserId,
+    liveAgentWeeklyWindow,
+    isUserOnBreak,
+    breakUsageByUserId,
+  ]);
+
+  const handleOpenLiveAgentAttendance = useCallback(() => {
+    const uid = String(selectedLiveAgent?.userId || "").trim();
+    if (!uid) return;
+
+    setSelectedEmployeeId(uid);
+    setAttendanceOpenRequest((prev) => ({
+      userId: uid,
+      requestId: Number(prev?.requestId || 0) + 1,
+    }));
+    setShowLiveAgentModal(false);
+    setActivePage("attendance");
+  }, [selectedLiveAgent]);
+
+  const handleOpenLiveAgentAssignTask = useCallback(() => {
+    const uid = String(selectedLiveAgent?.userId || "").trim();
+    if (!uid) return;
+
+    setAssignmentCreateRequest((prev) => ({
+      assigneeUserId: uid,
+      requestId: Number(prev?.requestId || 0) + 1,
+    }));
+    setShowLiveAgentModal(false);
+    setActivePage("assignment");
+  }, [selectedLiveAgent]);
+
   const invoiceEmbedUrl =
     import.meta.env.VITE_INVOICES_EMBED_URL ||
     "https://us-central1-zahga-crm.cloudfunctions.net/api/invoices?apiKey=hhi_0e2ba3c7f94bd6c11b324d01c01ce7f28910d04dfe4163672b0e5dcba0bce5e3";
@@ -2467,7 +3567,9 @@ export default function App() {
       portalUserRequests,
       employeePermissionsByUserId,
       notifications,
+      archivedNotifications,
       overBreakNotes,
+      archivedOverBreakNotes,
       profileImagesByUserId,
       attendanceResetTime,
       businessTimeZone,
@@ -2555,7 +3657,9 @@ export default function App() {
       portalUserRequests,
       employeePermissionsByUserId,
       notifications,
+      archivedNotifications,
       overBreakNotes,
+      archivedOverBreakNotes,
       profileImagesByUserId,
       attendanceResetTime,
       businessTimeZone,
@@ -2646,6 +3750,15 @@ export default function App() {
     );
   }
 
+  if (!authReady) {
+    return (
+      <div className="portal-auth-loading" role="status" aria-live="polite" aria-busy="true">
+        <div className="portal-logout-spinner" />
+        <div className="portal-logout-text">Restoring session...</div>
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return authScreen === "register" ? (
       <RegisterPortalUser onBackToLogin={() => setAuthScreen("login")} />
@@ -2663,6 +3776,7 @@ export default function App() {
         liveAgents={liveAgentsForSidebar}
         userRole={user?.role}
         userAllowedPages={user?.allowedPages || []}
+        onSelectLiveAgent={handleOpenLiveAgentModal}
       />
 
       <div className="secondheader">
@@ -2683,7 +3797,7 @@ export default function App() {
           </div>
 
           <div className="portal-topbar-actions">
-            {user?.role === ROLES.SUPER_ADMIN ? (
+            {canAccessPage(user?.role, "register_portal_user", user?.allowedPages) ? (
               <button
                 className="portal-btn portal-btn-primary"
                 onClick={() => setActivePage("register_portal_user")}
@@ -2730,122 +3844,79 @@ export default function App() {
         {globalError && <p className="portal-global-error">{globalError}</p>}
 
         <main ref={portalMainRef} className="portal-main">
-          {activePage === "manage_employee" && (
-            <div className="portal-page-pad">
-              {user?.role === ROLES.SUPER_ADMIN ? (
-                <ManageEmployee
-                  employees={allEmployeesForSharedPages}
-                  schedulesByUserId={schedulesByUserId}
-                  logsByUserId={logsByUserId}
-                  todayLogsByUserId={todayLogsByUserId}
-                  historyByUserId={historyByUserId}
-                  loadingHistoryByUserId={loadingHistoryByUserId}
-                  historyErrorByUserId={historyErrorByUserId}
-                  activeBreaksByUserId={activeBreaksByUserId}
-                  breakUsageByUserId={breakUsageByUserId}
-                  employeeProfilesByUserId={employeeProfilesByUserId}
-                  loadingEmployeeProfiles={loadingEmployeeProfiles}
-                  employeeProfilesError={employeeProfilesError}
-                  attendanceErrorsByUserId={attendanceErrorsByUserId}
-                  scheduleErrorsByUserId={scheduleErrorsByUserId}
-                  attendanceResetTime={attendanceResetTime}
-                  businessTimeZone={businessTimeZone}
-                  startDate={startDate}
-                  endDate={endDate}
-                  rangeDays={rangeDays}
-                  viewer={user}
-                  onToast={pushToast}
-                  onSaveEmployeeStartDate={handleSaveEmployeeStartDate}
-                  onFetchFullHistory={fetchFullHistoryForUser}
-                  pageData={sharedPageData}
-                />
-              ) : null}
-            </div>
-          )}
 
           {activePage === "control_panel" && (
             <div className="portal-page-pad">
-              {user?.role === ROLES.SUPER_ADMIN ? (
-                <ControlPanelPage
-                  viewer={user}
-                  specialUsers={specialUsers}
-                  employees={controlPanelEmployees}
-                  loadingUsersData={loadingSpecialUsers || loadingEmployeePermissions}
-                  usersError={specialUsersError || employeePermissionsError}
-                  attendanceResetTime={attendanceResetTime}
-                  businessTimeZone={businessTimeZone}
-                  attendanceDisplayTimeZoneMode={attendanceDisplayTimeZoneMode}
-                  attendanceDisplayTimeZone={attendanceDisplayTimeZone}
-                  storageTimeZone={storageTimeZone}
-                  onSaveEmployeeAllowedPages={handleUpdateEmployeeAllowedPages}
-                  onSaveSpecialUserAllowedPages={handleUpdatePortalUserAllowedPages}
-                  onReloadUsers={async () => {
-                    await reloadSpecialUsers();
-                    await reloadEmployeePermissions();
-                  }}
-                  onAttendanceSettingsChange={(nextSettings) => {
-                    const nextReset = nextSettings?.resetTime || attendanceResetTime;
-                    const nextMode =
-                      nextSettings?.displayTimeZoneMode || DISPLAY_TIME_ZONE_MODE_DEVICE;
-                    const nextDisplay = String(nextSettings?.displayTimeZone || "").trim();
-                    const nextStorage =
-                      String(nextSettings?.storageTimeZone || "").trim() ||
-                      DEFAULT_STORAGE_TIME_ZONE;
-                    const resolvedDisplay =
-                      String(nextSettings?.resolvedBusinessTimeZone || "").trim() ||
-                      resolveAttendanceDisplayTimeZone(nextSettings, getDeviceTimeZone());
+              <ControlPanelPage
+                viewer={user}
+                specialUsers={specialUsers}
+                employees={controlPanelEmployees}
+                loadingUsersData={loadingSpecialUsers || loadingEmployeePermissions}
+                usersError={specialUsersError || employeePermissionsError}
+                attendanceResetTime={attendanceResetTime}
+                businessTimeZone={businessTimeZone}
+                attendanceDisplayTimeZoneMode={attendanceDisplayTimeZoneMode}
+                attendanceDisplayTimeZone={attendanceDisplayTimeZone}
+                storageTimeZone={storageTimeZone}
+                onSaveEmployeeAllowedPages={handleUpdateEmployeeAllowedPages}
+                onSaveSpecialUserAllowedPages={handleUpdatePortalUserAllowedPages}
+                onTransferEmployeeToPortalRole={handleTransferEmployeeToPortalRole}
+                onTransferSpecialUserToEmployeeRole={handleTransferSpecialUserToEmployeeRole}
+                onDeleteAdminUser={handleDeleteAdminPortalUser}
+                onSetEmployeePassword={handleAdminUpdateEmployeePassword}
+                employeeProfilesByUserId={employeeProfilesByUserId}
+                onSaveEmployeeStartDate={handleSaveEmployeeStartDate}
+                onApplyRoleCorePagesToAll={handleApplyRoleCorePagesToAll}
+                onReloadUsers={async () => {
+                  await reloadSpecialUsers();
+                  await reloadEmployeePermissions();
+                }}
+                userRequests={portalUserRequests}
+                loadingRequests={loadingPortalUserRequests}
+                requestsError={portalUserRequestsError}
+                processingRequestId={processingPortalUserRequest.id}
+                processingRequestAction={processingPortalUserRequest.action}
+                onApproveRequest={handleApprovePortalUserRequest}
+                onRejectRequest={handleRejectPortalUserRequest}
+                onUpdateUserProfile={handleUpdateSpecialUserProfile}
+                onChangeUserEmail={handleChangeSpecialUserEmail}
+                onSendPasswordReset={handleSendSpecialUserPasswordReset}
+                onReloadRequests={reloadPortalUserRequests}
+                onAttendanceSettingsChange={(nextSettings) => {
+                  const nextReset = nextSettings?.resetTime || attendanceResetTime;
+                  const nextMode =
+                    nextSettings?.displayTimeZoneMode || DISPLAY_TIME_ZONE_MODE_DEVICE;
+                  const nextDisplay = String(nextSettings?.displayTimeZone || "").trim();
+                  const nextStorage =
+                    String(nextSettings?.storageTimeZone || "").trim() ||
+                    DEFAULT_STORAGE_TIME_ZONE;
+                  const resolvedDisplay =
+                    String(nextSettings?.resolvedBusinessTimeZone || "").trim() ||
+                    resolveAttendanceDisplayTimeZone(nextSettings, getDeviceTimeZone());
 
-                    setStoredAttendanceResetTime(nextReset);
-                    setAttendanceResetTime(nextReset);
-                    setAttendanceDisplayTimeZoneMode(nextMode);
-                    setAttendanceDisplayTimeZone(nextDisplay);
-                    setStorageTimeZone(nextStorage);
-                    setBusinessTimeZone(resolvedDisplay);
-                  }}
-                  onAttendanceResetTimeChange={(value) => {
-                    setStoredAttendanceResetTime(value);
-                    setAttendanceResetTime(value);
-                  }}
-                  onBusinessTimeZoneChange={(value) => {
-                    setBusinessTimeZone(value);
-                  }}
-                  onToast={pushToast}
-                  pageData={sharedPageData}
-                />
-              ) : null}
+                  setStoredAttendanceResetTime(nextReset);
+                  setAttendanceResetTime(nextReset);
+                  setAttendanceDisplayTimeZoneMode(nextMode);
+                  setAttendanceDisplayTimeZone(nextDisplay);
+                  setStorageTimeZone(nextStorage);
+                  setBusinessTimeZone(resolvedDisplay);
+                }}
+                onAttendanceResetTimeChange={(value) => {
+                  setStoredAttendanceResetTime(value);
+                  setAttendanceResetTime(value);
+                }}
+                onBusinessTimeZoneChange={(value) => {
+                  setBusinessTimeZone(value);
+                }}
+                onToast={pushToast}
+                pageData={sharedPageData}
+              />
             </div>
           )}
 
           {activePage === "register_portal_user" && (
             <div className="portal-page-pad">
-              {user?.role === ROLES.SUPER_ADMIN ? (
-                <RegisterPortalUser onBackToLogin={() => setActivePage("dashboard")} />
-              ) : null}
-            </div>
-          )}
-
-          {activePage === "special_users" && (
-            <div className="portal-page-pad">
-              {user?.role === ROLES.SUPER_ADMIN ? (
-                <SpecialUsersPage
-                  users={specialUsers}
-                  loading={loadingSpecialUsers}
-                  error={specialUsersError}
-                  userRequests={portalUserRequests}
-                  loadingRequests={loadingPortalUserRequests}
-                  requestsError={portalUserRequestsError}
-                  processingRequestId={processingPortalUserRequest.id}
-                  processingRequestAction={processingPortalUserRequest.action}
-                  onApproveRequest={handleApprovePortalUserRequest}
-                  onRejectRequest={handleRejectPortalUserRequest}
-                  onUpdateUserProfile={handleUpdateSpecialUserProfile}
-                  onChangeUserEmail={handleChangeSpecialUserEmail}
-                  onSendPasswordReset={handleSendSpecialUserPasswordReset}
-                  onReloadRequests={reloadPortalUserRequests}
-                  onOpenControlPanel={() => setActivePage("control_panel")}
-                  pageData={sharedPageData}
-                />
-              ) : null}
+              <RegisterPortalUser onBackToLogin={() => setActivePage("dashboard")} />
             </div>
           )}
 
@@ -2853,9 +3924,24 @@ export default function App() {
             <div className="portal-page-pad">
               <NotificationsPage
                 notifications={notifications}
+                archivedNotifications={archivedNotifications}
                 overBreakNotes={overBreakNotes}
+                archivedOverBreakNotes={archivedOverBreakNotes}
                 onMarkNotificationRead={handleNotificationClick}
                 onMarkAllRead={handleMarkAllNotificationsRead}
+                onResetAllNotificationData={handleResetAllNotificationsData}
+                onArchiveNotification={handleArchiveNotification}
+                onArchiveAllNotifications={handleArchiveAllNotifications}
+                onArchiveOverBreakNote={handleArchiveOverBreakNote}
+                onArchiveAllOverBreakNotes={handleArchiveAllOverBreakNotes}
+                onRestoreArchivedNotification={handleRestoreArchivedNotification}
+                onDeleteArchivedNotification={handleDeleteArchivedNotification}
+                onDeleteAllArchivedNotifications={handleDeleteAllArchivedNotifications}
+                onRestoreArchivedOverBreakNote={handleRestoreArchivedOverBreakNote}
+                onDeleteArchivedOverBreakNote={handleDeleteArchivedOverBreakNote}
+                onDeleteAllArchivedOverBreakNotes={handleDeleteAllArchivedOverBreakNotes}
+                canAccessNotificationArchive={canAccessNotificationArchive}
+                canManageNotificationArchive={canManageNotificationArchive}
                 businessTimeZone={businessTimeZone}
                 pageData={sharedPageData}
               />
@@ -2971,6 +4057,8 @@ export default function App() {
               activeBreaksByUserId={activeBreaksByUserId}
               attendanceResetTime={attendanceResetTime}
               businessTimeZone={businessTimeZone}
+              openEmployeeDrawerRequest={attendanceOpenRequest}
+              onConsumeOpenEmployeeDrawerRequest={handleConsumeAttendanceOpenRequest}
               pageData={sharedPageData}
             />
           )}
@@ -3011,6 +4099,8 @@ export default function App() {
                 onToast={pushToast}
                 openTaskRequest={assignmentOpenRequest}
                 onConsumeOpenTaskRequest={handleConsumeAssignmentOpenRequest}
+                openCreateRequest={assignmentCreateRequest}
+                onConsumeOpenCreateRequest={handleConsumeAssignmentCreateRequest}
                 pageData={sharedPageData}
               />
             </div>
@@ -3311,6 +4401,210 @@ export default function App() {
           </form>
         </>
       )}
+
+      {showLiveAgentModal && selectedLiveAgent ? (
+        <>
+          <div
+            onClick={handleCloseLiveAgentModal}
+            className="portal-modal-backdrop portal-live-agent-backdrop"
+          />
+
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="live-agent-modal-title"
+            className="portal-dialog portal-dialog-live-agent"
+          >
+            <div className="portal-live-agent-head">
+              <div className="portal-live-agent-profile">
+                <div className="portal-live-agent-avatar" aria-label={selectedLiveAgent.name}>
+                  {selectedLiveAgent.profileImg ? (
+                    <img
+                      src={selectedLiveAgent.profileImg}
+                      alt={`${selectedLiveAgent.name} profile`}
+                      className="portal-live-agent-avatar-img"
+                      loading="lazy"
+                    />
+                  ) : (
+                    String(selectedLiveAgent.name || "?")
+                      .split(/\s+/)
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .map((part) => part[0])
+                      .join("")
+                      .toUpperCase() || "?"
+                  )}
+                </div>
+
+                <div className="portal-live-agent-meta">
+                  <h2 id="live-agent-modal-title" className="portal-dialog-title portal-live-agent-title">
+                    {selectedLiveAgent.name}
+                  </h2>
+                  <div className="portal-live-agent-sub">{selectedLiveAgent.email}</div>
+                  <div className="portal-live-agent-top-tags">
+                    <span className="portal-live-agent-tag">{selectedLiveAgent.position}</span>
+                    <span className="portal-live-agent-tag">Joined: {selectedLiveAgent.joinedText}</span>
+                    <span className="portal-live-agent-tag status">{selectedLiveAgent.status}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="portal-live-agent-head-right">
+                <div className="portal-live-agent-break-ring-wrap">
+                  <div
+                    className="portal-live-agent-break-ring"
+                    style={{ background: selectedLiveAgent.breakRingBackground }}
+                    aria-label={`Break minutes remaining ${Math.round(selectedLiveAgent.breakMinutesLeft || 0)} out of ${Math.round(selectedLiveAgent.breakLimitMinutes || 0)}`}
+                  >
+                    <div className="portal-live-agent-break-ring-inner">
+                      <div className="portal-live-agent-break-ring-value">
+                        {Math.round(selectedLiveAgent.breakMinutesLeft || 0)}
+                      </div>
+                      <div className="portal-live-agent-break-ring-label">min left</div>
+                    </div>
+                  </div>
+                  <div className="portal-live-agent-break-ring-caption">
+                    Break Remaining
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCloseLiveAgentModal}
+                  className="portal-live-agent-close"
+                  aria-label="Close employee details"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="portal-live-agent-body">
+              <div className="portal-live-agent-grid">
+                <div className="portal-live-agent-card portal-live-agent-card-summary">
+                  <div className="portal-live-agent-card-title">Basic Employee Info</div>
+                  <div className="portal-live-agent-donut-block">
+                    <div
+                      className="attPie"
+                      style={{ background: selectedLiveAgent.breakdownPieBackground }}
+                      aria-label={`Attendance breakdown total ${selectedLiveAgent.breakdownTotal}`}
+                    >
+                      <div className="attHole">
+                        <div className="attHoleLabel">Range</div>
+                        <div className="attHoleValue">{selectedLiveAgent.breakdownRangeLabel}</div>
+
+                        <div className="attHoleLabel attHoleLabelSpacing">Total Counted</div>
+                        <div className="attHoleTotal">{selectedLiveAgent.breakdownTotal}</div>
+                      </div>
+                    </div>
+                    <div className="portal-live-agent-summary-list">
+                      {PERFORMANCE_STATUS_SERIES.map((item) => (
+                        <div key={`live-agent-breakdown-${item.key}`} className="portal-live-agent-breakdown-row">
+                          <span className="portal-live-agent-breakdown-label">
+                            <span className={`dot dash-tone-${item.key}`} />
+                            <span>{item.label}</span>
+                          </span>
+                          <strong>{Number(selectedLiveAgent.breakdownCounts?.[item.key] || 0)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="portal-live-agent-card portal-live-agent-card-logs">
+                  <div className="prpCardTop">
+                    <div className="prpCardHead">Weekly Attendance Logs</div>
+                    <div className="prpLogFilters">
+                      <div className="prpStatusFilter">
+                        <span className="prpStatusFilterLabel">Status</span>
+                        <div className="prpStatusFilterChips" role="group" aria-label="Status filter">
+                          {PERFORMANCE_STATUS_FILTER_ITEMS.map((item) => {
+                            const isActive = liveAgentLogStatus === item.key;
+                            const isAll = item.key === "ALL";
+
+                            return (
+                              <button
+                                key={`live-agent-status-filter-${item.key}`}
+                                type="button"
+                                className={`prpStatusChip ${isActive ? "isActive" : ""} ${isAll ? "isAll" : ""} ${isAll ? "" : `prpStatusTone-${item.key}`}`}
+                                onClick={() => setLiveAgentLogStatus(item.key)}
+                              >
+                                {item.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {selectedLiveAgent.historyError ? (
+                    <div className="portal-live-agent-error">{selectedLiveAgent.historyError}</div>
+                  ) : null}
+                  {selectedLiveAgent.historyLoading && !selectedLiveAgent.hasHistory ? (
+                    <div className="prpEmpty">Loading attendance logs...</div>
+                  ) : selectedLiveAgent.recentLogs.length === 0 ? (
+                    <div className="prpEmpty">
+                      {selectedLiveAgent.hasLogStatusFilter
+                        ? "No logs match the selected filters."
+                        : "No attendance logs found for this employee."}
+                    </div>
+                  ) : (
+                    <div className="prpTableWrap portal-live-agent-prp-wrap">
+                      <table className="prpTable">
+                        <thead>
+                          <tr>
+                            <th>Employee</th>
+                            <th>Day</th>
+                            <th>Time</th>
+                            <th>Status</th>
+                            <th>Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedLiveAgent.recentLogs.slice(0, 20).map((row) => (
+                            <tr key={`${row.userId}-${row.ts}-${row.statusKey}`}>
+                              <td>{row.employeeName}</td>
+                              <td>{row.dayKey || "-"}</td>
+                              <td>{formatTimeForDisplay(row.ts, businessTimeZone)}</td>
+                              <td>
+                                <span className={`prpStatusPill prpStatusTone-${row.statusKey}`}>
+                                  {row.statusText}
+                                </span>
+                              </td>
+                              <td className="prpNotesCell">{row.noteText || "-"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="portal-live-agent-actions">
+              {canUseAssignTaskShortcut ? (
+                <button
+                  type="button"
+                  className="portal-btn portal-btn-primary portal-live-agent-action-btn"
+                  onClick={handleOpenLiveAgentAssignTask}
+                >
+                  <ClipboardList size={16} strokeWidth={2} />
+                  <span>Assign a Task</span>
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                className="portal-btn portal-btn-secondary portal-live-agent-action-btn"
+                onClick={handleOpenLiveAgentAttendance}
+              >
+                <CalendarCheck size={16} strokeWidth={2} />
+                <span>Attendance</span>
+              </button>
+            </div>
+          </div>
+        </>
+      ) : null}
 
       {selectedNotification ? (
         <>

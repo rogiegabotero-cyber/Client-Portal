@@ -103,13 +103,33 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  font: inherit;
   font-size: 13px;
   opacity: 0.95;
+  border: 0;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  padding: 2px;
+  border-radius: 999px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+  padding: 5px 5px 5px 10px;
+  height: 100%;
+}
+
+.sb-live-item:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.sb-live-name {
+  font-weight: 700;
 }
 
 .sb-live-dot {
-  width: 9px;
-  height: 9px;
+  min-width: 7px;
+  min-height: 7px;
   border-radius: 999px;
   background: #22c55e;
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
@@ -207,13 +227,34 @@
   background: #dcfce7;
   padding: 4px 8px;
   border-radius: 999px;
-  width:auto;
+  width: auto;
+  max-width: 90px;
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+  padding-right: 14px;
+}
+
+.sb-live-status::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 16px;
+  height: 100%;
+  background: linear-gradient(to right, rgba(220, 252, 231, 0), #dcfce7 86%);
 }
 
 .sb-live-status.break {
   color: #b45309;
   background: #fef3c7;
   padding: 4px 8px;
+  padding-right: 14px;
+}
+
+.sb-live-status.break::after {
+  background: linear-gradient(to right, rgba(254, 243, 199, 0), #fef3c7 86%);
 }
 
 .sb-live-dot.break {

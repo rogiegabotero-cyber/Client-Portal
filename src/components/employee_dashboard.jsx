@@ -276,18 +276,69 @@ export default function EmployeeDashboard({
   const taskFilterDrawerRef = useRef(null);
   const [panelHeightPx, setPanelHeightPx] = useState(null);
 
+  const viewerRole = normalize(
+    pageData?.viewer?.role || pageData?.currentUser?.role || pageData?.user?.role || ""
+  );
+
+  const viewerUserId = String(
+    pageData?.viewer?.userId ||
+      pageData?.viewer?.uid ||
+      pageData?.viewer?.id ||
+      pageData?.currentUser?.userId ||
+      pageData?.currentUser?.uid ||
+      pageData?.currentUser?.id ||
+      pageData?.user?.userId ||
+      pageData?.user?.uid ||
+      pageData?.user?.id ||
+      ""
+  ).trim();
+
+  const lockedEmployeeId = useMemo(() => {
+    if (viewerRole !== "employee") return "";
+    if (!viewerUserId) return "";
+    return employeeIds.find((id) => String(id) === viewerUserId) || viewerUserId;
+  }, [viewerRole, viewerUserId, employeeIds]);
+
+  const canSwitchEmployee = viewerRole !== "employee" && employeeIds.length > 1;
+
   const effectiveSelectedId = useMemo(() => {
+    if (lockedEmployeeId) return lockedEmployeeId;
+
     const fromParent = String(selectedEmployeeId || "");
     if (fromParent) return fromParent;
+
     if (localSelectedId) return localSelectedId;
+
     return employeeIds[0] || "";
-  }, [selectedEmployeeId, localSelectedId, employeeIds]);
+  }, [lockedEmployeeId, selectedEmployeeId, localSelectedId, employeeIds]);
 
   const setSelected = (id) => {
-    const nextId = String(id || "");
-    if (typeof onSelectEmployeeId === "function") onSelectEmployeeId(nextId);
-    else setLocalSelectedId(nextId);
+    const requestedId = String(id || "");
+
+    const nextId = lockedEmployeeId
+      ? lockedEmployeeId
+      : canSwitchEmployee
+        ? requestedId
+        : employeeIds[0] || effectiveSelectedId || "";
+
+    if (typeof onSelectEmployeeId === "function") {
+      onSelectEmployeeId(nextId);
+    } else {
+      setLocalSelectedId(nextId);
+    }
   };
+
+  useEffect(() => {
+    if (!lockedEmployeeId) return;
+
+    if (String(selectedEmployeeId || "") !== lockedEmployeeId) {
+      if (typeof onSelectEmployeeId === "function") {
+        onSelectEmployeeId(lockedEmployeeId);
+      } else {
+        setLocalSelectedId(lockedEmployeeId);
+      }
+    }
+  }, [lockedEmployeeId, selectedEmployeeId, onSelectEmployeeId]);
 
   const employee = useMemo(
     () =>
@@ -681,6 +732,15 @@ export default function EmployeeDashboard({
     Math.max(0, (breakMinutesLeft / Math.max(1, breakLimitMinutes)) * 100)
   );
   const breakProgressPercent = Math.round(breakRemainingPct);
+  const breakSparkleLeftPct = Math.min(99.5, Math.max(0.5, breakProgressPercent));
+  const showBreakWarningMarker = breakMinutesLeft > 0 && breakMinutesLeft <= 5;
+  const breakRemainingRatio = Math.min(1, Math.max(0, breakMinutesLeft / Math.max(1, breakLimitMinutes)));
+  const breakProgressHue = Math.round(120 * breakRemainingRatio);
+  const breakProgressColor = `hsl(${breakProgressHue} 78% 42%)`;
+  const breakThirtyMinuteMarkerPct = Math.min(
+    100,
+    Math.max(0, (30 / Math.max(1, breakLimitMinutes)) * 100)
+  );
   let breakProgressVariant = "good";
   if (breakMinutesLeft <= 10) breakProgressVariant = "danger";
   else if (breakMinutesLeft <= 20) breakProgressVariant = "warning";
@@ -753,7 +813,7 @@ export default function EmployeeDashboard({
 
   const visitorAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcementRows) ? announcementRows : [];
-    const nowForWindowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+    const nowForWindowMs = Number.isFinite(nowMs) ? nowMs : 0;
     const notes = rows
       .map((item) => {
         const text = toText(
@@ -872,9 +932,10 @@ export default function EmployeeDashboard({
                 className="employee-select"
                 value={String(effectiveSelectedId)}
                 onChange={(e) => setSelected(e.target.value)}
+                disabled={!canSwitchEmployee || !!lockedEmployeeId}
               >
-                {employees.map((emp) => {
-                  const id = String(getUserId(emp) ?? "");
+                {(Array.isArray(employees) ? employees : []).map((emp) => {
+                  const id = String(getUserId(emp) ?? emp?.userId ?? emp?.id ?? "");
                   if (!id) return null;
 
                   return (
@@ -946,11 +1007,26 @@ export default function EmployeeDashboard({
                       <span>{Math.round(breakRemainingPct)}%</span>
                     </div>
 
-                    <progress
-                      className={`progressBar progressBar-${breakProgressVariant}`}
-                      max={100}
-                      value={breakProgressPercent}
-                    />
+                    <div
+                      className="progressBarWrap"
+                      style={{
+                        "--breakMarkerLeft": `${breakThirtyMinuteMarkerPct}%`,
+                        "--progressValue": `${breakSparkleLeftPct}%`,
+                        "--progressFill": breakProgressColor,
+                      }}
+                    >
+                      <progress
+                        className="progressBar progressBar-good"
+                        max={100}
+                        value={breakProgressPercent}
+                      />
+                      {showBreakWarningMarker ? (
+                        <span className="progressWarnIcon" aria-hidden="true">!</span>
+                      ) : (
+                        <span className="progressSparkle" aria-hidden="true" />
+                      )}
+                      <span className="progressMarker" aria-hidden="true" />
+                    </div>
 
                     <div className="progressMetaRow">
                       <span>Used</span>
@@ -1061,31 +1137,32 @@ export default function EmployeeDashboard({
                           <span className="taskFilterDrawerCount">
                             {taskFilterCounts[taskStatusFilter] ?? 0}
                           </span>
-                          {isTaskFilterOpen ? (
-                            <div className="taskFilterMenu" role="listbox" aria-label="Task status filters">
-                              {TASK_FILTER_OPTIONS.map((option) => {
-                                const isActive = taskStatusFilter === option.key;
-                                return (
-                                  <button
-                                    key={option.key}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={isActive}
-                                    className={`taskFilterMenuItem ${isActive ? "active" : ""}`}
-                                    onClick={() => handleTaskFilterSelect(option.key)}
-                                  >
-                                    <span>{option.label}</span>
-                                    <span className="taskFilterMenuItemCount">
-                                      {taskFilterCounts[option.key] ?? 0}
-                                    </span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : null}
                         </div>
                       </div>
                     </div>
+
+                    {isTaskFilterOpen ? (
+                      <div className="taskFilterMenu" role="listbox" aria-label="Task status filters">
+                        {TASK_FILTER_OPTIONS.map((option) => {
+                          const isActive = taskStatusFilter === option.key;
+                          return (
+                            <button
+                              key={option.key}
+                              type="button"
+                              role="option"
+                              aria-selected={isActive}
+                              className={`taskFilterMenuItem ${isActive ? "active" : ""}`}
+                              onClick={() => handleTaskFilterSelect(option.key)}
+                            >
+                              <span>{option.label}</span>
+                              <span className="taskFilterMenuItemCount">
+                                {taskFilterCounts[option.key] ?? 0}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
 
                     <div className="taskListBody">
                       {tasksLoading ? (

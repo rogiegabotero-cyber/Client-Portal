@@ -27,6 +27,7 @@ export default function Sidebar({
   liveAgents = [],
   userRole = "visitor",
   userAllowedPages = [],
+  onSelectLiveAgent,
 }) {
   const navItems = [
     {
@@ -52,9 +53,7 @@ export default function Sidebar({
       section: "ADMINISTRATION",
       items: [
         { key: "manage_announcements", label: "ANNOUNCEMENTS", icon: <Megaphone size={20} /> },
-        { key: "special_users", label: "SPECIAL USERS", icon: <ShieldCheck size={20} /> },
         { key: "control_panel", label: "CONTROL PANEL", icon: <SlidersHorizontal size={20} /> },
-        { key: "manage_employee", label: "MANAGE EMPLOYEE", icon: <UserCog size={20} /> },
       ],
     },
     {
@@ -110,13 +109,19 @@ export default function Sidebar({
                 const isBreak = String(a.status || "").toLowerCase().includes("break");
 
                 return (
-                  <div key={a.id} className="sb-live-item">
+                  <button
+                    key={a.id}
+                    type="button"
+                    className="sb-live-item"
+                    onClick={() => onSelectLiveAgent?.(a)}
+                    title={`View ${a.name} details`}
+                  >
                     <span className={`sb-live-dot ${isBreak ? "break" : ""}`} />
                     <span className="sb-live-name">{a.name}</span>
                     <span className={`sb-live-status ${isBreak ? "break" : ""}`}>
                       {a.status || "Live"}
                     </span>
-                  </div>
+                  </button>
                 );
               })
             )}

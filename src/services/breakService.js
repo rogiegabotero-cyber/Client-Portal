@@ -2,6 +2,7 @@ import {
   collection,
   addDoc,
   updateDoc,
+  deleteDoc,
   getDocs,
   serverTimestamp,
   Timestamp,
@@ -16,13 +17,15 @@ import { buildTimeZoneMeta, resolveStorageTimeZone } from "../utils/timeZoneMeta
 
 export const DAILY_BREAK_LIMIT_MINUTES = 60;
 export const BREAK_REMINDER_MINUTES = 55;
+export const BREAK_LIMIT_REACHED_MINUTES = 60;
 export const OVERBREAK_GRACE_MINUTES = 5;
 export const OVERBREAK_TRIGGER_MINUTES =
-  DAILY_BREAK_LIMIT_MINUTES + OVERBREAK_GRACE_MINUTES;
+  BREAK_LIMIT_REACHED_MINUTES + OVERBREAK_GRACE_MINUTES;
 
 const BREAK_LOGS_COLLECTION = "break_logs";
 const BREAK_NOTIFICATIONS_COLLECTION = "break_notifications";
 const OVERBREAK_NOTES_COLLECTION = "over_break_notes";
+const USERS_COLLECTION = "users";
 
 const toDate = (value) => {
   if (!value) return null;
@@ -31,6 +34,24 @@ const toDate = (value) => {
 
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const normalizeRoleValue = (value) => {
+  const role = String(value || "").trim().toLowerCase();
+  if (!role) return "";
+  if (role === "super admin" || role === "superadmin") return "super_admin";
+  return role;
+};
+
+const getUserIdentity = (user = {}) => {
+  const userId = String(
+    user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
+  ).trim();
+
+  return {
+    userId,
+    role: normalizeRoleValue(user?.role),
+  };
 };
 
 const minutesBetween = (startValue, endValue) => {
@@ -77,6 +98,31 @@ const normalizeYmd = (value) => {
   return `${y}-${m}-${day}`;
 };
 
+async function getPortalUsers() {
+  const snap = await getDocs(collection(db, USERS_COLLECTION));
+
+  return snap.docs
+    .map((row) => ({
+      id: row.id,
+      ...row.data(),
+    }))
+    .map((row) => {
+      const uid = String(row?.userId || row?.uid || row?.id || "").trim();
+      const firstName = String(row?.firstName || "").trim();
+      const lastName = String(row?.lastName || "").trim();
+      const fallbackName = String(row?.name || row?.displayName || "").trim();
+      const name = `${firstName} ${lastName}`.trim() || fallbackName || row?.email || uid;
+
+      return {
+        userId: uid,
+        email: String(row?.email || "").trim(),
+        name,
+        role: normalizeRoleValue(row?.role),
+      };
+    })
+    .filter((row) => row.userId);
+}
+
 async function findExistingOverBreakByBreakLogId(breakLogId) {
   if (!breakLogId) return null;
 
@@ -91,7 +137,7 @@ async function findExistingOverBreakByBreakLogId(breakLogId) {
   return rows.find((row) => String(row?.breakLogId || "") === String(breakLogId)) || null;
 }
 
-async function findExistingNotificationByBreakLogIdAndType(breakLogId, type) {
+async function findNotificationByBreakLogIdTypeAndUserId(breakLogId, type, userId = "") {
   if (!breakLogId || !type) return null;
 
   const snap = await getDocs(
@@ -102,12 +148,15 @@ async function findExistingNotificationByBreakLogIdAndType(breakLogId, type) {
     ...d.data(),
   }));
 
+  const normalizedUserId = String(userId || "").trim();
+
   return (
-    rows.find(
-      (row) =>
-        String(row?.breakLogId || "") === String(breakLogId) &&
-        String(row?.type || "") === String(type)
-    ) || null
+    rows.find((row) => {
+      if (String(row?.breakLogId || "") !== String(breakLogId)) return false;
+      if (String(row?.type || "") !== String(type)) return false;
+      if (!normalizedUserId) return true;
+      return String(row?.userId || "").trim() === normalizedUserId;
+    }) || null
   );
 }
 
@@ -122,6 +171,7 @@ async function createNotification({
   type = "",
   title = "",
   message = "",
+  targetPage = "notifications",
   minutesUsed = 0,
   minutesRemaining = 0,
   totalBreakMinutes = 0,
@@ -132,8 +182,8 @@ async function createNotification({
 
   const ref = await addDoc(collection(db, BREAK_NOTIFICATIONS_COLLECTION), {
     userId: String(userId || "").trim(),
-    audience,
-    role,
+    audience: String(audience || "").trim() || "employee",
+    role: String(role || "").trim(),
     name,
     email,
     breakLogId,
@@ -141,11 +191,16 @@ async function createNotification({
     type,
     title,
     message,
+    targetPage,
     minutesUsed,
     minutesRemaining,
     totalBreakMinutes,
     overBreakMinutes,
     read: false,
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: "",
+    archivedByName: "",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
@@ -153,6 +208,87 @@ async function createNotification({
   });
 
   return ref.id;
+}
+
+async function createBroadcastNotifications({
+  breakLogId = "",
+  overBreakId = "",
+  type = "",
+  title = "",
+  message = "",
+  sourceName = "",
+  sourceEmail = "",
+  minutesUsed = 0,
+  minutesRemaining = 0,
+  totalBreakMinutes = 0,
+  overBreakMinutes = 0,
+  skipUserId = "",
+}) {
+  const portalUsers = await getPortalUsers();
+  const normalizedSkipUserId = String(skipUserId || "").trim();
+
+  const createdIds = [];
+
+  for (const portalUser of portalUsers) {
+    if (!portalUser?.userId) continue;
+
+    const existing = await findNotificationByBreakLogIdTypeAndUserId(
+      breakLogId,
+      type,
+      portalUser.userId
+    );
+    if (existing?.id) continue;
+
+    const notificationId = await createNotification({
+      userId: portalUser.userId,
+      audience: "employee",
+      role: portalUser.role,
+      name: sourceName,
+      email: sourceEmail,
+      breakLogId,
+      overBreakId,
+      type,
+      title,
+      message,
+      minutesUsed,
+      minutesRemaining,
+      totalBreakMinutes,
+      overBreakMinutes,
+    });
+
+    createdIds.push(notificationId);
+  }
+
+  if (normalizedSkipUserId) {
+    const ownCopyExists =
+      createdIds.length > 0 ||
+      (await findNotificationByBreakLogIdTypeAndUserId(
+        breakLogId,
+        type,
+        normalizedSkipUserId
+      ));
+
+    if (!ownCopyExists) {
+      const fallbackId = await createNotification({
+        userId: normalizedSkipUserId,
+        audience: "employee",
+        breakLogId,
+        overBreakId,
+        type,
+        title,
+        message,
+        minutesUsed,
+        minutesRemaining,
+        totalBreakMinutes,
+        overBreakMinutes,
+        name: sourceName,
+        email: sourceEmail,
+      });
+      createdIds.push(fallbackId);
+    }
+  }
+
+  return createdIds;
 }
 
 async function createOrUpdateOverBreakNote({
@@ -189,7 +325,7 @@ async function createOrUpdateOverBreakNote({
     ? new Date(startedAtMs + OVERBREAK_TRIGGER_MINUTES * 60 * 1000)
     : now;
 
-  const overBreakMinutes = Math.max(0, totalBreakMinutes - OVERBREAK_TRIGGER_MINUTES);
+  const overBreakMinutes = Math.max(0, totalBreakMinutes - BREAK_LIMIT_REACHED_MINUTES);
 
   const existing = await findExistingOverBreakByBreakLogId(activeBreak.id);
 
@@ -207,14 +343,12 @@ async function createOrUpdateOverBreakNote({
     graceMinutes: OVERBREAK_GRACE_MINUTES,
     limitMinutes: DAILY_BREAK_LIMIT_MINUTES,
     triggerMinutes: OVERBREAK_TRIGGER_MINUTES,
-    note: `Agent exceeded break limit. Over-break counted after ${OVERBREAK_GRACE_MINUTES} minutes grace. Current over-break: ${formatDurationLabel(
+    note: `Employee exceeded the 1-hour break limit. Current over-break: ${formatDurationLabel(
       overBreakMinutes
     )}. Total break: ${formatDurationLabel(totalBreakMinutes)}.`,
     updatedAt: serverTimestamp(),
     ...buildTimeZoneMeta("startedAtClient", activeBreak.startedAt, storageTimeZone),
-    ...(endedAtDate
-      ? buildTimeZoneMeta("endedAtClient", endedAtDate, storageTimeZone)
-      : {}),
+    ...(endedAtDate ? buildTimeZoneMeta("endedAtClient", endedAtDate, storageTimeZone) : {}),
     ...buildTimeZoneMeta("overBreakStartedAtClient", overBreakStartedAt, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   };
@@ -234,6 +368,10 @@ async function createOrUpdateOverBreakNote({
 
   const ref = await addDoc(collection(db, OVERBREAK_NOTES_COLLECTION), {
     ...payload,
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: "",
+    archivedByName: "",
     createdAt: serverTimestamp(),
     ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
   });
@@ -245,6 +383,92 @@ async function createOrUpdateOverBreakNote({
     totalBreakMinutes,
     overBreakMinutes,
     overBreakStartedAt,
+  };
+}
+
+async function ensureBroadcastStageNotification({
+  activeBreak,
+  type,
+  title,
+  message,
+  name = "",
+  email = "",
+  userId = "",
+  totalBreakMinutes = 0,
+  overBreakId = "",
+  overBreakMinutes = 0,
+}) {
+  if (!activeBreak?.id || !type) {
+    return { created: false, reason: "missing-data" };
+  }
+
+  const portalUsers = await getPortalUsers();
+  let createdCount = 0;
+
+  for (const portalUser of portalUsers) {
+    if (!portalUser?.userId) continue;
+
+    const existing = await findNotificationByBreakLogIdTypeAndUserId(
+      activeBreak.id,
+      type,
+      portalUser.userId
+    );
+
+    if (existing?.id) continue;
+
+    await createNotification({
+      userId: portalUser.userId,
+      audience: "employee",
+      role: portalUser.role,
+      name,
+      email,
+      breakLogId: activeBreak.id,
+      overBreakId,
+      type,
+      title,
+      message,
+      minutesUsed: totalBreakMinutes,
+      minutesRemaining: Math.max(0, DAILY_BREAK_LIMIT_MINUTES - totalBreakMinutes),
+      totalBreakMinutes,
+      overBreakMinutes,
+    });
+
+    createdCount += 1;
+  }
+
+  const normalizedUserId = String(userId || "").trim();
+  if (normalizedUserId) {
+    const existingOwnCopy = await findNotificationByBreakLogIdTypeAndUserId(
+      activeBreak.id,
+      type,
+      normalizedUserId
+    );
+
+    if (!existingOwnCopy?.id) {
+      await createNotification({
+        userId: normalizedUserId,
+        audience: "employee",
+        role: "employee",
+        name,
+        email,
+        breakLogId: activeBreak.id,
+        overBreakId,
+        type,
+        title,
+        message,
+        minutesUsed: totalBreakMinutes,
+        minutesRemaining: Math.max(0, DAILY_BREAK_LIMIT_MINUTES - totalBreakMinutes),
+        totalBreakMinutes,
+        overBreakMinutes,
+      });
+
+      createdCount += 1;
+    }
+  }
+
+  return {
+    created: createdCount > 0,
+    createdCount,
   };
 }
 
@@ -267,15 +491,38 @@ export async function startBreak({ userId, name = "", email = "" }) {
     startedAt: Timestamp.fromDate(now),
     endedAt: null,
     isActive: true,
+
     reminderSent: false,
     reminderSentAt: null,
+
+    limitReachedAlertSent: false,
+    limitReachedAlertSentAt: null,
+
     overBreakSaved: false,
     overBreakSavedAt: null,
+
+    overBreakAlertSent: false,
+    overBreakAlertSentAt: null,
+
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     ...buildTimeZoneMeta("startedAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+  });
+
+  const displayName = String(name || email || uid).trim();
+  await createBroadcastNotifications({
+    breakLogId: ref.id,
+    type: "break_started",
+    title: "Employee on break",
+    message: `${displayName} is currently on break.`,
+    sourceName: name,
+    sourceEmail: email,
+    totalBreakMinutes: 0,
+    minutesUsed: 0,
+    minutesRemaining: DAILY_BREAK_LIMIT_MINUTES,
+    skipUserId: uid,
   });
 
   return {
@@ -286,7 +533,9 @@ export async function startBreak({ userId, name = "", email = "" }) {
     startedAt: now,
     isActive: true,
     reminderSent: false,
+    limitReachedAlertSent: false,
     overBreakSaved: false,
+    overBreakAlertSent: false,
   };
 }
 
@@ -302,11 +551,42 @@ export async function endBreak(userId) {
   const now = new Date();
   const storageTimeZone = resolveStorageTimeZone();
   const totalBreakMinutes = minutesBetween(activeBreak.startedAt, now);
-  const overBreakMinutes = Math.max(0, totalBreakMinutes - OVERBREAK_TRIGGER_MINUTES);
-
-  const breakRef = doc(db, BREAK_LOGS_COLLECTION, activeBreak.id);
+  const overBreakMinutes = Math.max(0, totalBreakMinutes - BREAK_LIMIT_REACHED_MINUTES);
 
   let overBreakRecord = null;
+
+  if (!activeBreak?.reminderSent && totalBreakMinutes >= BREAK_REMINDER_MINUTES) {
+    await ensureBreakReminder({
+      userId: uid,
+      name: activeBreak?.name || "",
+      email: activeBreak?.email || "",
+      activeBreak,
+    });
+  }
+
+  if (!activeBreak?.limitReachedAlertSent && totalBreakMinutes >= BREAK_LIMIT_REACHED_MINUTES) {
+    const displayName = String(activeBreak?.name || activeBreak?.email || uid).trim();
+
+    await ensureBroadcastStageNotification({
+      activeBreak,
+      type: "break_limit_reached",
+      title: "Break limit reached",
+      message: `${displayName} has reached the 1-hour break limit.`,
+      name: activeBreak?.name || "",
+      email: activeBreak?.email || "",
+      userId: uid,
+      totalBreakMinutes,
+      overBreakMinutes,
+    });
+
+    await updateDoc(doc(db, BREAK_LOGS_COLLECTION, activeBreak.id), {
+      limitReachedAlertSent: true,
+      limitReachedAlertSentAt: Timestamp.fromDate(now),
+      updatedAt: serverTimestamp(),
+      ...buildTimeZoneMeta("limitReachedAlertSentAtClient", now, storageTimeZone),
+      ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+    });
+  }
 
   if (totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES) {
     overBreakRecord = await createOrUpdateOverBreakNote({
@@ -316,9 +596,28 @@ export async function endBreak(userId) {
       email: activeBreak?.email || "",
       endedAt: now,
     });
+
+    if (!activeBreak?.overBreakAlertSent) {
+      const displayName = String(activeBreak?.name || activeBreak?.email || uid).trim();
+
+      await ensureBroadcastStageNotification({
+        activeBreak,
+        type: "over_break_broadcast",
+        title: "Over break alert",
+        message: `${displayName} exceeded the break limit by ${formatDurationLabel(
+          Math.max(0, totalBreakMinutes - BREAK_LIMIT_REACHED_MINUTES)
+        )}. Total break: ${formatDurationLabel(totalBreakMinutes)}.`,
+        name: activeBreak?.name || "",
+        email: activeBreak?.email || "",
+        userId: uid,
+        totalBreakMinutes,
+        overBreakId: overBreakRecord?.id || "",
+        overBreakMinutes,
+      });
+    }
   }
 
-  await updateDoc(breakRef, {
+  await updateDoc(doc(db, BREAK_LOGS_COLLECTION, activeBreak.id), {
     endedAt: Timestamp.fromDate(now),
     isActive: false,
     totalBreakMinutes,
@@ -327,12 +626,41 @@ export async function endBreak(userId) {
       totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
         ? Timestamp.fromDate(now)
         : activeBreak?.overBreakSavedAt || null,
+    overBreakAlertSent:
+      totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
+        ? true
+        : activeBreak?.overBreakAlertSent || false,
+    overBreakAlertSentAt:
+      totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
+        ? Timestamp.fromDate(now)
+        : activeBreak?.overBreakAlertSentAt || null,
     updatedAt: serverTimestamp(),
     ...buildTimeZoneMeta("endedAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
     ...(totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
       ? buildTimeZoneMeta("overBreakSavedAtClient", now, storageTimeZone)
       : {}),
+    ...(totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
+      ? buildTimeZoneMeta("overBreakAlertSentAtClient", now, storageTimeZone)
+      : {}),
+  });
+
+  const displayName = String(activeBreak?.name || activeBreak?.email || uid).trim();
+  await createBroadcastNotifications({
+    breakLogId: activeBreak.id,
+    overBreakId: overBreakRecord?.id || "",
+    type: "break_ended",
+    title: "Employee back from break",
+    message: `${displayName} is back from break. Total break time: ${formatDurationLabel(
+      totalBreakMinutes
+    )}.`,
+    sourceName: activeBreak?.name || "",
+    sourceEmail: activeBreak?.email || "",
+    totalBreakMinutes,
+    minutesUsed: totalBreakMinutes,
+    minutesRemaining: Math.max(0, DAILY_BREAK_LIMIT_MINUTES - totalBreakMinutes),
+    overBreakMinutes,
+    skipUserId: uid,
   });
 
   return {
@@ -496,24 +824,19 @@ export async function ensureBreakReminder({
   const storageTimeZone = resolveStorageTimeZone();
 
   if (totalBreakMinutes < BREAK_REMINDER_MINUTES) {
-    return { created: false, reason: "too-early" };
+    return { created: false, reason: "too-early", totalBreakMinutes };
   }
 
-  const notificationMessage =
-    "You are close to exceeding your 1-hour break. Please click BACK to avoid an over-break record.";
+  const displayName = String(name || email || uid).trim();
 
-  const notificationId = await createNotification({
-    userId: uid,
-    audience: "employee",
-    role: "employee",
+  const broadcastResult = await ensureBroadcastStageNotification({
+    activeBreak,
+    type: "break_warning",
+    title: "Break limit almost reached",
+    message: `${displayName} is 5 minutes away from the 1-hour break limit.`,
     name,
     email,
-    breakLogId: activeBreak.id,
-    type: "break_warning",
-    title: "Break reminder",
-    message: notificationMessage,
-    minutesUsed: totalBreakMinutes,
-    minutesRemaining: Math.max(0, OVERBREAK_TRIGGER_MINUTES - totalBreakMinutes),
+    userId: uid,
     totalBreakMinutes,
     overBreakMinutes: 0,
   });
@@ -527,9 +850,8 @@ export async function ensureBreakReminder({
   });
 
   return {
-    created: true,
-    id: notificationId,
-    message: notificationMessage,
+    created: broadcastResult?.created || false,
+    message: `${displayName} is 5 minutes away from the 1-hour break limit.`,
     totalBreakMinutes,
   };
 }
@@ -543,19 +865,50 @@ export async function ensureOverBreakEscalation({
   const uid = String(userId || "").trim();
   if (!uid) return { created: false, reason: "missing-user" };
   if (!activeBreak?.id) return { created: false, reason: "missing-break" };
-  if (activeBreak?.overBreakSaved) return { created: false, reason: "already-saved" };
 
-  const totalBreakMinutes = minutesBetween(activeBreak.startedAt, new Date());
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+  const totalBreakMinutes = minutesBetween(activeBreak.startedAt, now);
+  const displayName = String(name || email || uid).trim();
+
+  let createdSomething = false;
+  let overBreakResult = null;
+
+  if (totalBreakMinutes >= BREAK_LIMIT_REACHED_MINUTES && !activeBreak?.limitReachedAlertSent) {
+    const limitReachedResult = await ensureBroadcastStageNotification({
+      activeBreak,
+      type: "break_limit_reached",
+      title: "Break limit reached",
+      message: `${displayName} has reached the 1-hour break limit.`,
+      name,
+      email,
+      userId: uid,
+      totalBreakMinutes,
+      overBreakMinutes: 0,
+    });
+
+    await updateDoc(doc(db, BREAK_LOGS_COLLECTION, activeBreak.id), {
+      limitReachedAlertSent: true,
+      limitReachedAlertSentAt: Timestamp.fromDate(now),
+      updatedAt: serverTimestamp(),
+      ...buildTimeZoneMeta("limitReachedAlertSentAtClient", now, storageTimeZone),
+      ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+    });
+
+    createdSomething = createdSomething || !!limitReachedResult?.created;
+  }
 
   if (totalBreakMinutes < OVERBREAK_TRIGGER_MINUTES) {
     return {
-      created: false,
-      reason: "grace-period-not-finished",
+      created: createdSomething,
+      reason: "waiting-overbreak-grace",
       totalBreakMinutes,
     };
   }
 
-  const result = await createOrUpdateOverBreakNote({
+  const overBreakMinutes = Math.max(0, totalBreakMinutes - BREAK_LIMIT_REACHED_MINUTES);
+
+  overBreakResult = await createOrUpdateOverBreakNote({
     activeBreak,
     userId: uid,
     name,
@@ -563,35 +916,29 @@ export async function ensureOverBreakEscalation({
     endedAt: null,
   });
 
-  const existingAdminNotif = await findExistingNotificationByBreakLogIdAndType(
-    activeBreak.id,
-    "over_break_admin"
-  );
-
-  if (!existingAdminNotif) {
-    await createNotification({
-      userId: "admin",
-      audience: "admin",
-      role: "super_admin",
+  if (!activeBreak?.overBreakAlertSent) {
+    const overBreakBroadcast = await ensureBroadcastStageNotification({
+      activeBreak,
+      type: "over_break_broadcast",
+      title: "Over break alert",
+      message: `${displayName} exceeded the break limit by ${formatDurationLabel(
+        overBreakMinutes
+      )}. Total break: ${formatDurationLabel(totalBreakMinutes)}.`,
       name,
       email,
-      breakLogId: activeBreak.id,
-      overBreakId: result?.id || "",
-      type: "over_break_admin",
-      title: "Over-break alert",
-      message: `${name || email || uid} exceeded break limit. Current total break: ${formatDurationLabel(
-        totalBreakMinutes
-      )}.`,
-      minutesUsed: totalBreakMinutes,
-      minutesRemaining: 0,
+      userId: uid,
       totalBreakMinutes,
-      overBreakMinutes: Math.max(0, totalBreakMinutes - OVERBREAK_TRIGGER_MINUTES),
+      overBreakId: overBreakResult?.id || "",
+      overBreakMinutes,
     });
+
+    createdSomething = createdSomething || !!overBreakBroadcast?.created;
   }
 
-  const existingEmployeeNotif = await findExistingNotificationByBreakLogIdAndType(
+  const existingEmployeeNotif = await findNotificationByBreakLogIdTypeAndUserId(
     activeBreak.id,
-    "over_break_employee"
+    "over_break_employee",
+    uid
   );
 
   if (!existingEmployeeNotif) {
@@ -602,47 +949,49 @@ export async function ensureOverBreakEscalation({
       name,
       email,
       breakLogId: activeBreak.id,
-      overBreakId: result?.id || "",
+      overBreakId: overBreakResult?.id || "",
       type: "over_break_employee",
       title: "Over-break recorded",
-      message:
-        "Your break has exceeded. An over-break record has been saved.",
+      message: "Your break exceeded the 1-hour break limit.",
       minutesUsed: totalBreakMinutes,
       minutesRemaining: 0,
       totalBreakMinutes,
-      overBreakMinutes: Math.max(0, totalBreakMinutes - OVERBREAK_TRIGGER_MINUTES),
+      overBreakMinutes,
     });
-  }
 
-  const overBreakSavedAt = new Date();
-  const storageTimeZone = resolveStorageTimeZone();
+    createdSomething = true;
+  }
 
   await updateDoc(doc(db, BREAK_LOGS_COLLECTION, activeBreak.id), {
     overBreakSaved: true,
-    overBreakSavedAt: Timestamp.fromDate(overBreakSavedAt),
+    overBreakSavedAt: Timestamp.fromDate(now),
+    overBreakAlertSent: true,
+    overBreakAlertSentAt: Timestamp.fromDate(now),
     updatedAt: serverTimestamp(),
-    ...buildTimeZoneMeta("overBreakSavedAtClient", overBreakSavedAt, storageTimeZone),
-    ...buildTimeZoneMeta("updatedAtClient", overBreakSavedAt, storageTimeZone),
+    ...buildTimeZoneMeta("overBreakSavedAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("overBreakAlertSentAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 
-  return result;
+  return {
+    created: createdSomething,
+    totalBreakMinutes,
+    overBreakMinutes,
+    overBreakResult,
+  };
 }
 
-export async function getNotificationsForUser(user) {
-  const role = String(user?.role || "").toLowerCase();
-  const uid = String(
-    user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
-  ).trim();
-  const isAdminLike = role === "admin" || role === "super_admin" || role === "super admin";
-  const isSuperAdmin = role === "super_admin" || role === "super admin";
+export async function getNotificationsForUser(user, options = {}) {
+  const archivedOnly = !!options?.archived;
+  const { userId: uid, role: userRole } = getUserIdentity(user);
+  if (!uid) return [];
+  const visitorBlockedTypes = new Set([
+    "break_warning", // Break limit almost reached
+    "break_limit_reached", // Break limit reached
+    "over_break_broadcast", // Exceeded grace period / over-break alert
+  ]);
 
-  if (!uid && !isAdminLike) return [];
-
-  const snap = isAdminLike
-    ? await getDocs(collection(db, BREAK_NOTIFICATIONS_COLLECTION))
-    : await getDocs(
-      query(collection(db, BREAK_NOTIFICATIONS_COLLECTION), where("userId", "==", uid))
-    );
+  const snap = await getDocs(collection(db, BREAK_NOTIFICATIONS_COLLECTION));
 
   const rows = snap.docs.map((d) => ({
     id: d.id,
@@ -650,29 +999,43 @@ export async function getNotificationsForUser(user) {
   }));
 
   const filtered = rows.filter((row) => {
-    const audience = String(row?.audience || "").toLowerCase();
-    const rowUserId = String(row?.userId || "");
-    const type = String(row?.type || "").toLowerCase();
+    const audience = String(row?.audience || "").trim().toLowerCase();
+    const rowUserId = String(row?.userId || "").trim();
+    const rowRole = normalizeRoleValue(row?.role);
+    const type = String(row?.type || "").trim().toLowerCase();
+
+    // Additive rule: hide break escalation notices from visitors.
+    if (userRole === "visitor" && visitorBlockedTypes.has(type)) {
+      return false;
+    }
+
+    if (rowUserId) {
+      return rowUserId === uid;
+    }
+
+    if (audience === "broadcast" || audience === "all" || audience === "everyone") {
+      return true;
+    }
+
+    if (rowRole && rowRole === userRole) return true;
+    if (audience && audience === userRole) return true;
 
     if (type === "portal_user_request_pending") {
-      if (!isSuperAdmin) return false;
-      return rowUserId === uid || audience === "super_admin" || audience === "admin";
+      return userRole === "admin" || userRole === "super_admin";
     }
 
-    if (isAdminLike) {
-      return audience === "admin" || rowUserId === uid;
-    }
-
-    return rowUserId === uid;
+    return false;
   });
 
-  filtered.sort((a, b) => {
+  const archiveFiltered = filtered.filter((row) => !!row?.archived === archivedOnly);
+
+  archiveFiltered.sort((a, b) => {
     const aMs = toMillis(a?.createdAt);
     const bMs = toMillis(b?.createdAt);
     return bMs - aMs;
   });
 
-  return filtered;
+  return archiveFiltered;
 }
 
 export async function markNotificationRead(notificationId) {
@@ -698,28 +1061,155 @@ export async function markAllNotificationsRead(notificationIds = []) {
   await Promise.all(ids.map((id) => markNotificationRead(id)));
 }
 
-export async function getOverBreakNotes(user = null) {
-  const role = String(user?.role || "").toLowerCase();
-  const uid = String(
-    user?.userId ?? user?.id ?? user?.uid ?? user?.firebaseUid ?? user?.employeeId ?? ""
+const resolveActorArchiveMeta = (actor = {}) => {
+  const userId = String(
+    actor?.userId ?? actor?.id ?? actor?.uid ?? actor?.firebaseUid ?? actor?.employeeId ?? ""
   ).trim();
-  const isPortalRole =
-    role === "super_admin" ||
-    role === "super admin" ||
-    role === "admin" ||
-    role === "accounting" ||
-    role === "visitor";
+  const name =
+    String(actor?.name || actor?.displayName || actor?.email || "Portal User").trim() ||
+    "Portal User";
+  return { userId, name };
+};
 
-  const snap = isPortalRole
-    ? await getDocs(collection(db, OVERBREAK_NOTES_COLLECTION))
-    : await getDocs(
-      query(collection(db, OVERBREAK_NOTES_COLLECTION), where("userId", "==", uid))
-    );
+export async function archiveNotification(notificationId, actor = {}) {
+  const id = String(notificationId || "").trim();
+  if (!id) return;
 
-  const rows = snap.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-  }));
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+  const actorMeta = resolveActorArchiveMeta(actor);
+
+  await updateDoc(doc(db, BREAK_NOTIFICATIONS_COLLECTION, id), {
+    archived: true,
+    archivedAt: serverTimestamp(),
+    archivedByUserId: actorMeta.userId,
+    archivedByName: actorMeta.name,
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("archivedAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+  });
+}
+
+export async function archiveAllNotifications(notificationIds = [], actor = {}) {
+  const ids = Array.from(
+    new Set(
+      (Array.isArray(notificationIds) ? notificationIds : [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+    )
+  );
+  await Promise.all(ids.map((id) => archiveNotification(id, actor)));
+}
+
+export async function restoreNotification(notificationId) {
+  const id = String(notificationId || "").trim();
+  if (!id) return;
+
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+
+  await updateDoc(doc(db, BREAK_NOTIFICATIONS_COLLECTION, id), {
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: "",
+    archivedByName: "",
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+  });
+}
+
+export async function deleteNotification(notificationId) {
+  const id = String(notificationId || "").trim();
+  if (!id) return;
+  await deleteDoc(doc(db, BREAK_NOTIFICATIONS_COLLECTION, id));
+}
+
+export async function deleteAllNotifications(notificationIds = []) {
+  const ids = Array.from(
+    new Set(
+      (Array.isArray(notificationIds) ? notificationIds : [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+    )
+  );
+  await Promise.all(ids.map((id) => deleteNotification(id)));
+}
+
+export async function archiveOverBreakNote(noteId, actor = {}) {
+  const id = String(noteId || "").trim();
+  if (!id) return;
+
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+  const actorMeta = resolveActorArchiveMeta(actor);
+
+  await updateDoc(doc(db, OVERBREAK_NOTES_COLLECTION, id), {
+    archived: true,
+    archivedAt: serverTimestamp(),
+    archivedByUserId: actorMeta.userId,
+    archivedByName: actorMeta.name,
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("archivedAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+  });
+}
+
+export async function archiveAllOverBreakNotes(noteIds = [], actor = {}) {
+  const ids = Array.from(
+    new Set(
+      (Array.isArray(noteIds) ? noteIds : [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+    )
+  );
+  await Promise.all(ids.map((id) => archiveOverBreakNote(id, actor)));
+}
+
+export async function restoreOverBreakNote(noteId) {
+  const id = String(noteId || "").trim();
+  if (!id) return;
+
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+
+  await updateDoc(doc(db, OVERBREAK_NOTES_COLLECTION, id), {
+    archived: false,
+    archivedAt: null,
+    archivedByUserId: "",
+    archivedByName: "",
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+  });
+}
+
+export async function deleteOverBreakNote(noteId) {
+  const id = String(noteId || "").trim();
+  if (!id) return;
+  await deleteDoc(doc(db, OVERBREAK_NOTES_COLLECTION, id));
+}
+
+export async function deleteAllOverBreakNotes(noteIds = []) {
+  const ids = Array.from(
+    new Set(
+      (Array.isArray(noteIds) ? noteIds : [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+    )
+  );
+  await Promise.all(ids.map((id) => deleteOverBreakNote(id)));
+}
+
+export async function getOverBreakNotes(user = null, options = {}) {
+  void user;
+  const archivedOnly = !!options?.archived;
+  const snap = await getDocs(collection(db, OVERBREAK_NOTES_COLLECTION));
+
+  const rows = snap.docs
+    .map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }))
+    .filter((row) => !!row?.archived === archivedOnly);
 
   rows.sort((a, b) => {
     const aMs = toMillis(a?.updatedAt || a?.createdAt);
@@ -728,4 +1218,18 @@ export async function getOverBreakNotes(user = null) {
   });
 
   return rows;
+}
+
+export async function resetAllNotificationData() {
+  const [notificationsSnap, overBreakSnap] = await Promise.all([
+    getDocs(collection(db, BREAK_NOTIFICATIONS_COLLECTION)),
+    getDocs(collection(db, OVERBREAK_NOTES_COLLECTION)),
+  ]);
+
+  const deleteOps = [
+    ...notificationsSnap.docs.map((row) => deleteDoc(doc(db, BREAK_NOTIFICATIONS_COLLECTION, row.id))),
+    ...overBreakSnap.docs.map((row) => deleteDoc(doc(db, OVERBREAK_NOTES_COLLECTION, row.id))),
+  ];
+
+  await Promise.all(deleteOps);
 }

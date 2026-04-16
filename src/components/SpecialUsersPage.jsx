@@ -298,10 +298,6 @@ export default function SpecialUsersPage({
   return (
     <div className="special-users-page">
       <div className="special-users-header">
-        <div>
-          <h1>Special Users</h1>
-          <p>Manage and review all Super Admin, Admin, Accounting, and Visitor accounts.</p>
-        </div>
 
         {onOpenControlPanel ? (
           <div className="special-users-action-row">

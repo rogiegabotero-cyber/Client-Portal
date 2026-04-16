@@ -699,11 +699,6 @@ export default function ManageAnnouncementsPage({
   return (
     <div className="ma-page">
       <div className="ma-head">
-        <div>
-          <h1>Manage Announcements</h1>
-          <p>Track scheduled, active, and expired announcements for the employee dashboard.</p>
-        </div>
-
         <button
           type="button"
           className="ma-btn"

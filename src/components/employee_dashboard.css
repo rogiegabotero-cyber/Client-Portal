@@ -300,7 +300,7 @@
 }
 
 .progressBar{
-  margin-top:8px;
+  margin-top:0;
   height:7px;
   width: 100%;
   border-radius:999px;
@@ -316,15 +316,152 @@
 }
 
 .progressBar::-webkit-progress-value {
-  background: var(--green);
+  background: var(--progressFill, var(--green));
   border-radius: 999px;
-  transition: background-color .25s ease;
+  transition: background-color .35s ease, width .35s ease;
 }
 
 .progressBar::-moz-progress-bar {
-  background: var(--green);
+  background: var(--progressFill, var(--green));
   border-radius: 999px;
-  transition: background-color .25s ease;
+  transition: background-color .35s ease, width .35s ease;
+}
+
+.progressBarWrap{
+  position:relative;
+  margin-top:8px;
+}
+
+.progressMarker{
+  position:absolute;
+  left:var(--breakMarkerLeft, 50%);
+  top:0;
+  bottom:0;
+  width:2px;
+  transform:translateX(-1px);
+  border-radius:2px;
+  background:rgba(15,23,42,.45);
+  pointer-events:none;
+  z-index:2;
+}
+
+.progressMarker::after{
+  content:"30m";
+  position:absolute;
+  top:-18px;
+  left:50%;
+  transform:translateX(-50%);
+  font-size:9px;
+  font-weight:700;
+  color:#1e293b;
+  background:#ffffff41;
+  border:1px solid rgba(15,23,42,.12);
+  border-radius:999px;
+  line-height:1;
+  padding:2px 5px;
+}
+
+.progressSparkle{
+  position:absolute;
+  left:var(--progressValue, 100%);
+  top:72%;
+  width:9px;
+  height:9px;
+  border-radius:999px;
+  transform:translate(-50%, -50%);
+  pointer-events:none;
+  z-index:3;
+  background:radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.151) 0%,
+    rgba(125, 212, 252, 0.336) 42%,
+    rgba(0, 133, 190, 0.3) 70%,
+    rgba(56, 191, 248, 0.021) 100%
+  );
+  box-shadow:
+    0 0 0 1px rgba(186, 229, 253, 0.562),
+    0 0 10px rgba(125, 212, 252, 0.658),
+    0 0 20px rgba(56, 191, 248, 0.432),
+    0 0 30px rgba(14, 164, 233, 0.295);
+  animation:progressSparklePulse 1.25s ease-in-out infinite;
+}
+
+.progressSparkle::before,
+.progressSparkle::after{
+  content:"";
+  position:absolute;
+  left:50%;
+  top:50%;
+  background:rgba(224, 242, 255, 0.664);
+  transform:translate(-50%, -50%);
+  border-radius:999px;
+}
+
+.progressSparkle::before{
+  width:2px;
+  height:14px;
+  opacity:.9;
+}
+
+.progressSparkle::after{
+  width:14px;
+  height:2px;
+  opacity:.9;
+}
+
+.progressWarnIcon{
+  position:absolute;
+  left:var(--progressValue, 100%);
+  top:68%;
+  width:16px;
+  height:14px;
+  transform:translate(-50%, -50%);
+  pointer-events:none;
+  z-index:4;
+  clip-path:polygon(50% 0%, 0% 100%, 100% 100%);
+  background:linear-gradient(180deg, #facc15, #f59e0b);
+  color:#7c2d12;
+  display:grid;
+  place-items:end center;
+  padding-bottom:2px;
+  font-size:10px;
+  font-weight:900;
+  line-height:1;
+  text-shadow:0 1px 0 rgba(255,255,255,.35);
+  box-shadow:
+    0 0 0 1px rgba(120,53,15,.35),
+    0 0 10px rgba(245,158,11,.6);
+  animation:progressWarnPulse .9s ease-in-out infinite;
+}
+
+@keyframes progressWarnPulse{
+  0%{
+    transform:translate(-50%, -50%) scale(.92);
+    filter:brightness(1);
+  }
+  50%{
+    transform:translate(-50%, -50%) scale(1.08);
+    filter:brightness(1.1);
+  }
+  100%{
+    transform:translate(-50%, -50%) scale(.92);
+    filter:brightness(1);
+  }
+}
+
+@keyframes progressSparklePulse{
+  0%{
+    opacity:.75;
+    transform:translate(-50%, -50%) scale(.85);
+  }
+  55%{
+    opacity:1;
+    transform:translate(-50%, -50%) scale(1.15);
+  }
+  100%{
+    opacity:.7;
+    transform:translate(-50%, -50%) scale(.85);
+  }
 }
 
 .progressBar.progressBar-caution::-webkit-progress-value,
@@ -653,8 +790,8 @@
 
 .taskFilterMenu{
   position:absolute;
-  top:calc(100% + 8px);
-  left:0;
+  top:calc(100% + -90px);
+  left:160px;
   min-width:170px;
   background:#ffffff;
   border:1px solid rgba(15,23,42,.18);

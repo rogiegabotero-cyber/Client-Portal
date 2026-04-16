@@ -12,6 +12,7 @@
   gap: 16px;
   align-items: flex-start;
   flex-wrap: wrap;
+  color: #09101d;
 }
 
 .mep-title {
@@ -31,12 +32,13 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  color: #09101d;
 }
 
 .mep-pill {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.05);
-  color: #f8fbff;
+  color: #09101d;
   padding: 10px 14px;
   border-radius: 999px;
   font-size: 12px;
@@ -679,5 +681,6 @@
 
   .mep-top {
     flex-direction: column;
+    color: #09101d;
   }
 }

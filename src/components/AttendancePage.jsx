@@ -698,6 +698,8 @@ export default function AttendancePage({
   activeBreaksByUserId = {},
   attendanceResetTime = "05:00",
   businessTimeZone = "America/Chicago",
+  openEmployeeDrawerRequest = null,
+  onConsumeOpenEmployeeDrawerRequest,
   pageData = null,
 }) {
   const [query, setQuery] = useState("");
@@ -705,6 +707,7 @@ export default function AttendancePage({
   const [drawerRow, setDrawerRow] = useState(null);
 
   const [historyLimit, setHistoryLimit] = useState(30);
+  const [handledOpenEmployeeDrawerRequestId, setHandledOpenEmployeeDrawerRequestId] = useState(0);
 
   const openDrawer = (row) => {
     setDrawerRow(row);
@@ -878,6 +881,39 @@ export default function AttendancePage({
     const uid = drawerRow?.userId ? String(drawerRow.userId) : null;
     return uid ? historyErrorByUserId?.[uid] || "" : "";
   }, [drawerRow, historyErrorByUserId]);
+
+  useEffect(() => {
+    const requestId = Number(openEmployeeDrawerRequest?.requestId || 0);
+    const targetUserId = String(openEmployeeDrawerRequest?.userId || "").trim();
+
+    if (!requestId || !targetUserId) return;
+    if (handledOpenEmployeeDrawerRequestId === requestId) return;
+
+    const matchingRows = rows.filter((row) => String(row.userId || "") === targetUserId);
+    if (!matchingRows.length) return;
+
+    const preferredRow =
+      matchingRows.find((row) => String(row.dayKey || "") === String(endDate || "")) ||
+      matchingRows[0];
+    const timerId = setTimeout(() => {
+      setHandledOpenEmployeeDrawerRequestId(requestId);
+      setDrawerRow(preferredRow);
+      setHistoryLimit(30);
+      setDrawerOpen(true);
+
+      if (typeof onConsumeOpenEmployeeDrawerRequest === "function") {
+        onConsumeOpenEmployeeDrawerRequest(requestId);
+      }
+    }, 0);
+
+    return () => clearTimeout(timerId);
+  }, [
+    openEmployeeDrawerRequest,
+    handledOpenEmployeeDrawerRequestId,
+    rows,
+    endDate,
+    onConsumeOpenEmployeeDrawerRequest,
+  ]);
 
   return (
     <div className="attx">

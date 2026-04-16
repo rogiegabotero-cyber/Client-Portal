@@ -46,7 +46,12 @@ const getViewerName = (viewer) =>
 
 const isAdminLikeRole = (role) => {
   const r = normalize(role);
-  return r === "admin" || r === "super_admin" || r === "super admin";
+  return !!r;
+};
+
+const canCreateAssignmentsForRole = (role) => {
+  const r = normalize(role);
+  return r === "admin" || r === "visitor" || r === "super_admin" || r === "super admin";
 };
 
 const getEmployeePosition = (emp, employeeProfilesByUserId = {}) => {
@@ -190,6 +195,8 @@ export default function AssignmentPage({
   onApproveAssignmentAccess,
   openTaskRequest = null,
   onConsumeOpenTaskRequest,
+  openCreateRequest = null,
+  onConsumeOpenCreateRequest,
   pageData = null,
   onToast,
 }) {
@@ -218,6 +225,7 @@ export default function AssignmentPage({
     priority: "medium",
   });
   const [handledOpenRequestId, setHandledOpenRequestId] = useState(0);
+  const [handledOpenCreateRequestId, setHandledOpenCreateRequestId] = useState(0);
   const [form, setForm] = useState({
     title: "",
     instructions: "",
@@ -231,18 +239,15 @@ export default function AssignmentPage({
   const viewerRole = useMemo(() => normalize(viewer?.role), [viewer?.role]);
   const isManager = useMemo(() => isAdminLikeRole(viewerRole), [viewerRole]);
   const canCreateAssignments = useMemo(
-    () => isManager || viewerRole === "visitor",
-    [isManager, viewerRole]
-  );
-  const canUseArchiveFeature = useMemo(
-    () => isManager || viewerRole === "visitor",
-    [isManager, viewerRole]
-  );
-  const canPermanentlyDeleteArchived = useMemo(() => isManager, [isManager]);
-  const canViewMyTasks = useMemo(
-    () => viewerRole !== "visitor" && viewerRole !== "visitors",
+    () => canCreateAssignmentsForRole(viewerRole),
     [viewerRole]
   );
+  const canUseArchiveFeature = useMemo(
+    () => isManager,
+    [isManager]
+  );
+  const canPermanentlyDeleteArchived = useMemo(() => isManager, [isManager]);
+  const canViewMyTasks = useMemo(() => isManager, [isManager]);
   const isAnyDrawerOpen = useMemo(
     () => Boolean(showCreateAssignmentDrawer || showAllAssignmentsDrawer || showArchivedDrawer || selectedTask),
     [showCreateAssignmentDrawer, showAllAssignmentsDrawer, showArchivedDrawer, selectedTask]
@@ -396,6 +401,39 @@ export default function AssignmentPage({
       onConsumeOpenTaskRequest(requestId);
     }
   }, [openTaskRequest, assignments, handledOpenRequestId, onConsumeOpenTaskRequest]);
+
+  useEffect(() => {
+    const requestId = Number(openCreateRequest?.requestId || 0);
+    const assigneeUserId = toText(openCreateRequest?.assigneeUserId);
+
+    if (!requestId || !assigneeUserId) return;
+    if (handledOpenCreateRequestId === requestId) return;
+
+    const isValidAssignee = employeeOptions.some(
+      (item) => String(item.userId || "") === assigneeUserId
+    );
+    if (!isValidAssignee) return;
+
+    setHandledOpenCreateRequestId(requestId);
+    setSelectedAssigneeIds([assigneeUserId]);
+
+    if (canCreateAssignments) {
+      setSelectedTask(null);
+      setShowAllAssignmentsDrawer(false);
+      setShowArchivedDrawer(false);
+      setShowCreateAssignmentDrawer(true);
+    }
+
+    if (typeof onConsumeOpenCreateRequest === "function") {
+      onConsumeOpenCreateRequest(requestId);
+    }
+  }, [
+    openCreateRequest,
+    handledOpenCreateRequestId,
+    employeeOptions,
+    canCreateAssignments,
+    onConsumeOpenCreateRequest,
+  ]);
 
   useEffect(() => {
     if (canUseArchiveFeature) return;
@@ -575,7 +613,7 @@ export default function AssignmentPage({
       onToast?.({
         type: "warning",
         title: "Action Restricted",
-        message: "Only admins and visitors can create assignments.",
+        message: "You do not have permission to create assignments.",
       });
       return;
     }
@@ -703,7 +741,7 @@ export default function AssignmentPage({
       onToast?.({
         type: "warning",
         title: "Action Restricted",
-        message: "Only admins can review completion requests.",
+        message: "You do not have permission to review completion requests.",
       });
       return;
     }
@@ -752,7 +790,7 @@ export default function AssignmentPage({
       onToast?.({
         type: "warning",
         title: "Action Restricted",
-        message: "Only admins can permanently delete archived assignments.",
+        message: "You do not have permission to permanently delete archived assignments.",
       });
       return;
     }
@@ -773,7 +811,7 @@ export default function AssignmentPage({
       onToast?.({
         type: "warning",
         title: "Action Restricted",
-        message: "Only admins or visitors can archive assignments.",
+        message: "You do not have permission to archive assignments.",
       });
       return;
     }
@@ -889,7 +927,7 @@ export default function AssignmentPage({
       onToast?.({
         type: "warning",
         title: "Action Restricted",
-        message: "Only admins or visitors can repost archived assignments.",
+        message: "You do not have permission to repost archived assignments.",
       });
       return;
     }
@@ -989,7 +1027,7 @@ export default function AssignmentPage({
       onToast?.({
         type: "warning",
         title: "Action Restricted",
-        message: "Only admins can change assignment status.",
+        message: "You do not have permission to change assignment status.",
       });
       return;
     }

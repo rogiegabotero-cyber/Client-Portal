@@ -31,17 +31,12 @@ const normalizeDateOnly = (value) => {
 
 const isAdminLikeRole = (role) => {
   const r = toText(role).toLowerCase();
-  return r === "admin" || r === "super_admin" || r === "super admin";
+  return !!r;
 };
 
 const isArchiveAllowedRole = (role) => {
   const r = toText(role).toLowerCase();
-  return (
-    r === "admin" ||
-    r === "super_admin" ||
-    r === "super admin" ||
-    r === "visitor"
-  );
+  return !!r;
 };
 
 const normalizeStatusKey = (status) =>
@@ -278,7 +273,7 @@ export async function archiveAssignment(assignmentId, actor = {}) {
 
   const actorRole = toText(actor?.role).toLowerCase();
   if (!isArchiveAllowedRole(actorRole)) {
-    throw new Error("Only admins or visitors can archive assignments.");
+    throw new Error("You do not have permission to archive assignments.");
   }
 
   const ref = doc(db, ASSIGNMENTS_COLLECTION, aid);
@@ -317,7 +312,7 @@ export async function repostAssignment(assignmentId, updates = {}, actor = {}) {
 
   const actorRole = toText(actor?.role).toLowerCase();
   if (!isArchiveAllowedRole(actorRole)) {
-    throw new Error("Only admins or visitors can repost archived assignments.");
+    throw new Error("You do not have permission to repost archived assignments.");
   }
 
   const ref = doc(db, ASSIGNMENTS_COLLECTION, aid);
@@ -399,7 +394,7 @@ export async function deleteAssignment(assignmentId, actor = {}) {
 
   const actorRole = toText(actor?.role).toLowerCase();
   if (!isAdminLikeRole(actorRole)) {
-    throw new Error("Only admins can permanently delete archived assignments.");
+    throw new Error("You do not have permission to permanently delete archived assignments.");
   }
 
   const ref = doc(db, ASSIGNMENTS_COLLECTION, aid);
@@ -488,7 +483,7 @@ export async function reviewAssignmentCompletion(assignmentId, decision = "", re
 
   const reviewerRole = toText(reviewer?.role).toLowerCase();
   if (!isAdminLikeRole(reviewerRole)) {
-    throw new Error("Only admins can review completion requests.");
+    throw new Error("You do not have permission to review completion requests.");
   }
 
   const reviewerUserId = toText(

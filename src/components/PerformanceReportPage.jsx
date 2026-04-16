@@ -638,10 +638,6 @@ export default function PerformanceReportPage({
   return (
     <div className="prpPage">
       <div className="prpHeader">
-        <div>
-          <h2>{reportWindow.label} Report</h2>
-          <p>Attendance first, performance widgets below.</p>
-        </div>
         <div className="prpHeaderControls">
 
           <div className="prpRangePill">

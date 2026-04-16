@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   clearSession,
   getStoredSession,
@@ -8,17 +9,55 @@ import {
   subscribeToSessionValidity,
 } from "./authService";
 import { AuthContext } from "./auth-context";
+import { auth } from "../firebase";
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(() => getStoredSession());
   const [loading, setLoading] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [firebaseUser, setFirebaseUser] = useState(() => auth.currentUser);
 
   useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+      setFirebaseUser(nextUser || null);
+      setAuthReady(true);
+
+      setSession((prev) => {
+        if (!prev?.isAuthenticated) return prev;
+
+        const sessionUserId = String(prev?.user?.userId || prev?.user?.id || "").trim();
+        const firebaseUid = String(nextUser?.uid || "").trim();
+
+        if (!firebaseUid || (sessionUserId && sessionUserId !== firebaseUid)) {
+          clearSession();
+          return null;
+        }
+
+        return prev;
+      });
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+
     let cancelled = false;
 
     const verifyStoredSession = async () => {
       const stored = getStoredSession();
       if (!stored?.isAuthenticated) return;
+      const sessionUserId = String(stored?.user?.userId || stored?.user?.id || "").trim();
+      const firebaseUid = String(firebaseUser?.uid || "").trim();
+
+      if (!firebaseUid || (sessionUserId && sessionUserId !== firebaseUid)) {
+        clearSession();
+        setSession(null);
+        return;
+      }
 
       const stillValid = await isStoredSessionStillValid(stored);
       if (cancelled) return;
@@ -35,7 +74,7 @@ export function AuthProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authReady, firebaseUser?.uid]);
 
   useEffect(() => {
     if (!session?.isAuthenticated) return undefined;
@@ -66,37 +105,41 @@ export function AuthProvider({ children }) {
     };
   }, [session]);
 
-  const signIn = async (credentials) => {
+  const signIn = useCallback(async (credentials) => {
     setLoading(true);
     try {
       const nextSession = await loginUser(credentials);
       setSession(nextSession);
+      setFirebaseUser(auth.currentUser || null);
       return nextSession;
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     setLoading(true);
     try {
       await logoutUser(session?.user || null);
       setSession(null);
+      setFirebaseUser(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, [session?.user]);
 
   const value = useMemo(
     () => ({
       session,
       user: session?.user ?? null,
-      isAuthenticated: !!session?.isAuthenticated,
+      isAuthenticated: authReady && !!session?.isAuthenticated && !!firebaseUser,
+      authReady,
+      firebaseUser,
       loading,
       signIn,
       signOut,
     }),
-    [session, loading]
+    [authReady, firebaseUser, loading, session, signIn, signOut]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

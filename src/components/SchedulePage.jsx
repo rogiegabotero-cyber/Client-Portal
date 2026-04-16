@@ -214,7 +214,6 @@ export default function SchedulePage({
       : {};
 
   const validEmployees = (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e));
-  const perUserErrorCount = Object.keys(errorsByUserId || {}).length;
 
   const rows = useMemo(() => {
     const out = [];
@@ -281,13 +280,6 @@ export default function SchedulePage({
   return (
     <div className="schx">
       <div className="schxTop">
-        <div className="schxTitleWrap">
-          <div className="schxTitle">Schedules</div>
-          <div className="schxSub">
-            {perUserErrorCount ? `  |  Errors: ${perUserErrorCount}` : ""}
-          </div>
-        </div>
-
         <div className="schxControls">
           <div className="schxField schxFieldSearch">
             <div className="schxLabel">Search</div>

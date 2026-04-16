@@ -1019,13 +1019,10 @@ export default function Dashboard({
   });
 
   const normalizedViewerRole = safeLower(viewerRole);
-  const canViewBreakLog =
-    normalizedViewerRole === "admin" ||
-    normalizedViewerRole === "super_admin" ||
-    normalizedViewerRole === "super admin" ||
-    normalizedViewerRole === "accounting";
-  const canViewPayablePanel =
-    normalizedViewerRole !== "visitor" && normalizedViewerRole !== "visitors";
+  const hasViewerPermissions = !!normalizedViewerRole;
+  const isVisitorViewer = normalizedViewerRole === "visitor";
+  const canViewBreakLog = hasViewerPermissions && !isVisitorViewer;
+  const canViewPayablePanel = hasViewerPermissions && !isVisitorViewer;
 
   useEffect(() => {
     const id = requestAnimationFrame(() => {
@@ -2581,7 +2578,7 @@ export default function Dashboard({
 
   const sidebarAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcements) ? announcements : [];
-    const nowForWindowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+    const nowForWindowMs = Number.isFinite(nowMs) ? nowMs : 0;
 
     const list = rows
       .map((item) => {
@@ -2731,18 +2728,15 @@ export default function Dashboard({
     return envDepartmentId || "Department";
   }, [selectedPayableEmployees]);
 
-  const payablePrintRangeSegment = useMemo(() => {
-    const start = String(payableHoursChart?.start || payableGraphPeriod?.start || "");
-    const end = String(payableHoursChart?.end || payableGraphPeriod?.end || "");
+  const payablePrintStart = String(payableHoursChart?.start ?? payableGraphPeriod?.start ?? "");
+  const payablePrintEnd = String(payableHoursChart?.end ?? payableGraphPeriod?.end ?? "");
 
-    if (start && end) return start === end ? start : `${start}_to_${end}`;
-    return start || end || "DateRange";
-  }, [
-    payableHoursChart?.start,
-    payableHoursChart?.end,
-    payableGraphPeriod?.start,
-    payableGraphPeriod?.end,
-  ]);
+  const payablePrintRangeSegment =
+    payablePrintStart && payablePrintEnd
+      ? payablePrintStart === payablePrintEnd
+        ? payablePrintStart
+        : `${payablePrintStart}_to_${payablePrintEnd}`
+      : payablePrintStart || payablePrintEnd || "DateRange";
 
   const payablePrintFileName = useMemo(
     () => `${payablePrintDepartment}_${payablePrintRangeSegment}_Payable Hours`,

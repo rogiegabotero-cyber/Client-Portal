@@ -514,13 +514,6 @@ export default function ManageEmployee({
   return (
     <div className="mep">
       <div className="mep-top">
-        <div>
-          <div className="mep-title">Employee Profile Center</div>
-          <div className="mep-sub">
-            Unified profile view using employee, schedule, attendance, break, and history data.
-          </div>
-        </div>
-
         <div className="mep-top-pills">
           <div className="mep-pill">Employees: {validEmployees.length}</div>
           <div className="mep-pill">
