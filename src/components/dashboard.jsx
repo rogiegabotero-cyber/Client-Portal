@@ -747,17 +747,39 @@ const formatBreakTimeOnly = (value, timeZone = "America/Chicago") => {
   });
 };
 
-const formatBreakDurationMinutes = (startValue, endValue) => {
+const formatBreakDurationMinutesWithFallback = (
+  startValue,
+  endValue,
+  fallbackEndMs = NaN
+) => {
   const startMs = toMillisFromFirestoreValue(startValue);
-  const endMs = toMillisFromFirestoreValue(endValue);
+  const endedMs = toMillisFromFirestoreValue(endValue);
+  const effectiveEndMs = Number.isFinite(endedMs) ? endedMs : Number(fallbackEndMs);
 
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
-    return "";
+  if (!Number.isFinite(startMs) || !Number.isFinite(effectiveEndMs) || effectiveEndMs < startMs) {
+    return "-";
   }
 
-  const mins = Math.max(0, Math.round((endMs - startMs) / 60000));
-  return `${mins} minute${mins === 1 ? "" : "s"}`;
+  const mins = Math.max(0, Math.round((effectiveEndMs - startMs) / 60000));
+  return `${mins} min`;
 };
+
+const formatBreakTypeLabel = (value = "", fallback = "Break") => {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+};
+
+const DASH_BREAK_LOG_FILTER_OPTIONS = [
+  { key: "today", label: "Today" },
+  { key: "thisWeek", label: "This Week" },
+  { key: "thisMonth", label: "This Month" },
+  { key: "all", label: "All" },
+];
 
 /* ------------------------ monthly attendance chart helpers ------------------------ */
 const ATTENDANCE_BUCKETS = [
@@ -977,6 +999,8 @@ export default function Dashboard({
   businessTimeZone = "America/Chicago",
 }) {
   const [hoursWindow, setHoursWindow] = useState("today");
+  const [breakLogWindow, setBreakLogWindow] = useState("today");
+  const [isBreakLogsDrawerOpen, setIsBreakLogsDrawerOpen] = useState(false);
   const [chartReady, setChartReady] = useState(false);
   const [selectedPerfUserId, setSelectedPerfUserId] = useState("");
   const [payableGraphWindow, setPayableGraphWindow] = useState("week");
@@ -1405,6 +1429,62 @@ export default function Dashboard({
     businessTimeZone,
   ]);
 
+  const breakLogPeriod = useMemo(() => {
+    const periodEnd = String(endDate || "");
+    if (!periodEnd) {
+      return {
+        label: "-",
+        start: "",
+        end: "",
+        dayKeys: [],
+        isAll: false,
+      };
+    }
+
+    if (breakLogWindow === "today") {
+      const keys = enumerateYmdRange(periodEnd, periodEnd);
+      return {
+        label: "Today",
+        start: periodEnd,
+        end: periodEnd,
+        dayKeys: keys,
+        isAll: false,
+      };
+    }
+
+    if (breakLogWindow === "thisWeek") {
+      const start = startOfWeekYmd(periodEnd);
+      const keys = enumerateYmdRange(start, periodEnd);
+      return {
+        label: "This Week",
+        start,
+        end: periodEnd,
+        dayKeys: keys,
+        isAll: false,
+      };
+    }
+
+    if (breakLogWindow === "thisMonth") {
+      const start = firstDayOfMonthYmd(periodEnd);
+      const keys = enumerateYmdRange(start, periodEnd);
+      return {
+        label: "This Month",
+        start,
+        end: periodEnd,
+        dayKeys: keys,
+        isAll: false,
+      };
+    }
+
+    return {
+      label: "All",
+      start: "",
+      end: "",
+      dayKeys: [],
+      isAll: true,
+    };
+  }, [breakLogWindow, endDate]);
+
   useEffect(() => {
     let active = true;
     const defer =
@@ -1431,14 +1511,23 @@ export default function Dashboard({
       };
     }
 
-    if (hoursWindow === "today") {
+    if (!isBreakLogsDrawerOpen) {
+      scheduleState(() => {
+        setLoadingRangeBreakLogs(false);
+      });
+      return () => {
+        active = false;
+      };
+    }
+
+    if (breakLogWindow === "today") {
       clearRangeBreakLogs();
       return () => {
         active = false;
       };
     }
 
-    if (!dashPeriod.start || !dashPeriod.end) {
+    if (!breakLogPeriod.isAll && (!breakLogPeriod.start || !breakLogPeriod.end)) {
       clearRangeBreakLogs();
       return () => {
         active = false;
@@ -1458,9 +1547,9 @@ export default function Dashboard({
     }
 
     const cacheKey = [
-      hoursWindow,
-      dashPeriod.start,
-      dashPeriod.end,
+      breakLogWindow,
+      breakLogPeriod.start,
+      breakLogPeriod.end,
       attendanceResetTime,
       businessTimeZone,
       userIds.join(","),
@@ -1482,12 +1571,19 @@ export default function Dashboard({
       setLoadingRangeBreakLogs(true);
     });
 
-    getBreakLogsByUserIdsInRange(userIds, {
-      startDayKey: dashPeriod.start,
-      endDayKey: dashPeriod.end,
-      attendanceResetTime,
-      businessTimeZone,
-    })
+    const queryOptions = breakLogPeriod.isAll
+      ? {
+          attendanceResetTime,
+          businessTimeZone,
+        }
+      : {
+          startDayKey: breakLogPeriod.start,
+          endDayKey: breakLogPeriod.end,
+          attendanceResetTime,
+          businessTimeZone,
+        };
+
+    getBreakLogsByUserIdsInRange(userIds, queryOptions)
       .then((rows) => {
         if (!active || requestId !== breakRangeRequestRef.current) return;
         const safeRows = rows && typeof rows === "object" ? rows : {};
@@ -1510,9 +1606,11 @@ export default function Dashboard({
     };
   }, [
     canViewBreakLog,
-    hoursWindow,
-    dashPeriod.start,
-    dashPeriod.end,
+    isBreakLogsDrawerOpen,
+    breakLogWindow,
+    breakLogPeriod.start,
+    breakLogPeriod.end,
+    breakLogPeriod.isAll,
     validEmployees,
     attendanceResetTime,
     businessTimeZone,
@@ -2504,14 +2602,16 @@ export default function Dashboard({
   }, [hoursWindow, rangeDays, data.validEmployees, historyErrorByUserId]);
 
   const breakLogSourceByUserId = useMemo(
-    () => (hoursWindow === "today" ? breakLogsByUserId : rangeBreakLogsByUserId),
-    [hoursWindow, breakLogsByUserId, rangeBreakLogsByUserId]
+    () => (breakLogWindow === "today" ? breakLogsByUserId : rangeBreakLogsByUserId),
+    [breakLogWindow, breakLogsByUserId, rangeBreakLogsByUserId]
   );
 
-  const breakLogRows = useMemo(() => {
-    if (!Array.isArray(dashPeriod.dayKeys) || dashPeriod.dayKeys.length === 0) return [];
+  const breakLogTimelineRows = useMemo(() => {
+    if (!breakLogPeriod.isAll && (!Array.isArray(breakLogPeriod.dayKeys) || breakLogPeriod.dayKeys.length === 0)) {
+      return [];
+    }
 
-    const dayKeySet = new Set(dashPeriod.dayKeys);
+    const dayKeySet = breakLogPeriod.isAll ? null : new Set(breakLogPeriod.dayKeys);
     const rows = [];
 
     for (const emp of data.validEmployees) {
@@ -2523,58 +2623,59 @@ export default function Dashboard({
         const startedAt = log?.startedAt || log?.createdAt || null;
         const endedAt = log?.endedAt || null;
         const startedAtMs = toMillisFromFirestoreValue(startedAt);
-        const endedAtMs = toMillisFromFirestoreValue(endedAt);
+        if (!startedAt || !Number.isFinite(startedAtMs)) continue;
 
-        if (startedAt && Number.isFinite(startedAtMs)) {
-          const dayKey = getBusinessDayKey(startedAtMs, attendanceResetTime, businessTimeZone);
-          if (dayKeySet.has(dayKey)) {
-            rows.push({
-              id: `${String(log?.id || userId)}-break-${startedAtMs}`,
-              name,
-              action: "Break",
-              actionTime: startedAt,
-              totalText: "",
-            });
-          }
-        }
+        const dayKey = getBusinessDayKey(startedAtMs, attendanceResetTime, businessTimeZone);
+        if (!breakLogPeriod.isAll && !dayKeySet.has(dayKey)) continue;
 
-        if (endedAt && Number.isFinite(endedAtMs)) {
-          const dayKey = getBusinessDayKey(endedAtMs, attendanceResetTime, businessTimeZone);
-          if (dayKeySet.has(dayKey)) {
-            rows.push({
-              id: `${String(log?.id || userId)}-back-${endedAtMs}`,
-              name,
-              action: "Back",
-              actionTime: endedAt,
-              totalText: formatBreakDurationMinutes(startedAt, endedAt),
-            });
-          }
-        }
+        rows.push({
+          id: String(log?.id || `${userId}-break-${startedAtMs}`),
+          userId,
+          name,
+          breakType: formatBreakTypeLabel(log?.breakType, "Break"),
+          startedAt,
+          endedAt,
+          startedAtMs,
+          isActive: !endedAt || !!log?.isActive,
+          durationText: formatBreakDurationMinutesWithFallback(startedAt, endedAt, nowMs),
+        });
       }
     }
 
     rows.sort((a, b) => {
-      const aMs = toMillisFromFirestoreValue(a.actionTime);
-      const bMs = toMillisFromFirestoreValue(b.actionTime);
-      return bMs - aMs;
+      return Number(b.startedAtMs || 0) - Number(a.startedAtMs || 0);
     });
 
     return rows;
   }, [
     data.validEmployees,
-    dashPeriod.dayKeys,
+    breakLogPeriod.dayKeys,
+    breakLogPeriod.isAll,
     breakLogSourceByUserId,
     attendanceResetTime,
     businessTimeZone,
+    nowMs,
   ]);
 
   const breakLogEmptyText = useMemo(() => {
-    if (hoursWindow === "today") return "No break logs today";
-    if (hoursWindow === "yesterday") return "No break logs yesterday";
-    if (hoursWindow === "15") return "No break logs for the last 15 days";
-    if (hoursWindow === "30") return "No break logs for the last 30 days";
+    if (breakLogWindow === "today") return "No break logs today";
+    if (breakLogWindow === "thisWeek") return "No break logs this week";
+    if (breakLogWindow === "thisMonth") return "No break logs this month";
     return "No break logs for all time";
-  }, [hoursWindow]);
+  }, [breakLogWindow]);
+
+  useEffect(() => {
+    if (!isBreakLogsDrawerOpen) return;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsBreakLogsDrawerOpen(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isBreakLogsDrawerOpen]);
 
   const sidebarAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcements) ? announcements : [];
@@ -3085,7 +3186,18 @@ export default function Dashboard({
         </div>
 
         <aside className="updateSidebar">
-          <div className="panelHead center">Agents On Break</div>
+          <div className="panelHead center dashAgentsHead">
+            <span>Agents On Break</span>
+            {canViewBreakLog ? (
+              <button
+                type="button"
+                className="dashBreakLogsBtn"
+                onClick={() => setIsBreakLogsDrawerOpen(true)}
+              >
+                Break Logs
+              </button>
+            ) : null}
+          </div>
 
           <div className="panelBody">
             <div className="updateBody">
@@ -3124,61 +3236,6 @@ export default function Dashboard({
               </div>
             </div>
           </div>
-
-          {canViewBreakLog ? (
-            <>
-              <div className="panelHead center">Break Log ({dashPeriod.label})</div>
-
-              <div className="panelBody">
-                <div className="updateBody">
-                  <div className="updateBox">
-                    <div id="updateBox" className="payTableWrap">
-                      <table className="payTable">
-                        <thead>
-                          <tr>
-                            <th className="payThLeft">Name</th>
-                            <th className="payThRight">Action</th>
-                            <th className="payThRight">Time</th>
-                            <th className="payThRight">Total</th>
-                          </tr>
-                        </thead>
-
-                        <tbody>
-                          {loadingRangeBreakLogs && hoursWindow !== "today" ? (
-                            <tr>
-                              <td className="payEmpty" colSpan={4}>
-                                Loading break logs for selected range...
-                              </td>
-                            </tr>
-                          ) : breakLogRows.length === 0 ? (
-                            <tr>
-                              <td className="payEmpty" colSpan={4}>
-                                {breakLogEmptyText}
-                              </td>
-                            </tr>
-                          ) : (
-                            breakLogRows.map((row) => (
-                              <tr key={row.id}>
-                                <td className="payTdName">{row.name}</td>
-                                <td className="payTdHours">{row.action}</td>
-                                <td
-                                  className="payTdHours"
-                                  title={formatBreakTimestamp(row.actionTime, businessTimeZone)}
-                                >
-                                  {formatBreakTimeOnly(row.actionTime, businessTimeZone)}
-                                </td>
-                                <td className="payTdHours">{row.totalText || "-"}</td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </>
-          ) : null}
 
           <div className="panelHead center">Announcements</div>
 
@@ -3236,6 +3293,108 @@ export default function Dashboard({
           </div>
 
         </aside>
+
+        {canViewBreakLog && isBreakLogsDrawerOpen ? (
+          <div
+            className="dashBreakLogsBackdrop"
+            role="button"
+            tabIndex={0}
+            aria-label="Close break logs drawer"
+            onClick={() => setIsBreakLogsDrawerOpen(false)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setIsBreakLogsDrawerOpen(false);
+            }}
+          />
+        ) : null}
+
+        {canViewBreakLog ? (
+          <div
+            className={`dashBreakLogsDrawer ${isBreakLogsDrawerOpen ? "open" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label="All employee break logs"
+          >
+            <div className="dashBreakLogsDrawerHead">
+              <div className="dashBreakLogsDrawerIdentity">
+                <div className="dashBreakLogsDrawerTitle">Break Logs</div>
+                <div className="dashBreakLogsDrawerSub">All Employees ({breakLogPeriod.label})</div>
+              </div>
+              <button
+                type="button"
+                className="dashBreakLogsDrawerClose"
+                onClick={() => setIsBreakLogsDrawerOpen(false)}
+                aria-label="Close break logs drawer"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="dashBreakLogsDrawerBody">
+              <div className="dashBreakLogsToolbar">
+                <div className="dashBreakLogsSummary">
+                  {loadingRangeBreakLogs && breakLogWindow !== "today"
+                    ? "Loading break logs..."
+                    : `${breakLogTimelineRows.length} log${breakLogTimelineRows.length === 1 ? "" : "s"}`}
+                </div>
+                <div className="dashBreakLogsFilters" role="tablist" aria-label="Break log filters">
+                  {DASH_BREAK_LOG_FILTER_OPTIONS.map((option) => {
+                    const isActive = breakLogWindow === option.key;
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        className={`dashBreakLogsFilterBtn ${isActive ? "active" : ""}`}
+                        onClick={() => setBreakLogWindow(option.key)}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {loadingRangeBreakLogs && breakLogWindow !== "today" ? (
+                <div className="dashBreakLogsEmpty">Loading break logs for selected range...</div>
+              ) : breakLogTimelineRows.length === 0 ? (
+                <div className="dashBreakLogsEmpty">{breakLogEmptyText}</div>
+              ) : (
+                <div className="dashBreakLogsList">
+                  {breakLogTimelineRows.map((row) => (
+                    <div key={row.id} className="dashBreakLogsItem">
+                      <div className="dashBreakLogsItemTop">
+                        <div className="dashBreakLogsItemEmployee">{row.name}</div>
+                        <span className={`dashBreakLogsItemState ${row.isActive ? "active" : ""}`}>
+                          {row.isActive ? "Active" : "Completed"}
+                        </span>
+                      </div>
+
+                      <div className="dashBreakLogsItemType">{row.breakType}</div>
+
+                      <div className="dashBreakLogsItemMeta">
+                        <span>Start</span>
+                        <strong>{formatBreakTimestamp(row.startedAt, businessTimeZone)}</strong>
+                      </div>
+
+                      <div className="dashBreakLogsItemMeta">
+                        <span>End</span>
+                        <strong>
+                          {row.isActive ? "In progress" : formatBreakTimestamp(row.endedAt, businessTimeZone)}
+                        </strong>
+                      </div>
+
+                      <div className="dashBreakLogsItemMeta">
+                        <span>Duration</span>
+                        <strong>{row.durationText}</strong>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
 
         
       </div>

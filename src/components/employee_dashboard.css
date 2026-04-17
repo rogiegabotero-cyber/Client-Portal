@@ -154,6 +154,31 @@
   font-weight:600;
 }
 
+.empPanelHeadRight{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.empBreakLogsBtn{
+  height:30px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.12);
+  background:#ffffff;
+  color:#0f172a;
+  font-size:11px;
+  font-weight:700;
+  padding:0 12px;
+  cursor:pointer;
+  transition:all .18s ease;
+}
+
+.empBreakLogsBtn:hover{
+  transform:translateY(-1px);
+  box-shadow:var(--shadow2);
+  border-color:rgba(91,0,8,.2);
+}
+
 
 /* ---------- Panel Body ---------- */
 
@@ -1127,6 +1152,200 @@
   background:#f8fafc;
 }
 
+/* ---------- Break Logs Drawer ---------- */
+
+.empBreakLogsBackdrop{
+  position:fixed;
+  inset:0;
+  background:rgba(15,23,42,.28);
+  backdrop-filter:blur(3px);
+  z-index:1140;
+}
+
+.empBreakLogsDrawer{
+  position:fixed;
+  top:0;
+  right:0;
+  width:min(500px, 96vw);
+  height:100vh;
+  background:#ffffff;
+  border-left:1px solid var(--border);
+  box-shadow:-14px 0 34px rgba(15,23,42,.16);
+  transform:translateX(100%);
+  transition:transform .24s ease;
+  z-index:1145;
+  display:flex;
+  flex-direction:column;
+}
+
+.empBreakLogsDrawer.open{
+  transform:translateX(0);
+}
+
+.empBreakLogsDrawerHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:14px 16px;
+  border-bottom:1px solid var(--borderSoft);
+  background:#f8fafc;
+}
+
+.empBreakLogsDrawerIdentity{
+  min-width:0;
+}
+
+.empBreakLogsDrawerTitle{
+  font-size:15px;
+  font-weight:800;
+  color:var(--text);
+}
+
+.empBreakLogsDrawerSub{
+  margin-top:2px;
+  font-size:12px;
+  color:var(--muted);
+  font-weight:600;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.empBreakLogsDrawerClose{
+  width:28px;
+  height:28px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:#ffffff;
+  color:#64748b;
+  font-size:16px;
+  line-height:1;
+  cursor:pointer;
+}
+
+.empBreakLogsDrawerBody{
+  padding:14px 16px;
+  overflow:auto;
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.empBreakLogsToolbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.empBreakLogsSummary{
+  font-size:12px;
+  color:#334155;
+  font-weight:700;
+}
+
+.empBreakLogsFilters{
+  margin-left:auto;
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.empBreakLogsFilterBtn{
+  border:1px solid rgba(15,23,42,.12);
+  background:#ffffff;
+  color:#334155;
+  border-radius:999px;
+  height:30px;
+  padding:0 10px;
+  font-size:11px;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.empBreakLogsFilterBtn.active{
+  background:#5b0008;
+  border-color:#5b0008;
+  color:#ffffff;
+}
+
+.empBreakLogsList{
+  display:grid;
+  gap:10px;
+}
+
+.empBreakLogsItem{
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:#f8fafc;
+  padding:10px;
+  display:grid;
+  gap:6px;
+}
+
+.empBreakLogsItemTop{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+
+.empBreakLogsItemType{
+  font-size:13px;
+  font-weight:700;
+  color:#0f172a;
+}
+
+.empBreakLogsItemState{
+  border-radius:999px;
+  border:1px solid rgba(16,185,129,.25);
+  background:rgba(16,185,129,.12);
+  color:#065f46;
+  font-size:10px;
+  font-weight:700;
+  padding:4px 8px;
+}
+
+.empBreakLogsItemState.active{
+  border-color:rgba(245,158,11,.3);
+  background:rgba(245,158,11,.16);
+  color:#92400e;
+}
+
+.empBreakLogsItemMeta{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  font-size:12px;
+  color:#475569;
+}
+
+.empBreakLogsItemMeta strong{
+  color:#0f172a;
+  font-weight:700;
+}
+
+.empBreakLogsEmpty{
+  border:1px dashed var(--border);
+  border-radius:12px;
+  padding:14px;
+  font-size:12px;
+  color:var(--muted);
+  background:#f8fafc;
+}
+
+.empBreakLogsError{
+  border:1px solid rgba(248,113,113,.35);
+  border-radius:12px;
+  padding:12px;
+  font-size:12px;
+  color:#991b1b;
+  background:rgba(254,242,242,.95);
+}
+
 .announcementModalOverlay{
   position:fixed;
   inset:0;
@@ -1296,6 +1515,10 @@
   .statsRow{
     grid-template-columns:repeat(2,1fr);
   }
+
+  .empBreakLogsDrawer{
+    width:min(460px, 100vw);
+  }
 }
 
 @media(max-width:640px){
@@ -1321,5 +1544,36 @@
 
   .statValue{
     font-size:16px;
+  }
+
+  .empPanelHead{
+    align-items:flex-start;
+    gap:10px;
+  }
+
+  .empPanelHeadLeft{
+    width:100%;
+    flex-wrap:wrap;
+    padding:8px 0;
+  }
+
+  .empPanelHeadRight{
+    width:100%;
+    justify-content:flex-end;
+    flex-wrap:wrap;
+  }
+
+  .empBreakLogsToolbar{
+    align-items:flex-start;
+    flex-wrap:wrap;
+  }
+
+  .empBreakLogsFilters{
+    width:100%;
+    justify-content:flex-end;
+  }
+
+  .empBreakLogsDrawer{
+    width:100vw;
   }
 }

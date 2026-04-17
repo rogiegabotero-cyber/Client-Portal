@@ -1,6 +1,11 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./employee_dashboard.css";
-import { startBreak, endBreak, DAILY_BREAK_LIMIT_MINUTES } from "../services/breakService";
+import {
+  startBreak,
+  endBreak,
+  DAILY_BREAK_LIMIT_MINUTES,
+  getBreakLogsByUserIdsInRange,
+} from "../services/breakService";
 import ConfirmModal from "./ConfirmModal";
 import {
   getScheduleTimeZone,
@@ -231,6 +236,72 @@ const formatUtcIsoToHHMM = (utcIso, timeZone) => {
   }).format(d);
 };
 
+const dayKeyFromMsInZone = (ms, timeZone) => {
+  const parts = getPartsInTimeZone(ms, timeZone);
+  if (!parts) return "";
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
+
+const dayKeyToUtcMs = (dayKey) => {
+  const [y, m, d] = String(dayKey || "").split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return NaN;
+  return Date.UTC(y, m - 1, d);
+};
+
+const dayKeyFromUtcMs = (ms) => {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+};
+
+const getWeekRangeDayKeysInZone = (baseMs, timeZone) => {
+  const currentDayKey = dayKeyFromMsInZone(baseMs, timeZone);
+  const currentDayUtcMs = dayKeyToUtcMs(currentDayKey);
+  if (!Number.isFinite(currentDayUtcMs)) return { startDayKey: "", endDayKey: "" };
+
+  const dayOfWeek = new Date(currentDayUtcMs).getUTCDay();
+  const startDayUtcMs = currentDayUtcMs - dayOfWeek * 86400000;
+  const endDayUtcMs = startDayUtcMs + 6 * 86400000;
+
+  return {
+    startDayKey: dayKeyFromUtcMs(startDayUtcMs),
+    endDayKey: dayKeyFromUtcMs(endDayUtcMs),
+  };
+};
+
+const formatBreakLogLabel = (value = "", fallback = "Break") => {
+  const raw = toText(value);
+  if (!raw) return fallback;
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+};
+
+const formatBreakLogDateTime = (value, timeZone = "America/Chicago") => {
+  const ms = toMillis(value);
+  if (!Number.isFinite(ms)) return "-";
+  return new Date(ms).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+  });
+};
+
+const formatBreakLogDuration = (startValue, endValue, fallbackNowMs = Date.now()) => {
+  const startMs = toMillis(startValue);
+  const endMs = toMillis(endValue);
+  const effectiveEndMs = Number.isFinite(endMs) ? endMs : fallbackNowMs;
+  if (!Number.isFinite(startMs) || !Number.isFinite(effectiveEndMs) || effectiveEndMs < startMs) {
+    return "-";
+  }
+  const mins = Math.max(0, Math.round((effectiveEndMs - startMs) / 60000));
+  return `${mins} min`;
+};
+
 export default function EmployeeDashboard({
   employees = [],
   announcements = [],
@@ -270,10 +341,17 @@ export default function EmployeeDashboard({
   const [breakConfirmAction, setBreakConfirmAction] = useState("");
   const [taskStatusFilter, setTaskStatusFilter] = useState("active");
   const [isTaskFilterOpen, setIsTaskFilterOpen] = useState(false);
+  const [isBreakLogsDrawerOpen, setIsBreakLogsDrawerOpen] = useState(false);
+  const [breakLogFilter, setBreakLogFilter] = useState("thisWeek");
+  const [breakLogRows, setBreakLogRows] = useState([]);
+  const [breakLogLoading, setBreakLogLoading] = useState(false);
+  const [breakLogError, setBreakLogError] = useState("");
+  const [breakLogRefreshToken, setBreakLogRefreshToken] = useState(0);
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
   const [selectedAnnouncement, setSelectedAnnouncement] = useState(null);
   const panelRef = useRef(null);
   const taskFilterDrawerRef = useRef(null);
+  const taskFilterMenuRef = useRef(null);
   const [panelHeightPx, setPanelHeightPx] = useState(null);
 
   const viewerRole = normalize(
@@ -496,6 +574,12 @@ export default function EmployeeDashboard({
     { key: "completed", label: "Completed" },
     { key: "thisMonth", label: "This Month" },
   ];
+  const BREAK_LOG_FILTER_OPTIONS = [
+    { key: "today", label: "Today" },
+    { key: "thisWeek", label: "This Week" },
+    { key: "thisMonth", label: "This Month" },
+    { key: "all", label: "All" },
+  ];
   const activeTaskFilterLabel =
     TASK_FILTER_OPTIONS.find((option) => option.key === taskStatusFilter)?.label || "Active";
 
@@ -510,6 +594,7 @@ export default function EmployeeDashboard({
     const handlePointerDown = (event) => {
       if (!taskFilterDrawerRef.current) return;
       if (taskFilterDrawerRef.current.contains(event.target)) return;
+      if (taskFilterMenuRef.current?.contains(event.target)) return;
       setIsTaskFilterOpen(false);
     };
 
@@ -539,6 +624,40 @@ export default function EmployeeDashboard({
       requestedHistoryRef.current.delete(uid);
     });
   }, [effectiveSelectedId, onFetchFullHistory, historyByUserId, loadingHistoryByUserId]);
+
+  useEffect(() => {
+    if (!isBreakLogsDrawerOpen) return;
+
+    const uid = String(effectiveSelectedId || "").trim();
+    if (!uid) {
+      setBreakLogRows([]);
+      setBreakLogError("");
+      setBreakLogLoading(false);
+      return;
+    }
+
+    let active = true;
+    setBreakLogLoading(true);
+    setBreakLogError("");
+
+    Promise.resolve(getBreakLogsByUserIdsInRange([uid]))
+      .then((rowsByUserId) => {
+        if (!active) return;
+        setBreakLogRows(Array.isArray(rowsByUserId?.[uid]) ? rowsByUserId[uid] : []);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setBreakLogRows([]);
+        setBreakLogError(err?.message || "Failed to load break logs.");
+      })
+      .finally(() => {
+        if (active) setBreakLogLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [isBreakLogsDrawerOpen, effectiveSelectedId, breakLogRefreshToken]);
 
   const todaySchedule = useMemo(() => {
     const sched = schedulesByUserId?.[String(effectiveSelectedId)];
@@ -785,6 +904,8 @@ export default function EmployeeDashboard({
       if (typeof onBreakStatusChanged === "function") {
         await onBreakStatusChanged();
       }
+
+      setBreakLogRefreshToken((prev) => prev + 1);
     } catch (err) {
       setBreakError(err?.message || "Failed to update break");
     } finally {
@@ -810,6 +931,59 @@ export default function EmployeeDashboard({
     await handleBreakToggle();
     setBreakConfirmAction("");
   };
+
+  const filteredBreakLogRows = useMemo(() => {
+    const logs = Array.isArray(breakLogRows) ? breakLogRows : [];
+    if (!logs.length) return [];
+
+    if (breakLogFilter === "all") {
+      return logs
+        .slice()
+        .sort(
+          (a, b) =>
+            toMillis(b?.startedAt ?? b?.createdAt) - toMillis(a?.startedAt ?? a?.createdAt)
+        );
+    }
+
+    const referenceMs = Number.isFinite(liveNowMs) ? liveNowMs : Date.now();
+    const zone = String(businessTimeZone || "").trim() || "America/Chicago";
+    const todayDayKey = dayKeyFromMsInZone(referenceMs, zone);
+    const { startDayKey, endDayKey } = getWeekRangeDayKeysInZone(referenceMs, zone);
+    const monthKey = monthKeyFromMsInZone(referenceMs, zone);
+
+    const filtered = logs.filter((row) => {
+      const startedMs = toMillis(row?.startedAt ?? row?.createdAt);
+      if (!Number.isFinite(startedMs)) return false;
+
+      const dayKey = dayKeyFromMsInZone(startedMs, zone);
+      if (!dayKey) return false;
+
+      if (breakLogFilter === "thisMonth") {
+        return !!monthKey && dayKey.slice(0, 7) === monthKey;
+      }
+
+      if (breakLogFilter === "today") {
+        return !!todayDayKey && dayKey === todayDayKey;
+      }
+
+      if (breakLogFilter === "thisWeek") {
+        return !!startDayKey && !!endDayKey && dayKey >= startDayKey && dayKey <= endDayKey;
+      }
+
+      return true;
+    });
+
+    return filtered.sort(
+      (a, b) => toMillis(b?.startedAt ?? b?.createdAt) - toMillis(a?.startedAt ?? a?.createdAt)
+    );
+  }, [breakLogRows, breakLogFilter, liveNowMs, businessTimeZone]);
+
+  const breakLogEmptyText = useMemo(() => {
+    if (breakLogFilter === "today") return "No break logs today.";
+    if (breakLogFilter === "thisMonth") return "No break logs this month.";
+    if (breakLogFilter === "all") return "No break logs found.";
+    return "No break logs this week.";
+  }, [breakLogFilter]);
 
   const visitorAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcementRows) ? announcementRows : [];
@@ -918,7 +1092,21 @@ export default function EmployeeDashboard({
   }, [liveNowMs, nowMs, businessTimeZone]);
   const historyLoading = !!loadingHistoryByUserId?.[String(effectiveSelectedId)];
   const historyError = historyErrorByUserId?.[String(effectiveSelectedId)] || "";
+  const closeBreakLogsDrawer = () => setIsBreakLogsDrawerOpen(false);
   const closeAnnouncementModal = () => setSelectedAnnouncement(null);
+
+  useEffect(() => {
+    if (!isBreakLogsDrawerOpen) return;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsBreakLogsDrawerOpen(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isBreakLogsDrawerOpen]);
 
   return (
     <div className="empDash">
@@ -984,10 +1172,22 @@ export default function EmployeeDashboard({
                     </div>
                   </div>
               </div>
-              <div className="empDatePill">
-                {now.toLocaleDateString(undefined, {
-                  timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
-                })}
+              <div className="empPanelHeadRight">
+                <div className="empDatePill">
+                  {now.toLocaleDateString(undefined, {
+                    timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
+                  })}
+                </div>
+                <button
+                  type="button"
+                  className="empBreakLogsBtn"
+                  onClick={() => {
+                    setBreakLogFilter("thisWeek");
+                    setIsBreakLogsDrawerOpen(true);
+                  }}
+                >
+                  Break Logs
+                </button>
               </div>
             </div>
 
@@ -1142,7 +1342,12 @@ export default function EmployeeDashboard({
                     </div>
 
                     {isTaskFilterOpen ? (
-                      <div className="taskFilterMenu" role="listbox" aria-label="Task status filters">
+                      <div
+                        ref={taskFilterMenuRef}
+                        className="taskFilterMenu"
+                        role="listbox"
+                        aria-label="Task status filters"
+                      >
                         {TASK_FILTER_OPTIONS.map((option) => {
                           const isActive = taskStatusFilter === option.key;
                           return (
@@ -1281,6 +1486,124 @@ export default function EmployeeDashboard({
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          {isBreakLogsDrawerOpen ? (
+            <div
+              className="empBreakLogsBackdrop"
+              role="button"
+              tabIndex={0}
+              aria-label="Close break logs drawer"
+              onClick={closeBreakLogsDrawer}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") closeBreakLogsDrawer();
+              }}
+            />
+          ) : null}
+
+          <div
+            className={`empBreakLogsDrawer ${isBreakLogsDrawerOpen ? "open" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Employee break logs"
+          >
+            <div className="empBreakLogsDrawerHead">
+              <div className="empBreakLogsDrawerIdentity">
+                <div className="empBreakLogsDrawerTitle">Break Logs</div>
+                <div className="empBreakLogsDrawerSub">
+                  {employee?.name || employee?.email || effectiveSelectedId || "Employee"}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="empBreakLogsDrawerClose"
+                onClick={closeBreakLogsDrawer}
+                aria-label="Close break logs drawer"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="empBreakLogsDrawerBody">
+              <div className="empBreakLogsToolbar">
+                <div className="empBreakLogsSummary">
+                  {breakLogLoading
+                    ? "Loading break logs..."
+                    : `${filteredBreakLogRows.length} log${filteredBreakLogRows.length === 1 ? "" : "s"}`}
+                </div>
+                <div className="empBreakLogsFilters" role="tablist" aria-label="Break log filters">
+                  {BREAK_LOG_FILTER_OPTIONS.map((option) => {
+                    const isActive = breakLogFilter === option.key;
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        className={`empBreakLogsFilterBtn ${isActive ? "active" : ""}`}
+                        onClick={() => setBreakLogFilter(option.key)}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {breakLogError ? (
+                <div className="empBreakLogsError">{breakLogError}</div>
+              ) : breakLogLoading ? (
+                <div className="empBreakLogsEmpty">Fetching break logs...</div>
+              ) : filteredBreakLogRows.length === 0 ? (
+                <div className="empBreakLogsEmpty">{breakLogEmptyText}</div>
+              ) : (
+                <div className="empBreakLogsList">
+                  {filteredBreakLogRows.map((row, index) => {
+                    const startedAt = row?.startedAt ?? row?.createdAt ?? null;
+                    const endedAt = row?.endedAt ?? null;
+                    const isActiveBreak = !endedAt || !!row?.isActive;
+                    const startedAtMs = toMillis(startedAt);
+                    const key =
+                      toText(row?.id) ||
+                      `${effectiveSelectedId}-break-${Number.isFinite(startedAtMs) ? startedAtMs : index}`;
+
+                    return (
+                      <div key={key} className="empBreakLogsItem">
+                        <div className="empBreakLogsItemTop">
+                          <div className="empBreakLogsItemType">
+                            {formatBreakLogLabel(row?.breakType, "Break")}
+                          </div>
+                          <span className={`empBreakLogsItemState ${isActiveBreak ? "active" : ""}`}>
+                            {isActiveBreak ? "Active" : "Completed"}
+                          </span>
+                        </div>
+
+                        <div className="empBreakLogsItemMeta">
+                          <span>Start</span>
+                          <strong>{formatBreakLogDateTime(startedAt, businessTimeZone)}</strong>
+                        </div>
+                        <div className="empBreakLogsItemMeta">
+                          <span>End</span>
+                          <strong>
+                            {isActiveBreak ? "In progress" : formatBreakLogDateTime(endedAt, businessTimeZone)}
+                          </strong>
+                        </div>
+                        <div className="empBreakLogsItemMeta">
+                          <span>Duration</span>
+                          <strong>
+                            {formatBreakLogDuration(
+                              startedAt,
+                              endedAt,
+                              Number.isFinite(liveNowMs) ? liveNowMs : Date.now()
+                            )}
+                          </strong>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 

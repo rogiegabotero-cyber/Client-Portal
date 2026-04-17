@@ -34,14 +34,13 @@
 
 .dashLayout {
   display: flex;
-  gap: 18px;
+  gap: 10px;
   min-width: 0;
 }
 
 .dashMain {
   display: flex;
   flex-direction: column;
-  gap: 18px;
   min-width: 0;
   width: 100%;
 }
@@ -249,20 +248,20 @@
 }
 
 .attSummaryTable thead th {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: #334155;
   background: rgba(15, 23, 42, 0.03);
   border-bottom: 1px solid rgba(17, 24, 39, 0.08);
   padding: 8px 10px;
   text-align: left;
-  min-width: 130px;
+  min-width: 100px;
 }
 
 .attSummaryTable tbody td {
   padding: 7px 10px;
   border-bottom: 1px solid rgba(17, 24, 39, 0.06);
-  font-size: 12px;
+  font-size: 10px;
   color: #334155;
 }
 
@@ -884,8 +883,7 @@
 .updateSidebar {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  min-width: 25%;
+  min-width: 30%;
 }
 
 .updateBody {
@@ -1634,6 +1632,231 @@
 
 .updateSidebar .panelHead {
   margin-top: 0;
+}
+
+.dashAgentsHead {
+  gap: 10px;
+}
+
+.dashBreakLogsBtn {
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  color: #0f172a;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dashBreakLogsBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  border-color: rgba(91, 0, 8, 0.25);
+}
+
+.dashBreakLogsBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(3px);
+  z-index: 1140;
+}
+
+.dashBreakLogsDrawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(500px, 96vw);
+  height: 100vh;
+  background: #ffffff;
+  border-left: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: -14px 0 34px rgba(15, 23, 42, 0.16);
+  transform: translateX(100%);
+  transition: transform 0.24s ease;
+  z-index: 1145;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashBreakLogsDrawer.open {
+  transform: translateX(0);
+}
+
+.dashBreakLogsDrawerHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: #f8fafc;
+}
+
+.dashBreakLogsDrawerIdentity {
+  min-width: 0;
+}
+
+.dashBreakLogsDrawerTitle {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.dashBreakLogsDrawerSub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.dashBreakLogsDrawerClose {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  color: #64748b;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dashBreakLogsDrawerBody {
+  padding: 14px 16px;
+  overflow: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dashBreakLogsToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dashBreakLogsSummary {
+  font-size: 12px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.dashBreakLogsFilters {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dashBreakLogsFilterBtn {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  color: #334155;
+  border-radius: 999px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dashBreakLogsFilterBtn.active {
+  background: #5b0008;
+  border-color: #5b0008;
+  color: #ffffff;
+}
+
+.dashBreakLogsList {
+  display: grid;
+  gap: 10px;
+}
+
+.dashBreakLogsItem {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.dashBreakLogsItemTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dashBreakLogsItemEmployee {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.dashBreakLogsItemState {
+  border-radius: 999px;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: rgba(16, 185, 129, 0.12);
+  color: #065f46;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.dashBreakLogsItemState.active {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.16);
+  color: #92400e;
+}
+
+.dashBreakLogsItemType {
+  font-size: 12px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.dashBreakLogsItemMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.dashBreakLogsItemMeta strong {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.dashBreakLogsEmpty {
+  border: 1px dashed rgba(15, 23, 42, 0.14);
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 12px;
+  color: #64748b;
+  background: #f8fafc;
+}
+
+@media (max-width: 768px) {
+  .dashBreakLogsToolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .dashBreakLogsFilters {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .dashBreakLogsDrawer {
+    width: 100vw;
+  }
 }
 
 .updateSidebar .payEmpty {

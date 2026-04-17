@@ -1,6 +1,7 @@
-﻿import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import "./header.css";
-import { Bell, Eye, EyeOff } from "lucide-react";
+import { Bell, Eye, EyeOff, Settings } from "lucide-react";
 import { getProfileImageUrl, getUserId, toMillis } from "../utils/common";
 
 const formatProfileDate = (value) => {
@@ -21,7 +22,8 @@ const Header = ({
 }) => {
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
-  const [profileEditOpen, setProfileEditOpen] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [profileActionLoading, setProfileActionLoading] = useState(false);
   const [profileActionMessage, setProfileActionMessage] = useState("");
   const [profileActionError, setProfileActionError] = useState("");
@@ -33,6 +35,7 @@ const Header = ({
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [avatarErrored, setAvatarErrored] = useState(false);
   const notifRef = useRef(null);
+  const settingsMenuRef = useRef(null);
 
   const unreadCount = notifications.filter((n) => !n?.read).length;
   const unreadIds = notifications
@@ -98,13 +101,36 @@ const Header = ({
 
     const handleEsc = (event) => {
       if (event.key === "Escape" && !profileActionLoading) {
+        if (passwordModalOpen) {
+          setPasswordModalOpen(false);
+          return;
+        }
+        if (settingsMenuOpen) {
+          setSettingsMenuOpen(false);
+          return;
+        }
         setProfileDrawerOpen(false);
       }
     };
 
     window.addEventListener("keydown", handleEsc);
     return () => window.removeEventListener("keydown", handleEsc);
-  }, [profileDrawerOpen, profileActionLoading]);
+  }, [profileDrawerOpen, profileActionLoading, passwordModalOpen, settingsMenuOpen]);
+
+  useEffect(() => {
+    if (!profileDrawerOpen || !settingsMenuOpen) return;
+
+    const handleOutsideClick = (event) => {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(event.target)) {
+        setSettingsMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handleOutsideClick);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsideClick);
+    };
+  }, [profileDrawerOpen, settingsMenuOpen]);
 
   const profileUserEmail = String(profileSource?.email || viewer?.email || "").trim();
   const profileCreatedAt = profileSource?.profile?.createdAt || profileSource?.createdAt;
@@ -115,7 +141,8 @@ const Header = ({
   const closeProfileDrawer = () => {
     if (profileActionLoading) return;
     setProfileDrawerOpen(false);
-    setProfileEditOpen(false);
+    setPasswordModalOpen(false);
+    setSettingsMenuOpen(false);
     setProfileActionMessage("");
     setProfileActionError("");
     setOldPasswordDraft("");
@@ -129,7 +156,8 @@ const Header = ({
   const handleOpenProfileDrawer = () => {
     setNotifOpen(false);
     setProfileDrawerOpen(true);
-    setProfileEditOpen(false);
+    setPasswordModalOpen(false);
+    setSettingsMenuOpen(false);
     setProfileActionMessage("");
     setProfileActionError("");
     setOldPasswordDraft("");
@@ -138,6 +166,24 @@ const Header = ({
     setShowOldPassword(false);
     setShowNewPassword(false);
     setShowConfirmPassword(false);
+  };
+
+  const closePasswordModal = () => {
+    if (profileActionLoading) return;
+    setPasswordModalOpen(false);
+    setProfileActionMessage("");
+    setProfileActionError("");
+    setOldPasswordDraft("");
+    setNewPasswordDraft("");
+    setConfirmPasswordDraft("");
+    setShowOldPassword(false);
+    setShowNewPassword(false);
+    setShowConfirmPassword(false);
+  };
+
+  const openChangePasswordModal = () => {
+    setSettingsMenuOpen(false);
+    setPasswordModalOpen(true);
   };
 
   const handleChangePassword = async () => {
@@ -190,6 +236,117 @@ const Header = ({
       setProfileActionLoading(false);
     }
   };
+
+  const passwordModalNode =
+    passwordModalOpen && profileDrawerOpen ? (
+      <>
+        <button
+          type="button"
+          className="header-profile-security-modal-backdrop"
+          aria-label="Close account security modal"
+          onClick={closePasswordModal}
+        />
+
+        <div className="header-profile-security-modal" role="dialog" aria-modal="true">
+          <div className="header-profile-security-modal-head">
+            <div className="header-profile-security-modal-title">Manage Your Account Password</div>
+            <button
+              type="button"
+              className="header-profile-security-modal-close"
+              onClick={closePasswordModal}
+              aria-label="Close account security modal"
+              disabled={profileActionLoading}
+            >
+              x
+            </button>
+          </div>
+
+          <div className="header-profile-security-modal-body">
+            {profileActionError ? (
+              <div className="header-profile-alert error">{profileActionError}</div>
+            ) : null}
+            {profileActionMessage ? (
+              <div className="header-profile-alert success">{profileActionMessage}</div>
+            ) : null}
+
+            <p className="header-profile-edit-note">
+              Enter your old password and choose a new one.
+            </p>
+
+            <div className="header-profile-password-grid">
+              <div className="header-profile-password-wrap">
+                <input
+                  type={showOldPassword ? "text" : "password"}
+                  value={oldPasswordDraft}
+                  onChange={(e) => setOldPasswordDraft(e.target.value)}
+                  placeholder="Old password"
+                  className="header-profile-password-input"
+                  disabled={profileActionLoading}
+                />
+                <button
+                  type="button"
+                  className="header-profile-password-toggle"
+                  onClick={() => setShowOldPassword((prev) => !prev)}
+                  aria-label={showOldPassword ? "Hide old password" : "Show old password"}
+                  disabled={profileActionLoading}
+                >
+                  {showOldPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+
+              <div className="header-profile-password-wrap">
+                <input
+                  type={showNewPassword ? "text" : "password"}
+                  value={newPasswordDraft}
+                  onChange={(e) => setNewPasswordDraft(e.target.value)}
+                  placeholder="New password"
+                  className="header-profile-password-input"
+                  disabled={profileActionLoading}
+                />
+                <button
+                  type="button"
+                  className="header-profile-password-toggle"
+                  onClick={() => setShowNewPassword((prev) => !prev)}
+                  aria-label={showNewPassword ? "Hide new password" : "Show new password"}
+                  disabled={profileActionLoading}
+                >
+                  {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+
+              <div className="header-profile-password-wrap">
+                <input
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={confirmPasswordDraft}
+                  onChange={(e) => setConfirmPasswordDraft(e.target.value)}
+                  placeholder="Confirm new password"
+                  className="header-profile-password-input"
+                  disabled={profileActionLoading}
+                />
+                <button
+                  type="button"
+                  className="header-profile-password-toggle"
+                  onClick={() => setShowConfirmPassword((prev) => !prev)}
+                  aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                  disabled={profileActionLoading}
+                >
+                  {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="header-profile-reset-btn"
+              onClick={handleChangePassword}
+              disabled={profileActionLoading}
+            >
+              {profileActionLoading ? "Updating..." : "Update Password"}
+            </button>
+          </div>
+        </div>
+      </>
+    ) : null;
 
   return (
     <header className="top-header">
@@ -336,13 +493,6 @@ const Header = ({
             </div>
 
             <div className="header-profile-drawer-body">
-              {profileActionError ? (
-                <div className="header-profile-alert error">{profileActionError}</div>
-              ) : null}
-              {profileActionMessage ? (
-                <div className="header-profile-alert success">{profileActionMessage}</div>
-              ) : null}
-
               <div className="header-profile-hero">
                 <div className="header-profile-hero-left">
                   {profileImage && !avatarErrored ? (
@@ -365,6 +515,32 @@ const Header = ({
                   <div className="header-profile-hero-role">{displayRole}</div>
                   <div className="header-profile-hero-email">{profileUserEmail || "-"}</div>
                 </div>
+
+                <div className="header-profile-hero-settings" ref={settingsMenuRef}>
+                  <button
+                    type="button"
+                    className={`header-profile-hero-settings-btn ${settingsMenuOpen ? "open" : ""}`}
+                    aria-label="Open account settings menu"
+                    aria-haspopup="menu"
+                    aria-expanded={settingsMenuOpen}
+                    onClick={() => setSettingsMenuOpen((prev) => !prev)}
+                  >
+                    <Settings size={16} />
+                  </button>
+
+                  {settingsMenuOpen ? (
+                    <div className="header-profile-hero-settings-menu" role="menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="header-profile-hero-settings-menu-item"
+                        onClick={openChangePasswordModal}
+                      >
+                        Change Password
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div className="header-profile-details-card">
@@ -384,105 +560,14 @@ const Header = ({
                 </div>
               </div>
 
-              <div className="header-profile-section">
-                <div className="header-profile-row">
-                  <span>Security</span>
-                  <strong>Manage your account password</strong>
-                </div>
-
-                <button
-                  type="button"
-                  className="header-profile-edit-toggle"
-                  onClick={() => setProfileEditOpen((prev) => !prev)}
-                >
-                  {profileEditOpen ? "Cancel" : "Edit Account"}
-                </button>
-
-                {profileEditOpen ? (
-                  <div className="header-profile-edit-card">
-                    <p className="header-profile-edit-note">
-                      Enter your old password and choose a new one.
-                    </p>
-
-                    <div className="header-profile-password-grid">
-                      <div className="header-profile-password-wrap">
-                        <input
-                          type={showOldPassword ? "text" : "password"}
-                          value={oldPasswordDraft}
-                          onChange={(e) => setOldPasswordDraft(e.target.value)}
-                          placeholder="Old password"
-                          className="header-profile-password-input"
-                          disabled={profileActionLoading}
-                        />
-                        <button
-                          type="button"
-                          className="header-profile-password-toggle"
-                          onClick={() => setShowOldPassword((prev) => !prev)}
-                          aria-label={showOldPassword ? "Hide old password" : "Show old password"}
-                          disabled={profileActionLoading}
-                        >
-                          {showOldPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-
-                      <div className="header-profile-password-wrap">
-                        <input
-                          type={showNewPassword ? "text" : "password"}
-                          value={newPasswordDraft}
-                          onChange={(e) => setNewPasswordDraft(e.target.value)}
-                          placeholder="New password"
-                          className="header-profile-password-input"
-                          disabled={profileActionLoading}
-                        />
-                        <button
-                          type="button"
-                          className="header-profile-password-toggle"
-                          onClick={() => setShowNewPassword((prev) => !prev)}
-                          aria-label={showNewPassword ? "Hide new password" : "Show new password"}
-                          disabled={profileActionLoading}
-                        >
-                          {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-
-                      <div className="header-profile-password-wrap">
-                        <input
-                          type={showConfirmPassword ? "text" : "password"}
-                          value={confirmPasswordDraft}
-                          onChange={(e) => setConfirmPasswordDraft(e.target.value)}
-                          placeholder="Confirm new password"
-                          className="header-profile-password-input"
-                          disabled={profileActionLoading}
-                        />
-                        <button
-                          type="button"
-                          className="header-profile-password-toggle"
-                          onClick={() => setShowConfirmPassword((prev) => !prev)}
-                          aria-label={
-                            showConfirmPassword ? "Hide confirm password" : "Show confirm password"
-                          }
-                          disabled={profileActionLoading}
-                        >
-                          {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="header-profile-reset-btn"
-                      onClick={handleChangePassword}
-                      disabled={profileActionLoading}
-                    >
-                      {profileActionLoading ? "Updating..." : "Update Password"}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
             </div>
           </aside>
+
         </>
       ) : null}
+      {typeof document !== "undefined" && passwordModalNode
+        ? createPortal(passwordModalNode, document.body)
+        : null}
     </header>
   );
 };
