@@ -11,6 +11,27 @@
   flex-wrap: wrap;
 }
 
+.notif-page-mark-all-btn {
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.notif-page-mark-all-btn:hover {
+  background: #f8fafc;
+}
+
+.notif-page-mark-all-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .notif-page-head-actions {
   display: flex;
   align-items: center;

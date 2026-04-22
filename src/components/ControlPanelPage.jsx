@@ -18,7 +18,8 @@ import {
   sanitizeTimeZone,
 } from "../services/attendanceSettingsService";
 import { getDeviceTimeZone } from "../utils/common";
-import { db } from "../firebase";
+import { auth, db } from "../firebase";
+import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import {
   addDoc,
   collection,
@@ -37,6 +38,7 @@ import {
   MoreVertical,
   Pencil,
   Plus,
+  RotateCcw,
   RefreshCcw,
   Save,
   Search,
@@ -125,6 +127,7 @@ const SETTINGS_DRAWER_VIEWS = {
   ROLE_BULK: "role_bulk",
   USER_ACTIONS: "user_actions",
   PENDING_REQUESTS: "pending_requests",
+  BREAK_LOG_RECORDS: "break_log_records",
 };
 const USER_LIST_FILTERS = {
   SPECIAL: "special",
@@ -466,6 +469,20 @@ const toDateInputValue = (value) => {
   return "";
 };
 
+const toTimestampMillis = (value) => {
+  const date = timestampToDate(value);
+  return date ? date.getTime() : Number.NaN;
+};
+
+const formatBreakDuration = (row) => {
+  const startMs = toTimestampMillis(row?.startedAt || row?.startTime);
+  if (!Number.isFinite(startMs)) return "-";
+  const endMs = toTimestampMillis(row?.endedAt || row?.endTime);
+  const resolvedEndMs = Number.isFinite(endMs) ? endMs : Date.now();
+  const minutes = Math.max(0, Math.round((resolvedEndMs - startMs) / 60000));
+  return `${minutes} min`;
+};
+
 export default function ControlPanelPage({
   specialUsers = [],
   employees = [],
@@ -544,6 +561,27 @@ export default function ControlPanelPage({
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
   const [settingsDrawerView, setSettingsDrawerView] = useState("");
   const settingsMenuRef = useRef(null);
+  const breakLogMenuRef = useRef(null);
+  const [breakLogRows, setBreakLogRows] = useState([]);
+  const [breakLogLoading, setBreakLogLoading] = useState(false);
+  const [breakLogError, setBreakLogError] = useState("");
+  const [breakLogFilterEmployeeId, setBreakLogFilterEmployeeId] = useState("");
+  const [breakLogMenuOpen, setBreakLogMenuOpen] = useState(false);
+  const [breakLogArchiveView, setBreakLogArchiveView] = useState(false);
+  const [breakLogRefreshTick, setBreakLogRefreshTick] = useState(0);
+  const [breakClearModalOpen, setBreakClearModalOpen] = useState(false);
+  const [breakClearPassword, setBreakClearPassword] = useState("");
+  const [breakClearError, setBreakClearError] = useState("");
+  const [breakClearBusy, setBreakClearBusy] = useState(false);
+  const [breakDeleteArchiveModalOpen, setBreakDeleteArchiveModalOpen] = useState(false);
+  const [breakDeleteArchivePassword, setBreakDeleteArchivePassword] = useState("");
+  const [breakDeleteArchiveConfirmText, setBreakDeleteArchiveConfirmText] = useState("");
+  const [breakDeleteArchiveError, setBreakDeleteArchiveError] = useState("");
+  const [breakDeleteArchiveBusy, setBreakDeleteArchiveBusy] = useState(false);
+  const [archivingBreakLogId, setArchivingBreakLogId] = useState("");
+  const [restoringBreakLogId, setRestoringBreakLogId] = useState("");
+  const [deletingArchivedBreakLogId, setDeletingArchivedBreakLogId] = useState("");
+  const [restoringAllBreakLogs, setRestoringAllBreakLogs] = useState(false);
   const deviceTimeZone = getDeviceTimeZone();
 
   const [resetTimeDraft, setResetTimeDraft] = useState(() =>
@@ -692,6 +730,70 @@ export default function ControlPanelPage({
       ),
     [userRequests]
   );
+  const breakLogEmployeeOptions = useMemo(() => {
+    const source = Array.isArray(employees) ? employees : [];
+    const seen = new Set();
+    const options = [];
+
+    for (const employee of source) {
+      const userId = String(employee?.uid || employee?.id || employee?.userId || "").trim();
+      if (!userId || seen.has(userId)) continue;
+
+      const displayName =
+        String(employee?.name || "").trim() ||
+        `${employee?.firstName || ""} ${employee?.lastName || ""}`.trim() ||
+        String(employee?.email || "").trim() ||
+        userId;
+
+      seen.add(userId);
+      options.push({
+        value: userId,
+        label: displayName,
+      });
+    }
+
+    options.sort((a, b) => a.label.localeCompare(b.label));
+    return options;
+  }, [employees]);
+
+  const breakLogVisibleRows = useMemo(() => {
+    const selectedEmployeeId = String(breakLogFilterEmployeeId || "").trim();
+    const rows = (Array.isArray(breakLogRows) ? breakLogRows : []).filter(
+      (row) => !!row?.archived === breakLogArchiveView
+    );
+    if (!selectedEmployeeId) return rows;
+
+    return rows.filter((row) => {
+      const rowUserId = String(row?.userId || row?.uid || row?.id || "").trim();
+      return rowUserId === selectedEmployeeId;
+    });
+  }, [breakLogRows, breakLogArchiveView, breakLogFilterEmployeeId]);
+  const activeBreakLogIds = useMemo(
+    () =>
+      (Array.isArray(breakLogRows) ? breakLogRows : [])
+        .filter((row) => !row?.archived)
+        .map((row) => String(row?.id || "").trim())
+        .filter(Boolean),
+    [breakLogRows]
+  );
+  const archivedBreakLogIds = useMemo(
+    () =>
+      (Array.isArray(breakLogRows) ? breakLogRows : [])
+        .filter((row) => !!row?.archived)
+        .map((row) => String(row?.id || "").trim())
+        .filter(Boolean),
+    [breakLogRows]
+  );
+
+  useEffect(() => {
+    if (!breakLogFilterEmployeeId) return;
+    const exists = breakLogEmployeeOptions.some(
+      (option) => option.value === breakLogFilterEmployeeId
+    );
+    if (!exists) {
+      setBreakLogFilterEmployeeId("");
+    }
+  }, [breakLogFilterEmployeeId, breakLogEmployeeOptions]);
 
   const permissionPageKeys = useMemo(() => {
     const ordered = PERMISSION_PAGE_ORDER.filter((page) => PAGE_KEYS.includes(page));
@@ -820,6 +922,27 @@ export default function ControlPanelPage({
 
     const handleEscape = (event) => {
       if (event.key !== "Escape") return;
+      if (breakDeleteArchiveModalOpen) {
+        if (!breakDeleteArchiveBusy) {
+          setBreakDeleteArchiveModalOpen(false);
+          setBreakDeleteArchivePassword("");
+          setBreakDeleteArchiveConfirmText("");
+          setBreakDeleteArchiveError("");
+        }
+        return;
+      }
+      if (breakClearModalOpen) {
+        if (!breakClearBusy) {
+          setBreakClearModalOpen(false);
+          setBreakClearPassword("");
+          setBreakClearError("");
+        }
+        return;
+      }
+      if (breakLogMenuOpen) {
+        setBreakLogMenuOpen(false);
+        return;
+      }
       setSettingsDrawerOpen(false);
       setSettingsMenuOpen(false);
     };
@@ -828,7 +951,14 @@ export default function ControlPanelPage({
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [settingsDrawerOpen]);
+  }, [
+    settingsDrawerOpen,
+    breakLogMenuOpen,
+    breakClearModalOpen,
+    breakClearBusy,
+    breakDeleteArchiveModalOpen,
+    breakDeleteArchiveBusy,
+  ]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -907,6 +1037,84 @@ export default function ControlPanelPage({
       cancelled = true;
     };
   }, [dataBrowserEnabled, activeTab, selectedTableKey, dataLimit, dataRefreshTick, inspectedRow]);
+
+  useEffect(() => {
+    const isBreakLogViewOpen =
+      settingsDrawerOpen && settingsDrawerView === SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS;
+    if (!isBreakLogViewOpen) return;
+
+    let cancelled = false;
+
+    async function loadBreakLogs() {
+      setBreakLogLoading(true);
+      setBreakLogError("");
+
+      try {
+        const snap = await getDocs(collection(db, "break_logs"));
+
+        const rows = snap.docs
+          .map((item) => ({
+            id: item.id,
+            ...(item.data() || {}),
+          }))
+          .sort((a, b) => {
+            const leftMs = toTimestampMillis(a?.updatedAt || a?.createdAt);
+            const rightMs = toTimestampMillis(b?.updatedAt || b?.createdAt);
+            if (Number.isFinite(rightMs) && Number.isFinite(leftMs)) {
+              return rightMs - leftMs;
+            }
+            if (Number.isFinite(rightMs)) return 1;
+            if (Number.isFinite(leftMs)) return -1;
+            return 0;
+          });
+
+        if (!cancelled) {
+          setBreakLogRows(rows);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBreakLogRows([]);
+          setBreakLogError(error?.message || "Failed to load break logs.");
+        }
+      } finally {
+        if (!cancelled) {
+          setBreakLogLoading(false);
+        }
+      }
+    }
+
+    loadBreakLogs();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsDrawerOpen, settingsDrawerView, breakLogRefreshTick]);
+
+  useEffect(() => {
+    if (settingsDrawerView === SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS) return;
+    setBreakLogMenuOpen(false);
+    setBreakClearModalOpen(false);
+    setBreakClearError("");
+    setBreakClearPassword("");
+    setBreakDeleteArchiveModalOpen(false);
+    setBreakDeleteArchiveError("");
+    setBreakDeleteArchivePassword("");
+    setBreakDeleteArchiveConfirmText("");
+  }, [settingsDrawerView]);
+
+  useEffect(() => {
+    if (!breakLogMenuOpen) return undefined;
+
+    const onOutsideClick = (event) => {
+      if (breakLogMenuRef.current && !breakLogMenuRef.current.contains(event.target)) {
+        setBreakLogMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", onOutsideClick);
+    };
+  }, [breakLogMenuOpen]);
 
   function togglePage(pageKey) {
     setSelectedPages((prev) => {
@@ -1634,19 +1842,398 @@ export default function ControlPanelPage({
   function openSettingsDrawer(viewKey) {
     const allowed = Object.values(SETTINGS_DRAWER_VIEWS);
     const nextView = allowed.includes(viewKey) ? viewKey : SETTINGS_DRAWER_VIEWS.ATTENDANCE;
+    if (nextView === SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS) {
+      setBreakLogArchiveView(false);
+    }
     setSettingsDrawerView(nextView);
     setSettingsDrawerOpen(true);
     setSettingsMenuOpen(false);
+    setBreakLogMenuOpen(false);
+    setBreakClearModalOpen(false);
+    setBreakClearPassword("");
+    setBreakClearError("");
+    setBreakDeleteArchiveModalOpen(false);
+    setBreakDeleteArchivePassword("");
+    setBreakDeleteArchiveConfirmText("");
+    setBreakDeleteArchiveError("");
   }
 
   function closeSettingsDrawer() {
     setSettingsDrawerOpen(false);
     setEmployeePasswordDropdownOpen(false);
+    setBreakLogMenuOpen(false);
+    setBreakClearModalOpen(false);
+    setBreakClearPassword("");
+    setBreakClearError("");
+    setBreakDeleteArchiveModalOpen(false);
+    setBreakDeleteArchivePassword("");
+    setBreakDeleteArchiveConfirmText("");
+    setBreakDeleteArchiveError("");
+  }
+
+  function openBreakClearModal() {
+    setBreakLogMenuOpen(false);
+    setBreakDeleteArchiveModalOpen(false);
+    setBreakClearError("");
+    setBreakClearPassword("");
+    setBreakClearModalOpen(true);
+  }
+
+  function closeBreakClearModal() {
+    if (breakClearBusy) return;
+    setBreakClearModalOpen(false);
+    setBreakClearPassword("");
+    setBreakClearError("");
+  }
+
+  function openBreakDeleteArchiveModal() {
+    setBreakLogMenuOpen(false);
+    setBreakClearModalOpen(false);
+    setBreakDeleteArchiveError("");
+    setBreakDeleteArchivePassword("");
+    setBreakDeleteArchiveConfirmText("");
+    setBreakDeleteArchiveModalOpen(true);
+  }
+
+  function closeBreakDeleteArchiveModal() {
+    if (breakDeleteArchiveBusy) return;
+    setBreakDeleteArchiveModalOpen(false);
+    setBreakDeleteArchivePassword("");
+    setBreakDeleteArchiveConfirmText("");
+    setBreakDeleteArchiveError("");
+  }
+
+  async function handleClearBreakLogs() {
+    if (breakClearBusy) return;
+
+    const normalizedPassword = String(breakClearPassword || "").trim();
+    if (!normalizedPassword) {
+      setBreakClearError("Enter your super admin password to continue.");
+      return;
+    }
+
+    if (normalizeRole(viewer?.role) !== ROLES.SUPER_ADMIN) {
+      setBreakClearError("Only super admins can clear break logs.");
+      return;
+    }
+
+    if (activeBreakLogIds.length === 0) {
+      setBreakClearModalOpen(false);
+      onToast?.({
+        type: "info",
+        title: "No Active Logs",
+        message: "There are no active break logs to move into Break Archive.",
+      });
+      return;
+    }
+
+    const currentUser = auth.currentUser;
+    const authEmail = String(currentUser?.email || viewer?.email || "").trim();
+
+    if (!currentUser || !authEmail) {
+      setBreakClearError("Could not verify your account session. Please sign in again.");
+      return;
+    }
+
+    setBreakClearBusy(true);
+    setBreakClearError("");
+
+    try {
+      const credential = EmailAuthProvider.credential(authEmail, normalizedPassword);
+      await reauthenticateWithCredential(currentUser, credential);
+
+      const actorUserId = String(
+        viewer?.uid || viewer?.userId || viewer?.id || currentUser.uid || ""
+      ).trim();
+      const actorName = String(
+        viewer?.name || viewer?.displayName || viewer?.email || authEmail || "Super Admin"
+      ).trim();
+
+      await Promise.all(
+        activeBreakLogIds.map((breakLogId) =>
+          updateDoc(doc(db, "break_logs", breakLogId), {
+            archived: true,
+            archivedAt: serverTimestamp(),
+            archivedByUserId: actorUserId,
+            archivedByName: actorName,
+            updatedAt: serverTimestamp(),
+          })
+        )
+      );
+
+      setBreakClearModalOpen(false);
+      setBreakClearPassword("");
+      setBreakLogArchiveView(true);
+      setBreakLogRefreshTick((v) => v + 1);
+
+      onToast?.({
+        type: "success",
+        title: "Break Logs Archived",
+        message: `${activeBreakLogIds.length} break log(s) moved to Break Archive.`,
+      });
+    } catch (error) {
+      const code = String(error?.code || "").trim().toLowerCase();
+      if (code === "auth/wrong-password" || code === "auth/invalid-credential") {
+        setBreakClearError("Incorrect password. Please try again.");
+      } else {
+        setBreakClearError(error?.message || "Could not clear break logs.");
+      }
+    } finally {
+      setBreakClearBusy(false);
+    }
+  }
+
+  async function handleClearBreakArchive() {
+    if (breakDeleteArchiveBusy) return;
+
+    const normalizedPassword = String(breakDeleteArchivePassword || "").trim();
+    if (!normalizedPassword) {
+      setBreakDeleteArchiveError("Enter your super admin password to continue.");
+      return;
+    }
+
+    const normalizedConfirmText = String(breakDeleteArchiveConfirmText || "").trim().toUpperCase();
+    if (normalizedConfirmText !== "DELETE") {
+      setBreakDeleteArchiveError('Type "DELETE" to confirm permanent deletion.');
+      return;
+    }
+
+    if (normalizeRole(viewer?.role) !== ROLES.SUPER_ADMIN) {
+      setBreakDeleteArchiveError("Only super admins can clear break archive.");
+      return;
+    }
+
+    if (archivedBreakLogIds.length === 0) {
+      setBreakDeleteArchiveModalOpen(false);
+      onToast?.({
+        type: "info",
+        title: "Archive Is Empty",
+        message: "There are no archived break logs to delete.",
+      });
+      return;
+    }
+
+    const currentUser = auth.currentUser;
+    const authEmail = String(currentUser?.email || viewer?.email || "").trim();
+
+    if (!currentUser || !authEmail) {
+      setBreakDeleteArchiveError("Could not verify your account session. Please sign in again.");
+      return;
+    }
+
+    setBreakDeleteArchiveBusy(true);
+    setBreakDeleteArchiveError("");
+
+    try {
+      const credential = EmailAuthProvider.credential(authEmail, normalizedPassword);
+      await reauthenticateWithCredential(currentUser, credential);
+
+      await Promise.all(
+        archivedBreakLogIds.map((breakLogId) => deleteDoc(doc(db, "break_logs", breakLogId)))
+      );
+
+      setBreakDeleteArchiveModalOpen(false);
+      setBreakDeleteArchivePassword("");
+      setBreakDeleteArchiveConfirmText("");
+      setBreakLogRefreshTick((v) => v + 1);
+
+      onToast?.({
+        type: "success",
+        title: "Break Archive Cleared",
+        message: `${archivedBreakLogIds.length} archived break log(s) deleted permanently.`,
+      });
+    } catch (error) {
+      const code = String(error?.code || "").trim().toLowerCase();
+      if (code === "auth/wrong-password" || code === "auth/invalid-credential") {
+        setBreakDeleteArchiveError("Incorrect password. Please try again.");
+      } else {
+        setBreakDeleteArchiveError(error?.message || "Could not clear break archive.");
+      }
+    } finally {
+      setBreakDeleteArchiveBusy(false);
+    }
+  }
+
+  async function handleArchiveSingleBreakLog(row = {}) {
+    const breakLogId = String(row?.id || "").trim();
+    if (!breakLogId || !!row?.archived) return;
+
+    const label =
+      String(row?.name || "").trim() ||
+      String(row?.email || "").trim() ||
+      String(row?.userId || "").trim() ||
+      breakLogId;
+
+    const confirmed = window.confirm(`Move break log for "${label}" to Break Archive?`);
+    if (!confirmed) return;
+
+    setArchivingBreakLogId(breakLogId);
+    try {
+      const currentUser = auth.currentUser;
+      const actorUserId = String(
+        viewer?.uid || viewer?.userId || viewer?.id || currentUser?.uid || ""
+      ).trim();
+      const actorName = String(
+        viewer?.name ||
+          viewer?.displayName ||
+          viewer?.email ||
+          currentUser?.email ||
+          "Portal User"
+      ).trim();
+
+      await updateDoc(doc(db, "break_logs", breakLogId), {
+        archived: true,
+        archivedAt: serverTimestamp(),
+        archivedByUserId: actorUserId,
+        archivedByName: actorName,
+        updatedAt: serverTimestamp(),
+      });
+
+      setBreakLogRefreshTick((value) => value + 1);
+      onToast?.({
+        type: "success",
+        title: "Break Log Archived",
+        message: `Moved break log for ${label} to Break Archive.`,
+      });
+    } catch (error) {
+      onToast?.({
+        type: "error",
+        title: "Archive Failed",
+        message: error?.message || "Could not move break log to archive.",
+      });
+    } finally {
+      setArchivingBreakLogId("");
+    }
+  }
+
+  async function handleRestoreSingleBreakLog(row = {}) {
+    const breakLogId = String(row?.id || "").trim();
+    if (!breakLogId || !row?.archived) return;
+
+    const label =
+      String(row?.name || "").trim() ||
+      String(row?.email || "").trim() ||
+      String(row?.userId || "").trim() ||
+      breakLogId;
+
+    const confirmed = window.confirm(`Restore break log for "${label}" to live break logs?`);
+    if (!confirmed) return;
+
+    setRestoringBreakLogId(breakLogId);
+    try {
+      await updateDoc(doc(db, "break_logs", breakLogId), {
+        archived: false,
+        archivedAt: null,
+        archivedByUserId: "",
+        archivedByName: "",
+        updatedAt: serverTimestamp(),
+      });
+
+      setBreakLogRefreshTick((value) => value + 1);
+      onToast?.({
+        type: "success",
+        title: "Break Log Restored",
+        message: `Restored break log for ${label}.`,
+      });
+    } catch (error) {
+      onToast?.({
+        type: "error",
+        title: "Restore Failed",
+        message: error?.message || "Could not restore break log.",
+      });
+    } finally {
+      setRestoringBreakLogId("");
+    }
+  }
+
+  async function handleDeleteArchivedBreakLog(row = {}) {
+    const breakLogId = String(row?.id || "").trim();
+    if (!breakLogId || !row?.archived) return;
+
+    const label =
+      String(row?.name || "").trim() ||
+      String(row?.email || "").trim() ||
+      String(row?.userId || "").trim() ||
+      breakLogId;
+
+    const confirmed = window.confirm(
+      `Permanently delete archived break log for "${label}"? This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setDeletingArchivedBreakLogId(breakLogId);
+    try {
+      await deleteDoc(doc(db, "break_logs", breakLogId));
+      setBreakLogRefreshTick((value) => value + 1);
+      onToast?.({
+        type: "success",
+        title: "Archived Break Log Deleted",
+        message: `Deleted archived break log for ${label}.`,
+      });
+    } catch (error) {
+      onToast?.({
+        type: "error",
+        title: "Delete Failed",
+        message: error?.message || "Could not delete archived break log.",
+      });
+    } finally {
+      setDeletingArchivedBreakLogId("");
+    }
+  }
+
+  async function handleRestoreAllBreakLogs() {
+    if (restoringAllBreakLogs) return;
+    if (archivedBreakLogIds.length === 0) {
+      onToast?.({
+        type: "info",
+        title: "Archive Is Empty",
+        message: "There are no archived break logs to restore.",
+      });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Restore all ${archivedBreakLogIds.length} archived break log(s) to live break logs?`
+    );
+    if (!confirmed) return;
+
+    setRestoringAllBreakLogs(true);
+    try {
+      await Promise.all(
+        archivedBreakLogIds.map((breakLogId) =>
+          updateDoc(doc(db, "break_logs", breakLogId), {
+            archived: false,
+            archivedAt: null,
+            archivedByUserId: "",
+            archivedByName: "",
+            updatedAt: serverTimestamp(),
+          })
+        )
+      );
+      setBreakLogRefreshTick((value) => value + 1);
+      onToast?.({
+        type: "success",
+        title: "Break Logs Restored",
+        message: `${archivedBreakLogIds.length} archived break log(s) restored.`,
+      });
+    } catch (error) {
+      onToast?.({
+        type: "error",
+        title: "Restore All Failed",
+        message: error?.message || "Could not restore archived break logs.",
+      });
+    } finally {
+      setRestoringAllBreakLogs(false);
+    }
   }
 
   const settingsDrawerTitle =
     settingsDrawerView === SETTINGS_DRAWER_VIEWS.ROLE_BULK
       ? "Role Core Pages (Bulk)"
+      : settingsDrawerView === SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS
+        ? breakLogArchiveView
+          ? "Break Archive"
+          : "Break Log Record"
       : settingsDrawerView === SETTINGS_DRAWER_VIEWS.PENDING_REQUESTS
         ? "Pending User Requests"
       : settingsDrawerView === SETTINGS_DRAWER_VIEWS.USER_ACTIONS
@@ -1678,6 +2265,13 @@ export default function ControlPanelPage({
           onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.PENDING_REQUESTS)}
         >
           Pending User Requests
+        </button>
+        <button
+          type="button"
+          className="control-panel-tab"
+          onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS)}
+        >
+          Break Log Record
         </button>
 
         <div className="control-panel-more-wrap" ref={settingsMenuRef}>
@@ -2171,6 +2765,8 @@ export default function ControlPanelPage({
                 <p>
                   {settingsDrawerView === SETTINGS_DRAWER_VIEWS.ROLE_BULK
                     ? "Manage default page access for all users in a selected role."
+                    : settingsDrawerView === SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS
+                      ? "Review all break logs, filter by employee, and archive logs into Break Archive."
                     : settingsDrawerView === SETTINGS_DRAWER_VIEWS.PENDING_REQUESTS
                       ? "Review and process pending portal access requests."
                     : settingsDrawerView === SETTINGS_DRAWER_VIEWS.USER_ACTIONS
@@ -2264,6 +2860,209 @@ export default function ControlPanelPage({
                     | Active app timezone: <strong>{String(businessTimeZone || "").trim() || resolvedDisplayTimeZonePreview}</strong>{" "}
                     | Saved timestamp timezone tag: <strong>{storageTimeZoneDraft || DEFAULT_STORAGE_TIME_ZONE}</strong>
                   </div>
+                </div>
+              ) : null}
+
+              {settingsDrawerView === SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS ? (
+                <div className="control-panel-break-record-card">
+                  <div className="control-panel-break-record-head">
+                    <h3>{breakLogArchiveView ? "Break Archive" : "Break Log Record"}</h3>
+                    <span>{breakLogVisibleRows.length}</span>
+                  </div>
+
+                  <div className="control-panel-break-record-toolbar">
+                    <button
+                      type="button"
+                      className="control-panel-btn secondary"
+                      onClick={() => setBreakLogRefreshTick((value) => value + 1)}
+                      disabled={breakLogLoading}
+                    >
+                      {breakLogLoading ? "Loading..." : "Reload Logs"}
+                    </button>
+
+                    <div className="control-panel-break-record-toolbar-right">
+                      <label className="control-panel-break-filter-label" htmlFor="control-panel-break-filter">
+                        Employee Name Filter
+                      </label>
+                      <select
+                        id="control-panel-break-filter"
+                        className="control-panel-time-input control-panel-time-select control-panel-break-filter-input"
+                        value={breakLogFilterEmployeeId}
+                        onChange={(event) => setBreakLogFilterEmployeeId(event.target.value)}
+                      >
+                        <option value="">All Employees</option>
+                        {breakLogEmployeeOptions.map((option) => (
+                          <option key={`break-filter-${option.value}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {breakLogArchiveView ? (
+                        <div className="control-panel-break-bulk-actions">
+                          <button
+                            type="button"
+                            className="control-panel-break-toolbar-icon-btn restore"
+                            onClick={handleRestoreAllBreakLogs}
+                            disabled={restoringAllBreakLogs || archivedBreakLogIds.length === 0}
+                            title="Restore all archived break logs"
+                            aria-label="Restore all archived break logs"
+                          >
+                            <RotateCcw size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="control-panel-break-toolbar-icon-btn danger"
+                            onClick={openBreakDeleteArchiveModal}
+                            disabled={breakDeleteArchiveBusy || archivedBreakLogIds.length === 0}
+                            title="Delete all archived break logs permanently"
+                            aria-label="Delete all archived break logs permanently"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ) : null}
+
+                      <div className="control-panel-break-menu-wrap" ref={breakLogMenuRef}>
+                        <button
+                          type="button"
+                          className="control-panel-break-menu-trigger"
+                          onClick={() => setBreakLogMenuOpen((prev) => !prev)}
+                          aria-haspopup="menu"
+                          aria-expanded={breakLogMenuOpen}
+                          aria-label="Break log options"
+                        >
+                          <MoreVertical size={16} />
+                        </button>
+
+                        {breakLogMenuOpen ? (
+                          <div className="control-panel-break-menu" role="menu">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="control-panel-break-menu-item danger"
+                              onClick={openBreakClearModal}
+                              disabled={breakClearBusy || activeBreakLogIds.length === 0}
+                            >
+                              Clear Break Logs
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="control-panel-break-menu-item"
+                              onClick={() => {
+                                setBreakLogMenuOpen(false);
+                                setBreakLogArchiveView((prev) => !prev);
+                              }}
+                            >
+                              {breakLogArchiveView ? "Live Break Logs" : "Break Archive"}
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  {breakLogError ? <div className="control-panel-error">{breakLogError}</div> : null}
+
+                  {breakLogLoading ? (
+                    <div className="control-panel-state">Loading break logs...</div>
+                  ) : breakLogVisibleRows.length === 0 ? (
+                    <div className="control-panel-state">
+                      {breakLogArchiveView
+                        ? "No break logs in Break Archive."
+                        : "No active break logs found."}
+                    </div>
+                  ) : (
+                    <div className="control-panel-table-wrap">
+                      <table className="control-panel-data-table control-panel-break-table">
+                        <thead>
+                          <tr>
+                            <th>Employee</th>
+                            <th>Email</th>
+                            <th>Type</th>
+                            <th>Started</th>
+                            <th>Ended</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                            <th className="control-panel-break-actions-col">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {breakLogVisibleRows.map((row) => {
+                            const isArchived = !!row?.archived;
+                            const isOnBreak = !row?.endedAt && !row?.endTime;
+                            const rowId = String(row?.id || "").trim();
+                            const isArchivingThisRow = rowId && archivingBreakLogId === rowId;
+                            const isRestoringThisRow = rowId && restoringBreakLogId === rowId;
+                            const isDeletingArchivedThisRow =
+                              rowId && deletingArchivedBreakLogId === rowId;
+                            const statusLabel = isArchived
+                              ? "Archived"
+                              : isOnBreak
+                                ? "On Break"
+                                : "Completed";
+                            return (
+                              <tr key={String(row?.id || `${row?.userId || "row"}-${row?.startedAt || ""}`)}>
+                                <td>{row?.name || row?.userName || row?.userId || "-"}</td>
+                                <td>{row?.email || "-"}</td>
+                                <td>{row?.breakType || "-"}</td>
+                                <td>{formatDateTime(row?.startedAt || row?.startTime, businessTimeZone)}</td>
+                                <td>{formatDateTime(row?.endedAt || row?.endTime, businessTimeZone)}</td>
+                                <td>{formatBreakDuration(row)}</td>
+                                <td>
+                                  <span
+                                    className={`control-panel-break-status ${
+                                      isArchived ? "archived" : isOnBreak ? "active" : "complete"
+                                    }`}
+                                  >
+                                    {statusLabel}
+                                  </span>
+                                </td>
+                                <td>
+                                  {!breakLogArchiveView ? (
+                                    <button
+                                      type="button"
+                                      className="control-panel-break-row-archive-btn"
+                                      onClick={() => handleArchiveSingleBreakLog(row)}
+                                      title="Move to Break Archive"
+                                      aria-label="Move break log to archive"
+                                      disabled={isArchived || !rowId || isArchivingThisRow}
+                                    >
+                                      {isArchivingThisRow ? "..." : "Move to Bin"}
+                                    </button>
+                                  ) : (
+                                    <div className="control-panel-break-row-actions">
+                                      <button
+                                        type="button"
+                                        className="control-panel-break-row-action-btn restore"
+                                        onClick={() => handleRestoreSingleBreakLog(row)}
+                                        title="Restore to live break logs"
+                                        aria-label="Restore break log to live break logs"
+                                        disabled={isRestoringThisRow || !rowId}
+                                      >
+                                        <RotateCcw size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="control-panel-break-row-action-btn danger"
+                                        onClick={() => handleDeleteArchivedBreakLog(row)}
+                                        title="Delete permanently"
+                                        aria-label="Delete archived break log permanently"
+                                        disabled={isDeletingArchivedThisRow || !rowId}
+                                      >
+                                        <Trash2 size={14} />
+                                      </button>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               ) : null}
 
@@ -2870,6 +3669,127 @@ export default function ControlPanelPage({
             </div>
           </aside>
         </>
+      ) : null}
+
+      {breakClearModalOpen ? (
+        <div className="control-panel-break-clear-modal-root" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="control-panel-break-clear-modal-backdrop"
+            onClick={closeBreakClearModal}
+            aria-label="Close break log verification dialog"
+          />
+
+          <div className="control-panel-break-clear-modal-panel">
+            <h3>Confirm Clear Break Logs</h3>
+            <p>
+              To clear active break logs and move them to Break Archive, enter your super admin
+              password.
+            </p>
+
+            <label htmlFor="control-panel-break-clear-password">
+              Super Admin Password
+            </label>
+            <input
+              id="control-panel-break-clear-password"
+              type="password"
+              className="control-panel-time-input control-panel-break-clear-password"
+              value={breakClearPassword}
+              onChange={(event) => setBreakClearPassword(event.target.value)}
+              placeholder="Enter password"
+              disabled={breakClearBusy}
+            />
+
+            {breakClearError ? <div className="control-panel-error">{breakClearError}</div> : null}
+
+            <div className="control-panel-break-clear-modal-actions">
+              <button
+                type="button"
+                className="control-panel-btn secondary"
+                onClick={closeBreakClearModal}
+                disabled={breakClearBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="control-panel-btn danger"
+                onClick={handleClearBreakLogs}
+                disabled={breakClearBusy}
+              >
+                {breakClearBusy ? "Verifying..." : "Confirm Clear Break Logs"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {breakDeleteArchiveModalOpen ? (
+        <div className="control-panel-break-clear-modal-root" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="control-panel-break-clear-modal-backdrop"
+            onClick={closeBreakDeleteArchiveModal}
+            aria-label="Close break archive verification dialog"
+          />
+
+          <div className="control-panel-break-clear-modal-panel">
+            <h3>Clear Break Archive Permanently</h3>
+            <p>
+              This will permanently delete all archived break logs. Enter your super admin
+              password and type DELETE to confirm.
+            </p>
+
+            <label htmlFor="control-panel-break-delete-archive-password">
+              Super Admin Password
+            </label>
+            <input
+              id="control-panel-break-delete-archive-password"
+              type="password"
+              className="control-panel-time-input control-panel-break-clear-password"
+              value={breakDeleteArchivePassword}
+              onChange={(event) => setBreakDeleteArchivePassword(event.target.value)}
+              placeholder="Enter password"
+              disabled={breakDeleteArchiveBusy}
+            />
+
+            <label htmlFor="control-panel-break-delete-archive-confirm">
+              Type DELETE To Confirm
+            </label>
+            <input
+              id="control-panel-break-delete-archive-confirm"
+              type="text"
+              className="control-panel-time-input control-panel-break-clear-password"
+              value={breakDeleteArchiveConfirmText}
+              onChange={(event) => setBreakDeleteArchiveConfirmText(event.target.value)}
+              placeholder="DELETE"
+              disabled={breakDeleteArchiveBusy}
+            />
+
+            {breakDeleteArchiveError ? (
+              <div className="control-panel-error">{breakDeleteArchiveError}</div>
+            ) : null}
+
+            <div className="control-panel-break-clear-modal-actions">
+              <button
+                type="button"
+                className="control-panel-btn secondary"
+                onClick={closeBreakDeleteArchiveModal}
+                disabled={breakDeleteArchiveBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="control-panel-btn danger"
+                onClick={handleClearBreakArchive}
+                disabled={breakDeleteArchiveBusy}
+              >
+                {breakDeleteArchiveBusy ? "Verifying..." : "Delete Archive Permanently"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

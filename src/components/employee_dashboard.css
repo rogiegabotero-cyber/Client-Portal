@@ -52,6 +52,15 @@
   box-sizing:border-box;
 }
 
+.empDashShell{
+  transition:filter .18s ease;
+}
+
+.empDashShell.isBreakSaving{
+  pointer-events:none;
+  user-select:none;
+}
+
 .employee-select{
   padding: 5px 10px;
   border: none;
@@ -66,7 +75,7 @@
   align-items:end;
   justify-content:right;
   gap:14px;
-  margin-bottom:18px;
+  margin-bottom:10px;
 }
 
 .empDashActions{
@@ -179,6 +188,121 @@
   border-color:rgba(91,0,8,.2);
 }
 
+.empNotepadBtn{
+  width:30px;
+  height:30px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.12);
+  background:#ffffff;
+  color:#0f172a;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+  position:relative;
+  overflow:visible;
+}
+
+.empNotepadBtn:not(.isDueSoon):hover{
+  transform:translateY(-1px);
+  box-shadow:var(--shadow2);
+  border-color:rgba(91,0,8,.2);
+}
+
+.empNotepadBtnCount{
+  position:absolute;
+  top:-6px;
+  right:-6px;
+  min-width:16px;
+  height:16px;
+  border-radius:999px;
+  background:#5b0008;
+  color:#ffffff;
+  border:1px solid #ffffff;
+  box-shadow:0 2px 5px rgba(15,23,42,.24);
+  font-size:9px;
+  font-weight:800;
+  line-height:1;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:0 3px;
+}
+
+.empNotepadBtn.isDueSoon{
+  border-color:rgba(245,158,11,.7);
+  box-shadow:
+    0 0 0 1px rgba(245,158,11,.3),
+    0 0 12px rgba(245,158,11,.48);
+  animation:empNotepadDueSoonHeartbeat 1.05s ease-in-out infinite;
+}
+
+.empNotepadBtn.isDueSoon svg{
+  transform-origin:center;
+  animation:empNotepadIconBeat 1.05s ease-in-out infinite;
+}
+
+@keyframes empNotepadDueSoonHeartbeat{
+  0%{
+    transform:scale(1);
+    box-shadow:
+      0 0 0 1px rgba(245,158,11,.24),
+      0 0 8px rgba(245,158,11,.36);
+  }
+  12%{
+    transform:scale(1.12);
+    box-shadow:
+      0 0 0 1px rgba(245,158,11,.42),
+      0 0 18px rgba(245,158,11,.62);
+  }
+  22%{
+    transform:scale(1);
+    box-shadow:
+      0 0 0 1px rgba(245,158,11,.24),
+      0 0 8px rgba(245,158,11,.36);
+  }
+  34%{
+    transform:scale(1.08);
+    box-shadow:
+      0 0 0 1px rgba(245,158,11,.42),
+      0 0 18px rgba(245,158,11,.62);
+  }
+  46%{
+    transform:scale(1);
+    box-shadow:
+      0 0 0 1px rgba(245,158,11,.24),
+      0 0 8px rgba(245,158,11,.36);
+  }
+  100%{
+    transform:scale(1);
+    box-shadow:
+      0 0 0 1px rgba(245,158,11,.24),
+      0 0 8px rgba(245,158,11,.36);
+  }
+}
+
+@keyframes empNotepadIconBeat{
+  0%{
+    transform:scale(1);
+  }
+  12%{
+    transform:scale(1.32);
+  }
+  22%{
+    transform:scale(1);
+  }
+  34%{
+    transform:scale(1.24);
+  }
+  46%{
+    transform:scale(1);
+  }
+  100%{
+    transform:scale(1);
+  }
+}
+
 
 /* ---------- Panel Body ---------- */
 
@@ -186,8 +310,6 @@
   padding:18px;
   flex:1;
   min-height:0;
-  overflow:visible;
-  overscroll-behavior:contain;
   display:flex;
   position:relative;
   z-index:1;
@@ -693,11 +815,73 @@
   box-shadow:var(--shadow2);
 }
 
+.breakBtn.back.limit-pulse{
+  animation:breakBackUrgentPulse 1s ease-in-out infinite;
+}
+
+@keyframes breakBackUrgentPulse{
+  0%{
+    transform:scale(1);
+    box-shadow:0 0 0 0 rgba(220, 38, 38, .45);
+  }
+  50%{
+    transform:scale(1.03);
+    box-shadow:0 0 0 10px rgba(220, 38, 38, 0);
+  }
+  100%{
+    transform:scale(1);
+    box-shadow:0 0 0 0 rgba(220, 38, 38, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .breakBtn.back.limit-pulse{
+    animation:none;
+  }
+}
+
 .breakHint{
   margin-top:8px;
   font-size:11px;
   text-align:center;
   color:var(--muted);
+}
+
+.breakSavingOverlay{
+  position:fixed;
+  inset:0;
+  z-index:100250;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  background:rgba(15,23,42,.18);
+  backdrop-filter:blur(3px);
+  -webkit-backdrop-filter:blur(3px);
+}
+
+.breakSavingSpinner{
+  width:56px;
+  height:56px;
+  border-radius:50%;
+  border:4px solid rgba(255,255,255,.75);
+  border-top-color:#5b0008;
+  animation:breakSavingSpin .8s linear infinite;
+  box-shadow:0 10px 30px rgba(15,23,42,.24);
+}
+
+.breakSavingText{
+  font-size:14px;
+  font-weight:700;
+  color:#ffffff;
+  text-shadow:0 1px 2px rgba(0,0,0,.35);
+}
+
+@keyframes breakSavingSpin{
+  to{
+    transform:rotate(360deg);
+  }
 }
 
 /* ---------- Task List ---------- */
@@ -1097,7 +1281,7 @@
 
 .announcementBody{
   max-height:none;
-  overflow:auto;
+  overflow:hidden;
   padding:10px;
   display:grid;
   gap:8px;
@@ -1111,7 +1295,9 @@
   border-radius:10px;
   background:#f8fafc;
   padding:10px;
-  width: auto;
+  width:100%;
+  min-width:0;
+  box-sizing:border-box;
   text-align:left;
   cursor:pointer;
 }
@@ -1123,7 +1309,8 @@
 
 .announcementMeta{
   display:flex;
-  align-items:center;
+  flex-direction: column;
+  align-items:start;
   justify-content:space-between;
   gap:8px;
   font-size:11px;
@@ -1140,7 +1327,8 @@
   font-size:13px;
   font-weight:700;
   color:var(--text);
-  text-overflow:ellipsis
+  overflow-wrap:anywhere;
+  word-break:break-word;
 }
 
 .announcementEmpty{
@@ -1346,6 +1534,859 @@
   background:rgba(254,242,242,.95);
 }
 
+/* ---------- Notepad Drawer ---------- */
+
+.empNotepadBackdrop{
+  position:fixed;
+  inset:0;
+  background:rgba(15,23,42,.28);
+  backdrop-filter:blur(3px);
+  z-index:1150;
+}
+
+.empNotepadDrawer{
+  position:fixed;
+  top:0;
+  right:0;
+  width:min(980px, 100vw);
+  height:100vh;
+  background:#ffffff;
+  border-left:1px solid var(--border);
+  box-shadow:-14px 0 34px rgba(15,23,42,.16);
+  transform:translateX(100%);
+  transition:transform .24s ease;
+  z-index:1155;
+  display:flex;
+  flex-direction:column;
+}
+
+.empNotepadDrawer.open{
+  transform:translateX(0);
+}
+
+.empNotepadDrawerHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 14px;
+  border-bottom:1px solid var(--borderSoft);
+  background:#f8fafc;
+}
+
+.empNotepadDrawerIdentity{
+  min-width:0;
+}
+
+.empNotepadDrawerTitle{
+  font-size:14px;
+  font-weight:800;
+  color:var(--text);
+}
+
+.empNotepadDrawerSub{
+  margin-top:2px;
+  font-size:11px;
+  color:var(--muted);
+  font-weight:600;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.empNotepadDrawerClose{
+  width:28px;
+  height:28px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:#ffffff;
+  color:#64748b;
+  font-size:16px;
+  line-height:1;
+  cursor:pointer;
+}
+
+.empNotepadDrawerBody{
+  flex:1;
+  min-height:0;
+  display:grid;
+  grid-template-columns:280px minmax(0,1fr);
+}
+
+.empNotepadListPane{
+  border-right:1px solid var(--borderSoft);
+  background:#f8fafc;
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+
+.empNotepadListPaneTop{
+  padding:10px;
+  display:flex;
+  gap:8px;
+  border-bottom:1px solid var(--borderSoft);
+}
+
+.empNotepadListTopRow{
+  display:flex;
+  flex-direction: column;
+  align-items:center;
+  justify-content:space-between;
+  gap:5px;
+}
+
+.empNotepadListCount{
+  font-size:11px;
+  font-weight:700;
+  color:#334155;
+  text-align: left;
+  width: 100%;
+}
+
+.empNotepadNewBtn{
+  border:1px solid rgba(15,23,42,.12);
+  background:#ffffff;
+  color:#0f172a;
+  border-radius:999px;
+  height:28px;
+  padding:0 10px;
+  font-size:11px;
+  font-weight:700;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  transition:border-color .15s ease, background-color .15s ease, box-shadow .15s ease, color .15s ease;
+}
+
+.empNotepadNewBtn:disabled{
+  opacity:.7;
+  cursor:not-allowed;
+}
+
+.empNotepadNewBtn.active{
+  border-color:#5b0008;
+  background:rgba(91,0,8,.12);
+  color:#5b0008;
+  box-shadow:0 0 0 2px rgba(91,0,8,.14);
+}
+
+.empNotepadNewBtnFull{
+  width:auto;
+  flex:1;
+}
+
+.empNotepadNewBtnRow{
+  padding:8px 10px 0;
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.empNotepadModeHint{
+  padding:4px 12px 0;
+  font-size:10px;
+  font-weight:700;
+  color:#64748b;
+}
+
+.empNotepadNewBtnGroup{
+  border-color:rgba(15,23,42,.2);
+  background:rgba(91,0,8,.06);
+  color:#04101f;
+  flex:0 0 auto;
+  width:42px;
+  padding:0;
+  position:relative;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:1px;
+  overflow:visible;
+}
+
+.empNotepadNewBtnGroupUsersIcon{
+  line-height:0;
+}
+
+.empNotepadNewBtnGroupPlusInline{
+  color:#5b0008;
+  font-size:12px;
+  font-weight:800;
+  line-height:1;
+  margin-right:-1px;
+}
+
+.empNotepadNewBtnGroupNoteBadge{
+  position:absolute;
+  right:1px;
+  bottom:1px;
+  width:12px;
+  height:12px;
+  border-radius:999px;
+  border:1px solid rgba(91,0,8,.24);
+  background:#ffffff;
+  color:#5b0008;
+  display:grid;
+  place-items:center;
+  box-shadow:0 1px 3px rgba(15,23,42,.18);
+  line-height:0;
+  pointer-events:none;
+}
+
+.empNotepadViewControls{
+  display:flex;
+  flex-direction: row;
+  align-items:center;
+  gap:5px;
+  justify-content:flex-end;
+}
+
+.empNotepadViewBtn{
+  border:1px solid rgba(15,23,42,.14);
+  background:#ffffff;
+  color:#334155;
+  border-radius:999px;
+  height:28px;
+  padding:0 10px;
+  font-size:9px;
+  font-weight:800;
+  letter-spacing:.02em;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  position:relative;
+  overflow:visible;
+}
+
+.empNotepadViewBtn.active{
+  border-color:#5b0008;
+  color:#5b0008;
+  background:rgba(91,0,8,.06);
+}
+
+.empNotepadBinToggleBtn{
+  width:auto;
+  height:28px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.14);
+  background:#ffffff;
+  color:#334155;
+  padding:0 10px;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:.02em;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  position:relative;
+  overflow:visible;
+}
+
+.empNotepadViewBtnBadge{
+  position:absolute;
+  top:-7px;
+  right:-6px;
+  min-width:15px;
+  height:15px;
+  border-radius:999px;
+  background:#5b0008;
+  color:#ffffff;
+  border:1px solid #ffffff;
+  box-shadow:0 2px 5px rgba(15,23,42,.24);
+  font-size:9px;
+  font-weight:800;
+  line-height:1;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:0 3px;
+}
+
+.empNotepadBinToggleBtn.active{
+  border-color:#5b0008;
+  color:#5b0008;
+  background:rgba(91,0,8,.06);
+}
+
+.empNotepadError{
+  margin:10px;
+  border:1px solid rgba(248,113,113,.35);
+  border-radius:10px;
+  padding:10px;
+  font-size:11px;
+  color:#991b1b;
+  background:rgba(254,242,242,.95);
+}
+
+.empNotepadGroupCreatePane{
+  margin:8px 10px 0;
+  border:1px solid rgba(15,23,42,.14);
+  border-radius:10px;
+  background:#ffffff;
+  padding:10px;
+  display:grid;
+  gap:8px;
+}
+
+.empNotepadGroupCreateTitle{
+  font-size:12px;
+  font-weight:800;
+  color:#0f172a;
+}
+
+.empNotepadGroupCreateSub{
+  font-size:11px;
+  color:#64748b;
+}
+
+.empNotepadGroupCreateList{
+  max-height:140px;
+  overflow:auto;
+  display:grid;
+  gap:6px;
+  padding-right:2px;
+}
+
+.empNotepadGroupCreateEmpty{
+  font-size:11px;
+  color:#64748b;
+}
+
+.empNotepadGroupCreateItem{
+  border:1px solid rgba(15,23,42,.14);
+  border-radius:8px;
+  background:#f8fafc;
+  padding:6px 8px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  cursor:pointer;
+}
+
+.empNotepadGroupCreateItem.checked{
+  border-color:rgba(59,130,246,.42);
+  background:rgba(239,246,255,.95);
+}
+
+.empNotepadGroupCreateItem input{
+  margin:0;
+  width:14px;
+  height:14px;
+}
+
+.empNotepadGroupCreateAvatar{
+  width:22px;
+  height:22px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.18);
+  background:linear-gradient(180deg, #a11622, #791219);
+  color:#ffffff;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  font-size:9px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+
+.empNotepadGroupCreateAvatar img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+
+.empNotepadGroupCreateName{
+  font-size:11px;
+  color:#0f172a;
+  font-weight:700;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.empNotepadGroupCreateActions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+}
+
+.empNotepadGroupCreateBtn{
+  border:1px solid rgba(15,23,42,.16);
+  border-radius:8px;
+  height:26px;
+  padding:0 10px;
+  font-size:11px;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.empNotepadGroupCreateBtn.cancel{
+  background:#ffffff;
+  color:#334155;
+}
+
+.empNotepadGroupCreateBtn.create{
+  background:#5b0008;
+  border-color:#5b0008;
+  color:#ffffff;
+}
+
+.empNotepadGroupCreateBtn:disabled{
+  opacity:.65;
+  cursor:not-allowed;
+}
+
+.empNotepadList{
+  padding:10px;
+  display:grid;
+  gap:8px;
+  overflow:auto;
+  min-height:0;
+}
+
+.empNotepadListItem{
+  border:1px solid var(--border);
+  border-left:4px solid #3b82f6;
+  border-radius:10px;
+  background:#ffffff;
+  padding:8px 8px 8px 10px;
+  text-align:left;
+  display:grid;
+  grid-template-rows:auto auto;
+  gap:6px;
+  position:relative;
+}
+
+.empNotepadListItem.trashed{
+  border-color:rgba(148,163,184,.45);
+  border-left-color:#64748b;
+}
+
+.empNotepadListItem.deadline-upcoming{
+  border-color:rgba(37,99,235,.34);
+  border-left-color:#3b82f6;
+}
+
+.empNotepadListItem.deadline-due{
+  border-color:rgba(245,158,11,.45);
+  border-left-color:#f59e0b;
+}
+
+.empNotepadListItem.deadline-overdue{
+  border-color:rgba(220,38,38,.45);
+  border-left-color:#dc2626;
+}
+
+.empNotepadListItem.deadline-completed{
+  border-color:rgba(22,163,74,.42);
+  border-left-color:#16a34a;
+}
+
+.empNotepadListItem.active{
+  box-shadow:0 0 0 2px rgba(15,23,42,.08);
+}
+
+.empNotepadListItemMain{
+  appearance:none;
+  border:none;
+  background:transparent;
+  width:100%;
+  min-width:0;
+  text-align:left;
+  padding:4px 2px 2px 2px;
+  display:grid;
+  gap:5px;
+  cursor:pointer;
+}
+
+.empNotepadListItemMain:disabled{
+  cursor:not-allowed;
+}
+
+.empNotepadListItemMainStatic{
+  cursor:default;
+}
+
+.empNotepadListItem.completed .empNotepadListItemTitle{
+  color:#166534;
+}
+
+.empNotepadListItem.completed .empNotepadListItemPreview{
+  color:#6b7280;
+  text-decoration:line-through;
+}
+
+.empNotepadListItemTitle{
+  font-size:12px;
+  color:#0f172a;
+  font-weight:700;
+}
+
+.empNotepadListItemPreview{
+  font-size:11px;
+  color:#64748b;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.empNotepadListItemDate{
+  font-size:10px;
+  color:#94a3b8;
+  font-weight:600;
+}
+
+.empNotepadListItemDeadline{
+  font-size:10px;
+  font-weight:700;
+  color:#3b82f6;
+}
+
+.empNotepadListItemDeadline.deadline-due{
+  color:#b45309;
+}
+
+.empNotepadListItemDeadline.deadline-overdue{
+  color:#b91c1c;
+}
+
+.empNotepadListItemDeadline.deadline-completed{
+  color:#166534;
+}
+
+.empNotepadListItemDeadline.deadline-trashed{
+  color:#475569;
+}
+
+.empNotepadCardActions{
+  display:flex;
+  align-items:center;
+  justify-content:end;
+  flex-wrap:wrap;
+  gap:8px;
+  padding:0 2px 2px;
+}
+
+.empNotepadGroupMembers{
+  margin-right:auto;
+  display:flex;
+  align-items:center;
+}
+
+.empNotepadGroupMemberAvatar{
+  width:22px;
+  height:22px;
+  margin-right:-6px;
+  border-radius:999px;
+  border:1px solid #ffffff;
+  box-shadow:0 2px 6px rgba(15,23,42,.18);
+  background:linear-gradient(180deg, #a11622, #791219);
+  color:#ffffff;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  font-size:8px;
+  font-weight:800;
+  text-transform:uppercase;
+}
+
+.empNotepadGroupMemberAvatar img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+
+.empNotepadGroupMemberMore{
+  margin-left:6px;
+  font-size:10px;
+  font-weight:700;
+  color:#64748b;
+}
+
+.empNotepadTrashBtn{
+  border:1px solid rgba(220,38,38,.32);
+  background:rgba(254,242,242,.95);
+  color:#b91c1c;
+  border-radius:8px;
+  height:24px;
+  min-width:28px;
+  padding:0 7px;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.empNotepadTrashBtn:disabled{
+  opacity:.7;
+  cursor:not-allowed;
+}
+
+.empNotepadCompleteBtn{
+  border:1px solid rgba(15,23,42,.14);
+  background:#ffffff;
+  color:#334155;
+  border-radius:8px;
+  height:24px;
+  min-width:28px;
+  padding:0 7px;
+  cursor:pointer;
+  position:static;
+  justify-self:end;
+  align-self:end;
+  box-shadow:0 2px 6px rgba(15,23,42,.14);
+}
+
+.empNotepadCompleteBtn:hover{
+  border-color:rgba(37,99,235,.4);
+  color:#1d4ed8;
+}
+
+.empNotepadCompleteBtn.done{
+  border-color:rgba(22,163,74,.48);
+  background:rgba(22,163,74,.08);
+  color:#166534;
+}
+
+.empNotepadCompleteBtn:disabled{
+  opacity:.7;
+  cursor:not-allowed;
+}
+
+.empNotepadBinActionBtn{
+  border:1px solid rgba(15,23,42,.14);
+  background:#ffffff;
+  color:#334155;
+  border-radius:8px;
+  height:24px;
+  min-width:28px;
+  padding:0 7px;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.empNotepadBinActionBtn.restore{
+  border-color:rgba(22,163,74,.34);
+  color:#15803d;
+  background:rgba(240,253,244,.95);
+}
+
+.empNotepadBinActionBtn.delete{
+  border-color:rgba(220,38,38,.32);
+  color:#b91c1c;
+  background:rgba(254,242,242,.95);
+}
+
+.empNotepadBinActionBtn:disabled{
+  opacity:.7;
+  cursor:not-allowed;
+}
+
+.empNotepadEmptyList{
+  border:1px dashed var(--border);
+  border-radius:10px;
+  padding:12px;
+  font-size:11px;
+  color:var(--muted);
+  background:#ffffff;
+}
+
+.empNotepadEditorPane{
+  padding:10px 12px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-height:0;
+}
+
+.empNotepadEditorTop{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+.empNotepadTitleInput{
+  flex:1;
+  min-width:0;
+  border:1px solid rgba(15,23,42,.12);
+  border-radius:10px;
+  height:34px;
+  padding:0 11px;
+  font-size:12px;
+  font-weight:600;
+  color:#0f172a;
+  outline:none;
+}
+
+.empNotepadTitleInput:focus{
+  border-color:rgba(91,0,8,.35);
+  box-shadow:0 0 0 2px rgba(91,0,8,.12);
+}
+
+.empNotepadEditorActions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-left:auto;
+}
+
+.empNotepadDeadlineControl{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.empNotepadDeadlineControl label{
+  font-size:10px;
+  font-weight:700;
+  color:#475569;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+}
+
+.empNotepadDeadlineInput{
+  height:30px;
+  border:1px solid rgba(15,23,42,.14);
+  border-radius:8px;
+  background:#ffffff;
+  color:#0f172a;
+  padding:0 8px;
+  font-size:11px;
+  font-weight:600;
+  outline:none;
+}
+
+.empNotepadDeadlineInput.tone-upcoming{
+  border-color:rgba(37,99,235,.35);
+}
+
+.empNotepadDeadlineInput.tone-due{
+  border-color:rgba(245,158,11,.45);
+  background:rgba(245,158,11,.06);
+}
+
+.empNotepadDeadlineInput.tone-overdue{
+  border-color:rgba(220,38,38,.5);
+  background:rgba(220,38,38,.06);
+}
+
+.empNotepadDeadlineClearBtn{
+  border:1px solid rgba(15,23,42,.14);
+  background:#ffffff;
+  color:#334155;
+  border-radius:8px;
+  height:30px;
+  padding:0 8px;
+  font-size:10px;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.empNotepadSaveState{
+  font-size:11px;
+  color:#64748b;
+  font-weight:700;
+}
+
+.empNotepadSaveState.dirty{
+  color:#9a3412;
+}
+
+.empNotepadSaveBtn{
+  border:1px solid rgba(91,0,8,.26);
+  background:#5b0008;
+  color:#ffffff;
+  border-radius:10px;
+  height:30px;
+  padding:0 12px;
+  font-size:11px;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.empNotepadSaveBtn:disabled{
+  opacity:.7;
+  cursor:not-allowed;
+}
+
+.empNotepadToolbar{
+  border:1px solid var(--borderSoft);
+  border-radius:10px;
+  background:#f8fafc;
+  padding:6px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+
+.empNotepadToolBtn{
+  border:1px solid rgba(15,23,42,.12);
+  background:#ffffff;
+  color:#0f172a;
+  border-radius:8px;
+  width:28px;
+  height:28px;
+  padding:0;
+  font-size:11px;
+  font-weight:700;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.empNotepadToolBtn svg{
+  width:14px;
+  height:14px;
+  stroke-width:2.1;
+}
+
+.empNotepadToolBtn:hover{
+  border-color:rgba(91,0,8,.25);
+}
+
+.empNotepadEditor{
+  flex:1;
+  min-height:220px;
+  border:1px solid rgba(15,23,42,.12);
+  border-radius:12px;
+  background:#ffffff;
+  padding:12px;
+  font-size:13px;
+  line-height:1.5;
+  color:#0f172a;
+  overflow:auto;
+  outline:none;
+}
+
+.empNotepadEditor:focus{
+  border-color:rgba(91,0,8,.35);
+  box-shadow:0 0 0 2px rgba(91,0,8,.12);
+}
+
+.empNotepadEditor .notepad-check-item{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.empNotepadEditor input[type="checkbox"]{
+  width:14px;
+  height:14px;
+  accent-color:#5b0008;
+}
+
 .announcementModalOverlay{
   position:fixed;
   inset:0;
@@ -1414,7 +2455,7 @@
 /* ---------- Greeting Panel ---------- */
 
 .greetingPanel{
-  margin-top:18px;
+  margin-top:30px;
   border-radius:var(--radius-md);
   background:linear-gradient(180deg, #83000b, #470107);
   padding:16px;
@@ -1477,6 +2518,192 @@
   color:var(--muted);
 }
 
+/* ---------- Agent Attendance ---------- */
+
+.attSummaryToggleBtn {
+  border: 1px solid rgba(17, 24, 39, 0.18);
+  background: #ffffff;
+  color: #1f2937;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.attSummaryToggleBtn:hover {
+  background: #f8fafc;
+  border-color: rgba(17, 24, 39, 0.3);
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.dash-tone-early {
+  background: #4b9fea;
+}
+
+.dash-tone-onTime {
+  background: #66bb6a;
+}
+
+.dash-tone-late {
+  background: #f39c12;
+}
+
+.dash-tone-pto {
+  background: #8e44ad;
+}
+
+.dash-tone-absent {
+  background: #e74c3c;
+}
+
+.dash-tone-ncns {
+  background: #4b5563;
+}
+
+.agentAttendancePanel {
+  margin: 12px 0;
+  border-radius: 14px;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: linear-gradient(180deg, #061329, #081a34);
+  padding: 10px 12px 12px;
+  width: 100%;
+}
+
+.agentAttendancePanelTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.agentAttendancePanelHead {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #cbd5e1;
+  margin-bottom: 0;
+}
+
+.agentAttendanceMonthFilter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agentAttendanceMonthFilter label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: rgba(203, 213, 225, 0.88);
+}
+
+.agentAttendanceMonthSelect {
+  min-width: 160px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  background: rgba(15, 23, 42, 0.42);
+  color: #e2e8f0;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  outline: none;
+}
+
+.agentAttendanceMonthSelect option {
+  color: #0f172a;
+  background: #ffffff;
+}
+
+.agentAttendanceLegend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.agentAttendanceLegendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.agentAttendanceStrip {
+  display: flex;
+  justify-content: center;
+  gap: 5rem;
+  overflow-x: auto;
+  padding: 5px 10px;
+}
+
+.agentAttendanceItem {
+  min-width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.agentAttendanceDonut {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 18px rgb(8, 11, 26);
+}
+
+.agentAttendanceCenter {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #04101f;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.agentAttendanceName {
+  max-width: 86px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: #dbeafe;
+  font-weight: 600;
+}
+
+.agentAttendanceEmpty {
+  color: #93c5fd;
+  font-size: 12px;
+  opacity: 0.95;
+}
+
+.agentAttendanceFoot {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 
 /* ---------- Responsive ---------- */
 
@@ -1518,6 +2745,27 @@
 
   .empBreakLogsDrawer{
     width:min(460px, 100vw);
+  }
+
+  .empNotepadDrawer{
+    width:min(820px, 100vw);
+  }
+
+  .empNotepadDrawerBody{
+    grid-template-columns:240px minmax(0,1fr);
+  }
+
+  .agentAttendancePanelTop {
+    align-items: flex-start;
+  }
+
+  .agentAttendanceMonthFilter {
+    width: 100%;
+  }
+
+  .agentAttendanceMonthSelect {
+    flex: 1;
+    min-width: 0;
   }
 }
 
@@ -1575,5 +2823,52 @@
 
   .empBreakLogsDrawer{
     width:100vw;
+  }
+
+  .empNotepadDrawer{
+    width:100vw;
+  }
+
+  .empNotepadDrawerBody{
+    grid-template-columns:1fr;
+  }
+
+  .empNotepadListPane{
+    border-right:none;
+    border-bottom:1px solid var(--borderSoft);
+    max-height:34vh;
+  }
+
+  .empNotepadNewBtnRow{
+    flex-wrap:wrap;
+  }
+
+  .empNotepadNewBtnFull{
+    flex:1 1 calc(50% - 3px);
+  }
+
+  .empNotepadNewBtnGroup{
+    flex:0 0 auto;
+  }
+
+  .empNotepadEditorTop{
+    flex-wrap:wrap;
+    align-items:flex-start;
+  }
+
+  .empNotepadDeadlineControl{
+    width:100%;
+    justify-content:space-between;
+  }
+
+  .empNotepadDeadlineInput{
+    flex:1;
+    min-width:0;
+  }
+
+  .empNotepadEditorActions{
+    width:100%;
+    justify-content:space-between;
+    margin-left:0;
   }
 }

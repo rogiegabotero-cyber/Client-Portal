@@ -240,6 +240,15 @@ export default function NotificationsPage({
   return (
     <div className="notif-page">
       <div className="notif-page-head">
+        <button
+          type="button"
+          className="notif-page-mark-all-btn"
+          disabled={isArchiveView || unreadIds.length === 0}
+          onClick={() => onMarkAllRead?.(unreadIds)}
+        >
+          Mark all as read
+        </button>
+
         <div className="notif-page-head-actions" ref={actionMenuRef}>
           <button
             type="button"
@@ -254,19 +263,6 @@ export default function NotificationsPage({
 
           {actionMenuOpen ? (
             <div className="notif-page-menu" role="menu" aria-label="Notification actions">
-              <button
-                type="button"
-                role="menuitem"
-                className="notif-page-menu-item"
-                disabled={isArchiveView || unreadIds.length === 0}
-                onClick={() => {
-                  setActionMenuOpen(false);
-                  onMarkAllRead?.(unreadIds);
-                }}
-              >
-                Mark all as read
-              </button>
-
               {canAccessNotificationArchive ? (
                 <button
                   type="button"

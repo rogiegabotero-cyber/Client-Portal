@@ -42,7 +42,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  width: 100%;
+  flex: 1 1 0%;
 }
 
 .topBar {
@@ -669,7 +669,9 @@
 
 .payableChartWrap {
   width: 100%;
+  min-width: 0;
   height: 260px;
+  min-height: 260px;
   margin-top: 0;
 }
 
@@ -839,7 +841,7 @@
   width: 100%;
   min-width: 0;
   height: 100%;
-  min-height: 0;
+  min-height: 1px;
 }
 
 .perfEmpty {
@@ -883,7 +885,51 @@
 .updateSidebar {
   display: flex;
   flex-direction: column;
-  min-width: 30%;
+  flex: 0 1 30%;
+  width: 100%;
+  max-width: 30%;
+  min-width: 280px;
+}
+
+.updateSidebar .payTable {
+  table-layout: fixed;
+}
+
+.updateSidebar .payThLeft,
+.updateSidebar .payTdName {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+.updateSidebar .payThRight,
+.updateSidebar .payTdHours {
+  width: 110px;
+}
+
+.updateSidebar .payThRight {
+  white-space: nowrap;
+}
+
+.updateSidebar .payTdHours {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+}
+
+.updateSidebar .dashAnnouncementTable .payThLeft,
+.updateSidebar .dashAnnouncementTable .payTdName {
+  width: 72%;
+}
+
+.updateSidebar .dashAnnouncementTable .payThRight,
+.updateSidebar .dashAnnouncementTable .payTdHours {
+  width: 28%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .updateBody {
@@ -1490,6 +1536,9 @@
 
   .updateSidebar {
     order: -1;
+    flex: 1 1 auto;
+    max-width: 100%;
+    min-width: 0;
   }
 }
 
@@ -1867,6 +1916,8 @@
 .dashAnnouncementHeadline {
   font-weight: 700;
   color: #0f172a;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .dashAnnouncementPreview {
@@ -1874,6 +1925,8 @@
   color: #64748b;
   font-size: 12px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .perfBody span{

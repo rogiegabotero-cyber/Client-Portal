@@ -222,6 +222,203 @@ const dayKeyFromMsInZone = (ms, timeZone) => {
   return `${map.year}-${map.month}-${map.day}`;
 };
 
+const ATTENDANCE_STATUS_FIELD_CANDIDATES = [
+  "status",
+  "attendanceStatus",
+  "dailyStatus",
+  "remark",
+  "managerStatus",
+  "assignedStatus",
+  "attendanceType",
+  "state",
+];
+const ATTENDANCE_DAY_FIELD_CANDIDATES = [
+  "dayKey",
+  "businessDay",
+  "businessDate",
+  "attendanceDate",
+  "logDate",
+  "date",
+  "workDate",
+];
+const ATTENDANCE_USER_FIELD_CANDIDATES = [
+  "userId",
+  "employeeUserId",
+  "uid",
+  "employeeId",
+  "id",
+];
+const ATTENDANCE_TIMESTAMP_FIELD_CANDIDATES = [
+  "timestamp",
+  "createdAt",
+  "time",
+  "timeIn",
+  "clockIn",
+  "timestampIn",
+  "updatedAt",
+];
+const ATTENDANCE_LOG_ARRAY_KEYS = [
+  "logs",
+  "attendanceLogs",
+  "attendance",
+  "records",
+  "entries",
+  "items",
+];
+const ATTENDANCE_MANAGER_ARRAY_KEYS = [
+  "noShowProfiles",
+  "no_show_profiles",
+  "noShowProfile",
+  "no_show_profile",
+  "absentProfiles",
+  "attendanceProfiles",
+  "statusProfiles",
+  "manualStatuses",
+  "manual_attendance",
+];
+
+const isValidYmd = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "").trim());
+
+const resolveAttendanceDayKeyFromRecord = (record = {}, businessTimeZone = "America/Chicago") => {
+  const explicit = String(pick(record || {}, ATTENDANCE_DAY_FIELD_CANDIDATES, "") || "").trim();
+  if (isValidYmd(explicit)) return explicit;
+
+  const tsCandidate = pick(record || {}, ATTENDANCE_TIMESTAMP_FIELD_CANDIDATES, null);
+  const ms = toMillis(tsCandidate);
+  if (!Number.isFinite(ms)) return "";
+  return dayKeyFromMsInZone(ms, businessTimeZone);
+};
+
+const looksLikeManagerStatusRecord = (record = {}) => {
+  const statusText = String(pick(record || {}, ATTENDANCE_STATUS_FIELD_CANDIDATES, "") || "").trim();
+  if (!statusText) return false;
+
+  const s = statusText.toLowerCase();
+  return (
+    s.includes("no show") ||
+    s.includes("ncns") ||
+    s.includes("absent") ||
+    s.includes("pto") ||
+    s.includes("leave") ||
+    s.includes("vacation") ||
+    s.includes("no log")
+  );
+};
+
+const coerceManagerStatusToAttendanceLog = (
+  rawRecord = {},
+  fallbackUserId = "",
+  businessTimeZone = "America/Chicago"
+) => {
+  if (!rawRecord || typeof rawRecord !== "object") return null;
+
+  const statusText = String(pick(rawRecord, ATTENDANCE_STATUS_FIELD_CANDIDATES, "") || "").trim();
+  if (!statusText) return null;
+
+  const userId = String(
+    pick(rawRecord, ATTENDANCE_USER_FIELD_CANDIDATES, String(fallbackUserId || "").trim())
+  ).trim();
+  if (!userId) return null;
+
+  const dayKey = resolveAttendanceDayKeyFromRecord(rawRecord, businessTimeZone);
+  const tsValue = pick(rawRecord, ATTENDANCE_TIMESTAMP_FIELD_CANDIDATES, "");
+  const resolvedTimestamp = tsValue || (dayKey ? `${dayKey}T12:00:00.000Z` : "");
+  if (!resolvedTimestamp && !dayKey) return null;
+
+  return {
+    ...rawRecord,
+    userId,
+    status: statusText,
+    attendanceStatus: String(rawRecord.attendanceStatus || statusText),
+    dailyStatus: String(rawRecord.dailyStatus || statusText),
+    remark: String(rawRecord.remark || rawRecord.note || rawRecord.reason || statusText),
+    type: String(pick(rawRecord, ["type", "logType", "eventType"], "manager_status")),
+    timestamp: resolvedTimestamp,
+    attendanceDate: dayKey || String(pick(rawRecord, ATTENDANCE_DAY_FIELD_CANDIDATES, "")),
+    source: String(rawRecord.source || "manager_status_profile"),
+    __managerAssigned: true,
+  };
+};
+
+const normalizeAttendanceLogsPayload = (
+  payload,
+  fallbackUserId = "",
+  businessTimeZone = "America/Chicago"
+) => {
+  const flatLogs = [];
+  const managerRecords = [];
+  const fallbackUid = String(fallbackUserId || "").trim();
+
+  const pushObjectArray = (target, value) => {
+    if (!Array.isArray(value)) return;
+    for (const row of value) {
+      if (row && typeof row === "object") target.push(row);
+    }
+  };
+
+  const collectArraysByKeys = (container, keys = []) => {
+    const out = [];
+    if (!container || typeof container !== "object") return out;
+    for (const key of keys) {
+      pushObjectArray(out, container?.[key]);
+    }
+    return out;
+  };
+
+  if (Array.isArray(payload)) {
+    pushObjectArray(flatLogs, payload);
+  } else if (payload && typeof payload === "object") {
+    const containers = [payload, payload.data, payload.result, payload.response, payload.payload];
+    for (const container of containers) {
+      if (!container) continue;
+      if (Array.isArray(container)) {
+        pushObjectArray(flatLogs, container);
+        continue;
+      }
+      if (typeof container !== "object") continue;
+      pushObjectArray(flatLogs, collectArraysByKeys(container, ATTENDANCE_LOG_ARRAY_KEYS));
+      pushObjectArray(managerRecords, collectArraysByKeys(container, ATTENDANCE_MANAGER_ARRAY_KEYS));
+    }
+
+    if (looksLikeManagerStatusRecord(payload)) {
+      managerRecords.push(payload);
+    }
+  }
+
+  const mappedManagerLogs = managerRecords
+    .map((row) => coerceManagerStatusToAttendanceLog(row, fallbackUid, businessTimeZone))
+    .filter(Boolean);
+
+  const combined = [...flatLogs, ...mappedManagerLogs];
+  if (!combined.length) return [];
+
+  const seen = new Set();
+  const deduped = [];
+
+  for (const raw of combined) {
+    const record = raw && typeof raw === "object" ? raw : null;
+    if (!record) continue;
+
+    const userId = String(
+      pick(record, ATTENDANCE_USER_FIELD_CANDIDATES, fallbackUid)
+    ).trim();
+
+    const enrichedRecord = userId ? { ...record, userId } : { ...record };
+    const statusText = String(pick(enrichedRecord, ATTENDANCE_STATUS_FIELD_CANDIDATES, "") || "").trim();
+    const tsText = String(pick(enrichedRecord, ATTENDANCE_TIMESTAMP_FIELD_CANDIDATES, "") || "").trim();
+    const dayKey = resolveAttendanceDayKeyFromRecord(enrichedRecord, businessTimeZone);
+    const typeText = String(pick(enrichedRecord, ["type", "logType", "eventType"], "") || "").trim().toLowerCase();
+    const idText = String(pick(enrichedRecord, ["id", "_id", "logId", "attendanceLogId"], "") || "").trim();
+
+    const dedupeKey = `${userId}|${statusText.toLowerCase()}|${dayKey}|${tsText}|${typeText}|${idText}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    deduped.push(enrichedRecord);
+  }
+
+  return deduped;
+};
+
 const getLogEventTs = (log) => {
   if (isClockedOutLog(log)) return pickOutTs(log) || pickTs(log) || "";
   return pickTs(log) || pickOutTs(log) || "";
@@ -251,6 +448,9 @@ const latestOf = (logs, predicate) => {
 
 const getBusinessDayLogsFromList = (logs, businessDayKey, resetTime, businessTimeZone) => {
   return (Array.isArray(logs) ? logs : []).filter((log) => {
+    const explicitDayKey = resolveAttendanceDayKeyFromRecord(log, businessTimeZone);
+    if (explicitDayKey) return explicitDayKey === businessDayKey;
+
     const ts = getLogEventTs(log);
     if (!ts) return false;
     return getBusinessDayKey(ts, resetTime, businessTimeZone) === businessDayKey;
@@ -365,6 +565,8 @@ const getEmployeePositionLabel = (employee = {}, profile = {}) =>
 const containsAbsentStatus = (statusText) =>
   String(statusText || "").trim().toLowerCase().includes("absent");
 
+const ENABLE_ATTENDANCE_DEBUG_LOGS = false;
+
 const scanAbsentStatusesInLogsByUserId = (logsByUserId = {}) => {
   const entries = Object.entries(logsByUserId || {});
   let totalLogs = 0;
@@ -399,6 +601,9 @@ const scanAbsentStatusesInLogsByUserId = (logsByUserId = {}) => {
 
 const logAbsentStatusScan = (label, logsByUserId = {}) => {
   const report = scanAbsentStatusesInLogsByUserId(logsByUserId);
+  if (!ENABLE_ATTENDANCE_DEBUG_LOGS) {
+    return report;
+  }
   const tag = `[Attendance Absent Scan] ${label}`;
 
   if (!report.totalLogs) {
@@ -416,6 +621,55 @@ const logAbsentStatusScan = (label, logsByUserId = {}) => {
   );
   console.table(report.usersWithAbsent);
   return report;
+};
+
+const logAttendanceJsonPayloads = (
+  label,
+  rawPayloadByUserId = {},
+  normalizedLogsByUserId = {}
+) => {
+  if (!ENABLE_ATTENDANCE_DEBUG_LOGS) return;
+  if (typeof console === "undefined") return;
+
+  try {
+    const rawMap =
+      rawPayloadByUserId && typeof rawPayloadByUserId === "object"
+        ? rawPayloadByUserId
+        : {};
+    const normalizedMap =
+      normalizedLogsByUserId && typeof normalizedLogsByUserId === "object"
+        ? normalizedLogsByUserId
+        : {};
+    const userIds = Array.from(
+      new Set([...Object.keys(rawMap), ...Object.keys(normalizedMap)])
+    ).sort((a, b) => a.localeCompare(b));
+
+    console.groupCollapsed(
+      `[Attendance JSON Debug] ${label} (${userIds.length} user(s))`
+    );
+
+    for (const userId of userIds) {
+      const rawPayload = rawMap?.[userId];
+      const normalizedLogs = Array.isArray(normalizedMap?.[userId])
+        ? normalizedMap[userId]
+        : [];
+      const managerRows = normalizedLogs.filter((row) => !!row?.__managerAssigned);
+
+      console.groupCollapsed(
+        `user ${userId}: ${normalizedLogs.length} normalized log(s), ${managerRows.length} manager row(s)`
+      );
+      console.log("raw_payload:", rawPayload);
+      console.log("normalized_logs:", normalizedLogs);
+      if (managerRows.length > 0) {
+        console.log("manager_status_rows:", managerRows);
+      }
+      console.groupEnd();
+    }
+
+    console.groupEnd();
+  } catch (err) {
+    console.warn("[Attendance JSON Debug] failed to log payloads", err);
+  }
 };
 
 async function mapWithConcurrency(items, limit, worker) {
@@ -664,6 +918,7 @@ export default function App() {
   const [profileImagesByUserId, setProfileImagesByUserId] = useState({});
   const [toastQueue, setToastQueue] = useState([]);
   const seenToastIdsRef = useRef(new Set());
+  const notificationToastSessionStartMsRef = useRef(0);
   const profileImagesByUserIdRef = useRef({});
   const profileImagesInitializedRef = useRef(false);
   const announcementsRef = useRef([]);
@@ -807,6 +1062,23 @@ export default function App() {
   const closeNotificationModal = useCallback(() => {
     setSelectedNotification(null);
   }, []);
+
+  useEffect(() => {
+    const nextSessionKey = authSessionKey || "__authenticated__";
+
+    if (!isAuthenticated || !user) {
+      notificationToastSessionStartMsRef.current = 0;
+      seenToastIdsRef.current = new Set();
+      setToastQueue((prev) => (prev.length ? [] : prev));
+      return;
+    }
+
+    if (lastAuthSessionKeyRef.current !== nextSessionKey) {
+      notificationToastSessionStartMsRef.current = Date.now();
+      seenToastIdsRef.current = new Set();
+      setToastQueue((prev) => (prev.length ? [] : prev));
+    }
+  }, [isAuthenticated, user, authSessionKey]);
 
   const handleOpenAssignmentTask = useCallback((taskId) => {
     const nextTaskId = String(taskId || "").trim();
@@ -1215,7 +1487,15 @@ export default function App() {
       setArchivedNotifications(enrichedArchivedRows);
 
       const unread = enrichedActiveRows.filter((row) => !row?.read);
-      const freshUnread = unread.filter((row) => !seenToastIdsRef.current.has(row.id));
+      const sessionStartMs = Number(notificationToastSessionStartMsRef.current);
+      const sessionFreshUnread = unread.filter((row) => {
+        const createdAtMs = toMillis(row?.createdAt);
+        if (!Number.isFinite(createdAtMs) || !Number.isFinite(sessionStartMs) || sessionStartMs <= 0) {
+          return false;
+        }
+        return createdAtMs >= sessionStartMs;
+      });
+      const freshUnread = sessionFreshUnread.filter((row) => !seenToastIdsRef.current.has(row.id));
 
       if (freshUnread.length > 0) {
         setToastQueue((prev) => [
@@ -1734,7 +2014,7 @@ export default function App() {
 
   const reloadActiveBreaks = useCallback(async () => {
     if (!isAuthenticated || !user) {
-      setActiveBreaksByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      // Keep previous data during auth/session transitions to avoid dashboard flicker.
       return;
     }
 
@@ -1785,7 +2065,7 @@ export default function App() {
       setActiveBreaksByUserId(next);
     } catch (err) {
       console.error("Failed to load active breaks:", err);
-      setActiveBreaksByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      // Preserve last good data on transient refresh failures.
     } finally {
       setLoadingBreaks(false);
     }
@@ -1793,14 +2073,16 @@ export default function App() {
 
   const reloadBreakUsage = useCallback(async () => {
     if (!isAuthenticated || !user) {
-      setBreakUsageByUserId((prev) => (Object.keys(prev).length ? {} : prev));
-      setBreakLogsByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      // Keep previous data during auth/session transitions to avoid dashboard flicker.
       return;
     }
 
     if (!validEmployees.length) {
-      setBreakUsageByUserId((prev) => (Object.keys(prev).length ? {} : prev));
-      setBreakLogsByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      // Avoid clearing while users are still loading; clear only when empty is definitive.
+      if (!loadingUsers) {
+        setBreakUsageByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+        setBreakLogsByUserId((prev) => (Object.keys(prev).length ? {} : prev));
+      }
       return;
     }
 
@@ -1828,24 +2110,52 @@ export default function App() {
         }
       }
 
-      setBreakUsageByUserId(nextUsage);
-      setBreakLogsByUserId(nextLogs);
+      setBreakUsageByUserId((prev) => {
+        const merged = {};
+        for (const userId of items) {
+          if (Object.prototype.hasOwnProperty.call(nextUsage, userId)) {
+            merged[userId] = nextUsage[userId];
+          } else if (Object.prototype.hasOwnProperty.call(prev || {}, userId)) {
+            merged[userId] = prev[userId];
+          } else {
+            merged[userId] = 0;
+          }
+        }
+        return merged;
+      });
+
+      setBreakLogsByUserId((prev) => {
+        const merged = {};
+        for (const userId of items) {
+          if (Object.prototype.hasOwnProperty.call(nextLogs, userId)) {
+            merged[userId] = nextLogs[userId];
+          } else if (Array.isArray(prev?.[userId])) {
+            merged[userId] = prev[userId];
+          } else {
+            merged[userId] = [];
+          }
+        }
+        return merged;
+      });
     } catch (err) {
       console.error("Failed to load break usage:", err);
     } finally {
       setLoadingBreakUsage(false);
     }
-  }, [isAuthenticated, user, validEmployees]);
+  }, [isAuthenticated, user, validEmployees, loadingUsers]);
 
   const reloadEmployeeProfiles = useCallback(async () => {
     if (!isAuthenticated || !user) {
-      setEmployeeProfilesByUserId({});
+      // Keep previous data during auth/session transitions to avoid dashboard flicker.
       setEmployeeProfilesError("");
       return;
     }
 
     if (!validEmployees.length) {
-      setEmployeeProfilesByUserId({});
+      // Avoid clearing while users are still loading; clear only when empty is definitive.
+      if (!loadingUsers) {
+        setEmployeeProfilesByUserId({});
+      }
       setEmployeeProfilesError("");
       return;
     }
@@ -1856,15 +2166,26 @@ export default function App() {
     try {
       const userIds = validEmployees.map((emp) => String(getUserId(emp)));
       const profiles = await getEmployeeProfilesByUserIds(userIds);
-      setEmployeeProfilesByUserId(profiles || {});
+      setEmployeeProfilesByUserId((prev) => {
+        const nextProfiles = profiles && typeof profiles === "object" ? profiles : {};
+        const merged = {};
+        for (const userId of userIds) {
+          if (Object.prototype.hasOwnProperty.call(nextProfiles, userId)) {
+            merged[userId] = nextProfiles[userId];
+          } else if (Object.prototype.hasOwnProperty.call(prev || {}, userId)) {
+            merged[userId] = prev[userId];
+          }
+        }
+        return merged;
+      });
     } catch (err) {
       console.error("Failed to load employee profiles:", err);
-      setEmployeeProfilesByUserId({});
+      // Preserve last good data on transient refresh failures.
       setEmployeeProfilesError(err?.message || "Failed to load employee profiles");
     } finally {
       setLoadingEmployeeProfiles(false);
     }
-  }, [isAuthenticated, user, validEmployees]);
+  }, [isAuthenticated, user, validEmployees, loadingUsers]);
 
   const reloadSpecialUsers = useCallback(async () => {
     if (!isAuthenticated || !user || !canLoadSpecialUsers) {
@@ -1999,7 +2320,7 @@ export default function App() {
 
   const reloadAnnouncements = useCallback(async () => {
     if (!isAuthenticated || !user) {
-      setAnnouncements([]);
+      // Keep last loaded rows to avoid UI flicker during auth/session transitions.
       setAnnouncementsError("");
       return;
     }
@@ -2012,7 +2333,7 @@ export default function App() {
       setAnnouncements(Array.isArray(rows) ? rows : []);
     } catch (err) {
       console.error("Failed to load announcements:", err);
-      setAnnouncements([]);
+      // Preserve last good list on transient failures instead of blanking the UI.
       setAnnouncementsError(err?.message || "Failed to load announcements");
     } finally {
       setLoadingAnnouncements(false);
@@ -2869,25 +3190,6 @@ export default function App() {
 
   const employeeDashboardEmployees = useMemo(() => {
     if (!user) return [];
-
-    const normalizedRole = normalizeRole(user?.role);
-    const currentUserId = String(
-      getUserId(user) ||
-        user?.userId ||
-        user?.uid ||
-        user?.id ||
-        user?.firebaseUid ||
-        user?.employeeId ||
-        ""
-    ).trim();
-
-    if (normalizedRole === ROLES.EMPLOYEE) {
-      return dashboardEmployees.filter((emp) => {
-        const employeeUserId = String(getUserId(emp) || emp?.userId || emp?.id || "").trim();
-        return employeeUserId === currentUserId;
-      });
-    }
-
     return dashboardEmployees;
   }, [dashboardEmployees, user]);
 
@@ -3042,12 +3344,17 @@ export default function App() {
       setHistoryErrorByUserId((p) => ({ ...p, [uid]: "" }));
 
       try {
-        const logs = await api.getAttendanceLogs(
+        const payload = await api.getAttendanceLogs(
           { userId: uid, startDate: HISTORY_START_DATE, endDate },
           ac.signal
         );
 
-        const arr = Array.isArray(logs) ? logs : [];
+        const arr = normalizeAttendanceLogsPayload(payload, uid, businessTimeZone);
+        logAttendanceJsonPayloads(
+          `full-history user ${uid}`,
+          { [uid]: payload },
+          { [uid]: arr }
+        );
         logAbsentStatusScan(`full-history user ${uid}`, { [uid]: arr });
         setHistoryByUserId((p) => ({ ...p, [uid]: arr }));
         return arr;
@@ -3066,7 +3373,7 @@ export default function App() {
         setLoadingHistoryByUserId((p) => ({ ...p, [uid]: false }));
       }
     },
-    [api, endDate, historyByUserId]
+    [api, endDate, historyByUserId, businessTimeZone]
   );
 
   useEffect(() => {
@@ -3145,9 +3452,17 @@ export default function App() {
   }, [apiKey, departmentId, api]);
 
   const reloadSchedules = useCallback(async () => {
-    if (!api || validEmployees.length === 0) {
-      setSchedulesByUserId({});
-      setScheduleErrorsByUserId({});
+    if (!api) {
+      // Keep previous data while API/session wiring is not ready.
+      return;
+    }
+
+    if (validEmployees.length === 0) {
+      // Avoid clearing while users are still loading; clear only when empty is definitive.
+      if (!loadingUsers) {
+        setSchedulesByUserId({});
+        setScheduleErrorsByUserId({});
+      }
       setSchedulesError("");
       return;
     }
@@ -3176,12 +3491,23 @@ export default function App() {
         if (results[idx].ok) {
           next[userId] = results[idx].value.sched;
         } else {
-          next[userId] = [];
           errs[userId] = results[idx].error?.message || "Failed to load schedule";
         }
       }
 
-      setSchedulesByUserId(next);
+      setSchedulesByUserId((prev) => {
+        const merged = {};
+        for (const userId of items) {
+          if (Object.prototype.hasOwnProperty.call(next, userId)) {
+            merged[userId] = next[userId];
+          } else if (Array.isArray(prev?.[userId])) {
+            merged[userId] = prev[userId];
+          } else {
+            merged[userId] = [];
+          }
+        }
+        return merged;
+      });
       setScheduleErrorsByUserId(errs);
     } catch (e) {
       if (e?.name !== "AbortError") {
@@ -3190,16 +3516,24 @@ export default function App() {
     } finally {
       setLoadingSchedules(false);
     }
-  }, [api, validEmployees]);
+  }, [api, validEmployees, loadingUsers]);
 
   useEffect(() => {
     reloadSchedules();
   }, [reloadSchedules]);
 
   const reloadAttendance = useCallback(async () => {
-    if (!api || validEmployees.length === 0) {
-      setLogsByUserId({});
-      setAttendanceErrorsByUserId({});
+    if (!api) {
+      // Keep previous data while API/session wiring is not ready.
+      return;
+    }
+
+    if (validEmployees.length === 0) {
+      // Avoid clearing while users are still loading; clear only when empty is definitive.
+      if (!loadingUsers) {
+        setLogsByUserId({});
+        setAttendanceErrorsByUserId({});
+      }
       setAttendanceError("");
       return;
     }
@@ -3216,25 +3550,43 @@ export default function App() {
       const items = validEmployees.map((emp) => String(getUserId(emp)));
 
       const results = await mapWithConcurrency(items, 6, async (userId) => {
-        const logs = await api.getAttendanceLogs({ userId, startDate, endDate }, ac.signal);
-        return { userId, logs: Array.isArray(logs) ? logs : [] };
+        const payload = await api.getAttendanceLogs({ userId, startDate, endDate }, ac.signal);
+        return {
+          userId,
+          payload,
+          logs: normalizeAttendanceLogsPayload(payload, userId, businessTimeZone),
+        };
       });
 
       const nextLogs = {};
+      const nextRawPayloads = {};
       const errs = {};
 
       for (let idx = 0; idx < results.length; idx++) {
         const userId = items[idx];
         if (results[idx].ok) {
           nextLogs[userId] = results[idx].value.logs;
+          nextRawPayloads[userId] = results[idx].value.payload;
         } else {
-          nextLogs[userId] = [];
           errs[userId] = results[idx].error?.message || "Failed to load attendance logs";
         }
       }
 
+      logAttendanceJsonPayloads(`range ${startDate} -> ${endDate}`, nextRawPayloads, nextLogs);
       logAbsentStatusScan(`range ${startDate} -> ${endDate}`, nextLogs);
-      setLogsByUserId(nextLogs);
+      setLogsByUserId((prev) => {
+        const merged = {};
+        for (const userId of items) {
+          if (Object.prototype.hasOwnProperty.call(nextLogs, userId)) {
+            merged[userId] = nextLogs[userId];
+          } else if (Array.isArray(prev?.[userId])) {
+            merged[userId] = prev[userId];
+          } else {
+            merged[userId] = [];
+          }
+        }
+        return merged;
+      });
       setAttendanceErrorsByUserId(errs);
     } catch (e) {
       if (e?.name !== "AbortError") {
@@ -3243,15 +3595,23 @@ export default function App() {
     } finally {
       setLoadingAttendance(false);
     }
-  }, [api, validEmployees, startDate, endDate]);
+  }, [api, validEmployees, startDate, endDate, businessTimeZone, loadingUsers]);
 
   useEffect(() => {
     reloadAttendance();
   }, [reloadAttendance]);
 
   const reloadTodayLogs = useCallback(async () => {
-    if (!api || validEmployees.length === 0) {
-      setTodayLogsByUserId({});
+    if (!api) {
+      // Keep previous data while API/session wiring is not ready.
+      return;
+    }
+
+    if (validEmployees.length === 0) {
+      // Avoid clearing while users are still loading; clear only when empty is definitive.
+      if (!loadingUsers) {
+        setTodayLogsByUserId({});
+      }
       return;
     }
 
@@ -3269,12 +3629,12 @@ export default function App() {
       const items = validEmployees.map((emp) => String(getUserId(emp)));
 
       const results = await mapWithConcurrency(items, 8, async (userId) => {
-        const logs = await api.getAttendanceLogs(
+        const payload = await api.getAttendanceLogs(
           { userId, startDate: fetchStart, endDate: fetchEnd },
           ac.signal
         );
 
-        const arr = Array.isArray(logs) ? logs : [];
+        const arr = normalizeAttendanceLogsPayload(payload, userId, businessTimeZone);
         const filtered = getBusinessDayLogsFromList(
           arr,
           todayBusinessKey,
@@ -3282,17 +3642,34 @@ export default function App() {
           businessTimeZone
         );
 
-        return { userId, logs: filtered };
+        return { userId, payload, logs: filtered };
       });
 
       const next = {};
+      const nextRawPayloads = {};
       for (let idx = 0; idx < results.length; idx++) {
         const userId = items[idx];
-        next[userId] = results[idx].ok ? results[idx].value.logs : [];
+        if (results[idx].ok) {
+          next[userId] = results[idx].value.logs;
+          nextRawPayloads[userId] = results[idx].value.payload;
+        }
       }
 
+      logAttendanceJsonPayloads(`business-day ${todayBusinessKey}`, nextRawPayloads, next);
       logAbsentStatusScan(`business-day ${todayBusinessKey}`, next);
-      setTodayLogsByUserId(next);
+      setTodayLogsByUserId((prev) => {
+        const merged = {};
+        for (const userId of items) {
+          if (Object.prototype.hasOwnProperty.call(next, userId)) {
+            merged[userId] = next[userId];
+          } else if (Array.isArray(prev?.[userId])) {
+            merged[userId] = prev[userId];
+          } else {
+            merged[userId] = [];
+          }
+        }
+        return merged;
+      });
     } catch (err) {
       if (err?.name !== "AbortError") {
         console.error("Failed to load business-day logs:", err);
@@ -3300,10 +3677,34 @@ export default function App() {
     } finally {
       setLoadingTodayLogs(false);
     }
-  }, [api, validEmployees, attendanceResetTime, businessTimeZone]);
+  }, [api, validEmployees, attendanceResetTime, businessTimeZone, loadingUsers]);
 
   useEffect(() => {
     reloadTodayLogs();
+  }, [reloadTodayLogs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let running = false;
+
+    const run = async () => {
+      if (cancelled || running) return;
+      running = true;
+      try {
+        await reloadTodayLogs();
+      } finally {
+        running = false;
+      }
+    };
+
+    const id = setInterval(() => {
+      run();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [reloadTodayLogs]);
 
   const liveAgentsForSidebar = useMemo(() => {
@@ -3754,7 +4155,7 @@ export default function App() {
     return (
       <div className="portal-auth-loading" role="status" aria-live="polite" aria-busy="true">
         <div className="portal-logout-spinner" />
-        <div className="portal-logout-text">Restoring session...</div>
+        <div className="portal-logout-text"><p>Restoring session...</p></div>
       </div>
     );
   }

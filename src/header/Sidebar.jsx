@@ -85,7 +85,10 @@ export default function Sidebar({
             <img src={HHIUHAI} alt="" />
           </div>
           <div className="sb-brand-meta">
-            <div className="sb-brand-title">UNICORN HAIR</div>
+            <div className="sb-brand-title-wrap">
+              <div className="sb-brand-title">UNICORN HAIR</div>
+              <span className="sb-brand-beta">BETA</span>
+            </div>
           </div>
         </div>
 

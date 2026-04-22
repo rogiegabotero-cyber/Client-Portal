@@ -84,7 +84,7 @@ const buildMonthlyAttendanceBucketMap = (byDay = new Map()) => {
 
   for (const [dayKey, dayLogs] of byDay.entries()) {
     const primaryLog = pickPrimaryAttendanceLog(dayLogs);
-    const bucket = normalizeAttendanceStatus(pick(primaryLog || {}, ["status"], ""));
+    const bucket = normalizeAttendanceStatus(getRawAttendanceStatus(primaryLog || {}));
     if (!bucket) continue;
 
     const monthKey = monthKeyFromYmd(dayKey);
@@ -523,13 +523,39 @@ const resolveDailyStatus = ({
     if (statuses.some((s) => s === "ncns" || s.includes("no show"))) {
       return "No Show";
     }
+    if (statuses.some((s) => s.includes("absent"))) {
+      return "Absent";
+    }
+    if (statuses.some((s) => s.includes("pto") || s.includes("leave") || s.includes("vacation"))) {
+      return "PTO";
+    }
+    if (statuses.some((s) => s.includes("holiday"))) {
+      return "Holiday";
+    }
+    if (statuses.some((s) => s.includes("day off") || s.includes("rest day"))) {
+      return "Day Off";
+    }
 
     const hasOut = logs.some((l) => isClockedOutLog(l));
     const hasIn = logs.some((l) => isIn(l));
 
     if (hasOut) return "Completed";
+    if (statuses.some((s) => s.includes("completed") || s.includes("complete"))) return "Completed";
     if (statuses.some((s) => s.includes("on break"))) return "On Break";
     if (hasIn || statuses.some((s) => s.includes("live"))) return "Live";
+    if (
+      statuses.some(
+        (s) =>
+          s.includes("present") ||
+          s.includes("on time") ||
+          s.includes("on-time") ||
+          s.includes("ontime") ||
+          s.includes("early") ||
+          s.includes("late")
+      )
+    ) {
+      return "Live";
+    }
 
     if (statuses.some((s) => s.includes("scheduled"))) {
       return "Scheduled";
@@ -593,7 +619,7 @@ const computeWorkedMinutesForDay = (logs, liveNowMs = null, { applyDiff = true }
   const diffRaw = getDiffRawFromLogs(sorted);
   const diffMinutes = Number(diffRaw);
   const hasNoSchedule = sorted.some((l) =>
-    safeLower(pick(l, ["status"], "")).includes("no schedule")
+    getRawAttendanceStatus(l).includes("no schedule")
   );
 
   if (hasNoSchedule) {
@@ -623,7 +649,7 @@ const computePayableMinutesForDay = ({
   if (!logs.length) return null;
 
   const hasNoScheduleLog = logs.some((log) =>
-    safeLower(pick(log, ["status"], "")).includes("no schedule")
+    getRawAttendanceStatus(log).includes("no schedule")
   );
   const liveNowForDay =
     String(dayKey) === String(endDate || "") ? nowMs : null;
@@ -660,20 +686,45 @@ const computePayableMinutesForDay = ({
   return workedMinutes;
 };
 
+const getAttendanceDayKeyFromLog = (
+  log = {},
+  attendanceResetTime = "05:00",
+  businessTimeZone = "America/Chicago"
+) => {
+  const explicitDayKey = String(
+    pick(
+      log || {},
+      [
+        "dayKey",
+        "businessDay",
+        "businessDate",
+        "attendanceDate",
+        "logDate",
+        "date",
+        "workDate",
+      ],
+      ""
+    )
+  ).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(explicitDayKey)) {
+    return explicitDayKey;
+  }
+
+  const baseTs = Number.isFinite(tsMs(pickTs(log))) ? pickTs(log) : pickOutTs(log);
+  if (!baseTs) return "";
+  return getBusinessDayKey(baseTs, attendanceResetTime, businessTimeZone);
+};
+
 const buildByDayMap = (
   logs,
   attendanceResetTime = "05:00",
   businessTimeZone = "America/Chicago"
 ) => {
-  const valid = Array.isArray(logs)
-    ? logs.filter((l) => isValidTs(l) || Number.isFinite(tsMs(pickOutTs(l))))
-    : [];
-
   const byDay = new Map();
 
-  for (const log of valid) {
-    const baseTs = Number.isFinite(tsMs(pickTs(log))) ? pickTs(log) : pickOutTs(log);
-    const dk = getBusinessDayKey(baseTs, attendanceResetTime, businessTimeZone);
+  for (const log of Array.isArray(logs) ? logs : []) {
+    const dk = getAttendanceDayKeyFromLog(log, attendanceResetTime, businessTimeZone);
     if (!dk) continue;
 
     if (!byDay.has(dk)) byDay.set(dk, []);
@@ -705,13 +756,9 @@ const minDayKeyFromLogs = (
   attendanceResetTime = "05:00",
   businessTimeZone = "America/Chicago"
 ) => {
-  const valid = Array.isArray(logs)
-    ? logs.filter((l) => isValidTs(l) || Number.isFinite(tsMs(pickOutTs(l))))
-    : [];
   let best = null;
-  for (const l of valid) {
-    const baseTs = Number.isFinite(tsMs(pickTs(l))) ? pickTs(l) : pickOutTs(l);
-    const dk = getBusinessDayKey(baseTs, attendanceResetTime, businessTimeZone);
+  for (const l of Array.isArray(logs) ? logs : []) {
+    const dk = getAttendanceDayKeyFromLog(l, attendanceResetTime, businessTimeZone);
     if (!dk) continue;
     if (best == null || dk < best) best = dk;
   }
@@ -818,9 +865,16 @@ const normalizeAttendanceStatus = (rawStatus = "") => {
   if (!s) return null;
 
   if (s.includes("early")) return "early";
-  if (s === "on time" || s.includes("on-time") || s.includes("ontime")) return "onTime";
+  if (
+    s.includes("on-time") ||
+    s.includes("on time") ||
+    s.includes("ontime") ||
+    s.includes("present")
+  ) {
+    return "onTime";
+  }
   if (s.includes("late")) return "late";
-  if (s.includes("pto")) return "pto";
+  if (s.includes("pto") || s.includes("leave") || s.includes("vacation")) return "pto";
   if (s.includes("absent")) return "absent";
   if (s.includes("ncns")) return "ncns";
   if (s.includes("no call") || s.includes("no-show") || s.includes("no show")) return "ncns";
@@ -878,7 +932,7 @@ const buildAttendanceMonthlyBreakdown = (
     });
 
     const inLog = dayLogs.find((l) => isIn(l)) || dayLogs[0] || null;
-    const rawStatus = pick(inLog || {}, ["status"], "");
+    const rawStatus = getRawAttendanceStatus(inLog || {});
     const bucket = normalizeAttendanceStatus(rawStatus);
 
     if (!bucket) continue;
@@ -1910,7 +1964,7 @@ export default function Dashboard({
           if (!dayLogs.length) continue;
 
           const primaryLog = pickPrimaryAttendanceLog(dayLogs);
-          const bucket = normalizeAttendanceStatus(pick(primaryLog || {}, ["status"], ""));
+          const bucket = normalizeAttendanceStatus(getRawAttendanceStatus(primaryLog || {}));
 
           if (bucket) {
             counts[bucket] += 1;
@@ -2017,7 +2071,7 @@ export default function Dashboard({
         if (!dayLogs.length) continue;
 
         const primaryLog = pickPrimaryAttendanceLog(dayLogs);
-        const bucket = normalizeAttendanceStatus(pick(primaryLog || {}, ["status"], ""));
+        const bucket = normalizeAttendanceStatus(getRawAttendanceStatus(primaryLog || {}));
         if (bucket && counts[bucket] !== undefined) counts[bucket] += 1;
       }
 
@@ -3203,7 +3257,7 @@ export default function Dashboard({
             <div className="updateBody">
               <div className="updateBox">
                 <div className="payTableWrap">
-                  <table className="payTable">
+                  <table className="payTable dashAnnouncementTable">
                     <thead>
                       <tr>
                         <th className="payThLeft">Agent</th>
@@ -3251,13 +3305,7 @@ export default function Dashboard({
                       </tr>
                     </thead>
                     <tbody>
-                      {loadingAnnouncements ? (
-                        <tr>
-                          <td className="payEmpty" colSpan={2}>
-                            Loading announcements...
-                          </td>
-                        </tr>
-                      ) : announcementsError ? (
+                      {announcementsError ? (
                         <tr>
                           <td className="payEmpty" colSpan={2}>
                             {announcementsError}
@@ -3750,7 +3798,7 @@ export default function Dashboard({
                         </Bar>
                       </BarChart>
                     ) : (
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
                         <LineChart
                           data={payableHoursChart.rows}
                           margin={{ top: 10, right: 50, left: 0, bottom: 10 }}
@@ -3955,7 +4003,7 @@ export default function Dashboard({
                 <div className="perfChartWrap">
                   <div className="perfChartInner">
                     {chartReady ? (
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
                         <BarChart
                           data={monthlyAttendance.chartData}
                           margin={{ top: 10, right: 0, left: 0, bottom: 10 }}

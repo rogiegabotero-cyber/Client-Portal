@@ -750,7 +750,7 @@ export default function PerformanceReportPage({
             <div className="prpEmpty">No attendance logs available for this range.</div>
           ) : (
             <div className="prpChartWrap">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
                 <BarChart data={chartDataWithCounts} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.08)" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#334155" }} interval={0} />

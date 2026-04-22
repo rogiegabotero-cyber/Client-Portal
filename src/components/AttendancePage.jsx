@@ -90,6 +90,22 @@ const getAbsentStateFromInLog = (log) => {
   return "";
 };
 
+const normalizeAttendanceKpiStatus = (status = "") => {
+  const s = safeLower(status).trim();
+  if (!s) return "";
+
+  if (s.includes("early")) return "early";
+  if (s.includes("on-time") || s.includes("on time") || s.includes("ontime") || s.includes("present")) {
+    return "onTime";
+  }
+  if (s.includes("late")) return "late";
+  if (s.includes("pto") || s.includes("leave") || s.includes("vacation")) return "pto";
+  if (s === "ncns" || s.includes("no show") || s.includes("no-show") || s.includes("no call")) return "ncns";
+  if (s.includes("absent")) return "absent";
+
+  return "";
+};
+
 const dayKeyFromTs = (
   ts,
   attendanceResetTime = "05:00",
@@ -842,17 +858,23 @@ export default function AttendancePage({
   }, [visibleRows, query]);
 
   const kpis = useMemo(() => {
-    const total = visibleRows.length;
-    const completed = visibleRows.filter((r) => safeLower(r.status) === "completed").length;
-    const live = visibleRows.filter((r) => safeLower(r.status) === "live").length;
-    const onBreak = visibleRows.filter((r) => safeLower(r.status) === "on break").length;
-    const absent = visibleRows.filter((r) => {
-      const status = safeLower(r.status);
-      return status === "no show" || status === "absent";
-    }).length;
-    const noSchedule = visibleRows.filter((r) => safeLower(r.status) === "no schedule").length;
+    const counts = {
+      early: 0,
+      onTime: 0,
+      late: 0,
+      pto: 0,
+      absent: 0,
+      ncns: 0,
+    };
 
-    return { total, completed, live, onBreak, absent, noSchedule };
+    for (const row of visibleRows) {
+      const key = normalizeAttendanceKpiStatus(row?.status || "");
+      if (key && counts[key] !== undefined) {
+        counts[key] += 1;
+      }
+    }
+
+    return counts;
   }, [visibleRows]);
 
   useEffect(() => {
@@ -935,33 +957,39 @@ export default function AttendancePage({
 
       <div className="attxKpis">
         <div className="attxTile">
-          <div className="attxTileLabel">Rows</div>
-          <div className="attxTileValue">{kpis.total}</div>
-          <div className="attxTileHint">One per employee per workday</div>
+          <div className="attxTileLabel">Early</div>
+          <div className="attxTileValue">{kpis.early}</div>
+          <div className="attxTileHint">Clocked in before schedule</div>
+        </div>
+
+        <div className="attxTile">
+          <div className="attxTileLabel">On Time</div>
+          <div className="attxTileValue">{kpis.onTime}</div>
+          <div className="attxTileHint">On-time or present status</div>
+        </div>
+
+        <div className="attxTile">
+          <div className="attxTileLabel">Late</div>
+          <div className="attxTileValue">{kpis.late}</div>
+          <div className="attxTileHint">Late status from attendance logs</div>
+        </div>
+
+        <div className="attxTile">
+          <div className="attxTileLabel">PTO</div>
+          <div className="attxTileValue">{kpis.pto}</div>
+          <div className="attxTileHint">PTO, leave, or vacation status</div>
         </div>
 
         <div className="attxTile">
           <div className="attxTileLabel">Absent</div>
           <div className="attxTileValue">{kpis.absent}</div>
-          <div className="attxTileHint">When API IN status is NCNS or Absent</div>
+          <div className="attxTileHint">Absent status</div>
         </div>
 
         <div className="attxTile">
-          <div className="attxTileLabel">Live</div>
-          <div className="attxTileValue">{kpis.live}</div>
-          <div className="attxTileHint">Has time-in, no time-out</div>
-        </div>
-
-        <div className="attxTile">
-          <div className="attxTileLabel">On Break</div>
-          <div className="attxTileValue">{kpis.onBreak}</div>
-          <div className="attxTileHint">Active break override for today</div>
-        </div>
-
-        <div className="attxTile">
-          <div className="attxTileLabel">Completed</div>
-          <div className="attxTileValue">{kpis.completed}</div>
-          <div className="attxTileHint">Has time-out</div>
+          <div className="attxTileLabel">NCNS</div>
+          <div className="attxTileValue">{kpis.ncns}</div>
+          <div className="attxTileHint">No Show / NCNS status</div>
         </div>
       </div>
 
