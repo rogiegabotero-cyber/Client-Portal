@@ -44,6 +44,7 @@ import {
 } from "./auth/firebaseAuthService";
 import {
   DAILY_BREAK_LIMIT_MINUTES,
+  getActiveBreakForUser,
   getActiveBreaks,
   archiveAllNotifications,
   archiveAllOverBreakNotes,
@@ -63,6 +64,8 @@ import {
   resetAllNotificationData,
   restoreNotification,
   restoreOverBreakNote,
+  subscribeActiveBreakUpdates,
+  subscribeBreakNotificationUpdates,
   getOverBreakNotes,
 } from "./services/breakService";
 import {
@@ -131,6 +134,39 @@ import ManageAnnouncementsPage from "./components/ManageAnnouncementsPage";
 const isAnnouncementNotification = (typeValue) => {
   const type = String(typeValue || "").trim().toLowerCase();
   return type === "announcement_posted" || type.startsWith("announcement_");
+};
+
+const isNotificationChangeRelevantForViewer = (change = {}, viewerIdentity = {}) => {
+  const viewerUserId = String(viewerIdentity?.userId || "").trim();
+  const viewerRole = normalizeRole(viewerIdentity?.role || "");
+  if (!viewerUserId) return false;
+
+  const changeUserId = String(change?.userId || "").trim();
+  const changeAudience = String(change?.audience || "").trim().toLowerCase();
+  const changeRole = normalizeRole(change?.role || "");
+  const changeType = String(change?.type || "").trim().toLowerCase();
+
+  const visitorBlockedTypes = new Set([
+    "break_warning",
+    "break_limit_reached",
+    "over_break_broadcast",
+  ]);
+
+  if (viewerRole === "visitor" && visitorBlockedTypes.has(changeType)) {
+    return false;
+  }
+
+  if (changeUserId) return changeUserId === viewerUserId;
+  if (changeAudience === "broadcast" || changeAudience === "all" || changeAudience === "everyone") {
+    return true;
+  }
+  if (changeRole && changeRole === viewerRole) return true;
+  if (changeAudience && changeAudience === viewerRole) return true;
+  if (changeType === "portal_user_request_pending") {
+    return viewerRole === ROLES.ADMIN || viewerRole === ROLES.SUPER_ADMIN;
+  }
+
+  return false;
 };
 
 const formatTargetPageLabel = (pageKey) => {
@@ -909,6 +945,16 @@ export default function App() {
   const todayAbortRef = useRef(null);
   const lastAuthSessionKeyRef = useRef("");
 
+  // In-memory app cache: centralizes API results in App.jsx and reuses them
+  // across page navigation. Browser refresh recreates this ref, so data resets.
+  const appDataCacheRef = useRef({
+    users: null,
+    schedulesByUserId: {},
+    attendanceByKey: {},
+    todayLogsByKey: {},
+    fullHistoryByUserId: {},
+  });
+
   const [breakLogsByUserId, setBreakLogsByUserId] = useState({});
 
   const [notifications, setNotifications] = useState([]);
@@ -930,6 +976,7 @@ export default function App() {
     reloadOverBreakNotes: async () => {},
     reloadPortalUserRequests: async () => {},
   });
+  const breakStartupHydrationKeyRef = useRef("");
   const portalMainRef = useRef(null);
   const viewerRole = useMemo(
     () => String(user?.role || "").trim().toLowerCase().replace(/\s+/g, "_"),
@@ -1272,6 +1319,15 @@ export default function App() {
     () => (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e)),
     [employees]
   );
+  const validEmployeeIdsKey = useMemo(
+    () =>
+      validEmployees
+        .map((emp) => String(getUserId(emp) || "").trim())
+        .filter(Boolean)
+        .sort()
+        .join("|"),
+    [validEmployees]
+  );
 
   const currentViewerIdentity = useMemo(() => {
     return {
@@ -1360,7 +1416,7 @@ export default function App() {
 
   const isUserOnBreak = useCallback(
     (userId) => {
-      const uid = String(userId || "");
+      const uid = String(userId || "").trim();
       return !!activeBreaksByUserId[uid];
     },
     [activeBreaksByUserId]
@@ -1388,17 +1444,9 @@ export default function App() {
       const lastOut = latestOf(logsToday, isClockedOutLog);
       if (lastOut && lastOut.t >= lastIn.t) return false;
 
-      const GRACE_MINUTES = 10;
-      const graceMs = GRACE_MINUTES * 60 * 1000;
-      const schedEndMs = getTodayScheduleEndUtcMs(uid);
-
-      if (Number.isFinite(schedEndMs) && nowMs > schedEndMs + graceMs) {
-        return false;
-      }
-
       return true;
     },
-    [getTodayBusinessLogsForUser, getTodayScheduleEndUtcMs, nowMs]
+    [getTodayBusinessLogsForUser]
   );
 
   const getLiveHoursSinceIn = useCallback(
@@ -1417,8 +1465,8 @@ export default function App() {
         Array.isArray(schedulesByUserId?.[uid]) && schedulesByUserId[uid].length > 0;
       if (hasSchedule && !Number.isFinite(schedStartMs)) return 0;
 
-      const schedEndMs = getTodayScheduleEndUtcMs(uid);
-      const endMs = Number.isFinite(schedEndMs) ? Math.min(nowMs, schedEndMs) : nowMs;
+      // Do not cap live duration at scheduled end; keep counting until clock-out.
+      const endMs = nowMs;
       const countedStartMs = Number.isFinite(schedStartMs) ? Math.max(lastIn.t, schedStartMs) : lastIn.t;
 
       const ms = Math.max(0, endMs - countedStartMs);
@@ -1427,7 +1475,6 @@ export default function App() {
     [
       getTodayBusinessLogsForUser,
       getTodayScheduleStartUtcMs,
-      getTodayScheduleEndUtcMs,
       nowMs,
       schedulesByUserId,
     ]
@@ -2025,7 +2072,7 @@ export default function App() {
       const next = {};
 
       for (const row of Array.isArray(rows) ? rows : []) {
-        const uid = String(row?.userId || "");
+        const uid = String(row?.userId || "").trim();
         if (!uid) continue;
 
         next[uid] = row;
@@ -2089,7 +2136,13 @@ export default function App() {
     setLoadingBreakUsage(true);
 
     try {
-      const items = validEmployees.map((emp) => String(getUserId(emp)));
+      const items = Array.from(
+        new Set(
+          validEmployees
+            .map((emp) => String(getUserId(emp) || "").trim())
+            .filter(Boolean)
+        )
+      );
 
       const results = await mapWithConcurrency(items, 6, async (userId) => {
         const logs = await getBreakLogsForUserOnDate(userId, new Date());
@@ -2118,7 +2171,11 @@ export default function App() {
           } else if (Object.prototype.hasOwnProperty.call(prev || {}, userId)) {
             merged[userId] = prev[userId];
           } else {
-            merged[userId] = 0;
+            merged[userId] = {
+              totalMinutes: 0,
+              activeBreakMinutes: 0,
+              remainingMinutes: DAILY_BREAK_LIMIT_MINUTES,
+            };
           }
         }
         return merged;
@@ -2143,6 +2200,168 @@ export default function App() {
       setLoadingBreakUsage(false);
     }
   }, [isAuthenticated, user, validEmployees, loadingUsers]);
+
+  const reloadBreakStatusForUser = useCallback(
+    async (userId) => {
+      const uid = String(userId || "").trim();
+      if (!uid) return;
+      if (!isAuthenticated || !user) return;
+
+      try {
+        const [activeBreak, logs] = await Promise.all([
+          getActiveBreakForUser(uid),
+          getBreakLogsForUserOnDate(uid, new Date()),
+        ]);
+
+        setActiveBreaksByUserId((prev) => {
+          const next = { ...(prev && typeof prev === "object" ? prev : {}) };
+          if (activeBreak) {
+            next[uid] = activeBreak;
+          } else {
+            delete next[uid];
+          }
+          return next;
+        });
+
+        const usage = calculateBreakUsageMinutes(logs, Date.now());
+        setBreakUsageByUserId((prev) => ({
+          ...(prev && typeof prev === "object" ? prev : {}),
+          [uid]: usage && typeof usage === "object"
+            ? usage
+            : {
+                totalMinutes: 0,
+                activeBreakMinutes: 0,
+                remainingMinutes: DAILY_BREAK_LIMIT_MINUTES,
+              },
+        }));
+
+        setBreakLogsByUserId((prev) => ({
+          ...(prev && typeof prev === "object" ? prev : {}),
+          [uid]: Array.isArray(logs) ? logs : [],
+        }));
+      } catch (err) {
+        console.error(`Failed to load break status for user ${uid}:`, err);
+      }
+    },
+    [isAuthenticated, user]
+  );
+
+  useEffect(() => {
+    if (!isAuthenticated || !user || !currentViewerIdentity?.userId) return undefined;
+
+    const unsubscribe = subscribeBreakNotificationUpdates(
+      (payload) => {
+        if (payload?.isInitial) return;
+        if (!Number(payload?.changeCount || 0)) return;
+
+        const changedRows = Array.isArray(payload?.changedRows) ? payload.changedRows : [];
+        const hasRelevantChange =
+          changedRows.length === 0 ||
+          changedRows.some((row) => isNotificationChangeRelevantForViewer(row, currentViewerIdentity));
+
+        if (!hasRelevantChange) return;
+
+        reloadNotifications().catch((err) => {
+          console.error("Realtime notification refresh failed:", err);
+        });
+      },
+      (err) => {
+        console.error("Notification listener error:", err);
+      }
+    );
+
+    return () => {
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
+  }, [
+    isAuthenticated,
+    user,
+    currentViewerIdentity?.userId,
+    currentViewerIdentity?.role,
+    reloadNotifications,
+  ]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) return undefined;
+
+    const unsubscribe = subscribeActiveBreakUpdates(
+      (payload) => {
+        if (payload?.isInitial) return;
+        if (!Number(payload?.changeCount || 0)) return;
+
+        const changedUserIds = Array.from(
+          new Set(
+            (Array.isArray(payload?.changedUserIds) ? payload.changedUserIds : [])
+              .map((id) => String(id || "").trim())
+              .filter(Boolean)
+          )
+        );
+
+        if (!changedUserIds.length) {
+          Promise.all([reloadActiveBreaks(), reloadBreakUsage()]).catch((err) => {
+            console.error("Realtime break refresh failed:", err);
+          });
+          return;
+        }
+
+        Promise.all(changedUserIds.map((uid) => reloadBreakStatusForUser(uid))).catch((err) => {
+          console.error("Realtime break user refresh failed:", err);
+        });
+      },
+      (err) => {
+        console.error("Active break listener error:", err);
+      }
+    );
+
+    return () => {
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
+  }, [
+    isAuthenticated,
+    user,
+    reloadActiveBreaks,
+    reloadBreakUsage,
+    reloadBreakStatusForUser,
+  ]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) {
+      breakStartupHydrationKeyRef.current = "";
+      return;
+    }
+
+    if (loadingUsers) return;
+
+    const sessionKey = authSessionKey || "__authenticated__";
+    const nextHydrationKey = `${sessionKey}|${endDate}|${validEmployeeIdsKey}`;
+    if (breakStartupHydrationKeyRef.current === nextHydrationKey) return;
+
+    breakStartupHydrationKeyRef.current = nextHydrationKey;
+    let cancelled = false;
+
+    (async () => {
+      await reloadActiveBreaks();
+      if (cancelled) return;
+      await reloadBreakUsage();
+    })().catch((err) => {
+      if (!cancelled) {
+        console.error("Failed to hydrate break state on startup:", err);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isAuthenticated,
+    user,
+    authSessionKey,
+    endDate,
+    loadingUsers,
+    validEmployeeIdsKey,
+    reloadActiveBreaks,
+    reloadBreakUsage,
+  ]);
 
   const reloadEmployeeProfiles = useCallback(async () => {
     if (!isAuthenticated || !user) {
@@ -3097,40 +3316,29 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    let running = false;
 
-    const run = async () => {
-      if (cancelled || running) return;
-
-      running = true;
-      try {
-        const handlers = periodicRefreshHandlersRef.current;
-        if (cancelled) return;
-        await handlers.reloadActiveBreaks();
-        if (cancelled) return;
-        await handlers.reloadBreakUsage();
-        if (cancelled) return;
-        await handlers.reloadNotifications();
-        if (cancelled) return;
-        await handlers.reloadAnnouncements();
-        if (cancelled) return;
-        await handlers.reloadOverBreakNotes();
-        if (cancelled) return;
-        await handlers.reloadPortalUserRequests();
-      } finally {
-        running = false;
-      }
+    const runInitialLoad = async () => {
+      const handlers = periodicRefreshHandlersRef.current;
+      if (cancelled) return;
+      await handlers.reloadActiveBreaks();
+      if (cancelled) return;
+      await handlers.reloadBreakUsage();
+      if (cancelled) return;
+      await handlers.reloadNotifications();
+      if (cancelled) return;
+      await handlers.reloadAnnouncements();
+      if (cancelled) return;
+      await handlers.reloadOverBreakNotes();
+      if (cancelled) return;
+      await handlers.reloadPortalUserRequests();
     };
 
-    run();
-
-    const id = setInterval(() => {
-      run();
-    }, 15000);
+    runInitialLoad().catch((err) => {
+      if (!cancelled) console.error("Initial cached portal data load failed:", err);
+    });
 
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
   }, []);
 
@@ -3153,6 +3361,24 @@ export default function App() {
   useEffect(() => {
     reloadAssignments();
   }, [reloadAssignments]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user || !currentViewerIdentity?.userId) {
+      setNotifications((prev) => (prev.length ? [] : prev));
+      setArchivedNotifications((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    reloadNotifications();
+  }, [isAuthenticated, user, currentViewerIdentity?.userId, reloadNotifications]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) {
+      setOverBreakNotes((prev) => (prev.length ? [] : prev));
+      setArchivedOverBreakNotes((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    reloadOverBreakNotes();
+  }, [isAuthenticated, user, reloadOverBreakNotes]);
 
   useEffect(() => {
     reloadAnnouncements();
@@ -3327,6 +3553,12 @@ export default function App() {
 
       const uid = String(userId);
 
+      const cachedHistory = appDataCacheRef.current.fullHistoryByUserId?.[uid];
+      if (Array.isArray(cachedHistory)) {
+        setHistoryByUserId((p) => (Array.isArray(p?.[uid]) ? p : { ...p, [uid]: cachedHistory }));
+        return cachedHistory;
+      }
+
       if (historyRequestedRef.current.has(uid)) {
         return Array.isArray(historyByUserId?.[uid]) ? historyByUserId[uid] : [];
       }
@@ -3356,6 +3588,7 @@ export default function App() {
           { [uid]: arr }
         );
         logAbsentStatusScan(`full-history user ${uid}`, { [uid]: arr });
+        appDataCacheRef.current.fullHistoryByUserId[uid] = arr;
         setHistoryByUserId((p) => ({ ...p, [uid]: arr }));
         return arr;
       } catch (e) {
@@ -3424,8 +3657,12 @@ export default function App() {
       setUsersError("");
 
       try {
-        const data = await api.getUsersByDepartment(departmentId, ac.signal);
+        const cachedUsers = appDataCacheRef.current.users;
+        const data = Array.isArray(cachedUsers)
+          ? cachedUsers
+          : await api.getUsersByDepartment(departmentId, ac.signal);
         const fetchedUsers = Array.isArray(data) ? data : [];
+        appDataCacheRef.current.users = fetchedUsers;
 
         if (!profileImagesInitializedRef.current) {
           const initialProfileImageMap = buildProfileImageMapByUserId(fetchedUsers);
@@ -3451,7 +3688,7 @@ export default function App() {
     return () => ac.abort();
   }, [apiKey, departmentId, api]);
 
-  const reloadSchedules = useCallback(async () => {
+  const reloadSchedules = useCallback(async ({ force = false } = {}) => {
     if (!api) {
       // Keep previous data while API/session wiring is not ready.
       return;
@@ -3477,8 +3714,24 @@ export default function App() {
 
     try {
       const items = validEmployees.map((emp) => String(getUserId(emp)));
+      const cache = appDataCacheRef.current.schedulesByUserId;
+      const missingItems = force
+        ? items
+        : items.filter((userId) => !Array.isArray(cache?.[userId]));
 
-      const results = await mapWithConcurrency(items, 8, async (userId) => {
+      if (!missingItems.length) {
+        setSchedulesByUserId((prev) => {
+          const merged = {};
+          for (const userId of items) {
+            merged[userId] = Array.isArray(cache[userId]) ? cache[userId] : prev?.[userId] || [];
+          }
+          return merged;
+        });
+        setScheduleErrorsByUserId({});
+        return;
+      }
+
+      const results = await mapWithConcurrency(missingItems, 8, async (userId) => {
         const sched = await api.getUserSchedule(userId, ac.signal);
         return { userId, sched: Array.isArray(sched) ? sched : [] };
       });
@@ -3487,9 +3740,10 @@ export default function App() {
       const errs = {};
 
       for (let idx = 0; idx < results.length; idx++) {
-        const userId = items[idx];
+        const userId = missingItems[idx];
         if (results[idx].ok) {
           next[userId] = results[idx].value.sched;
+          cache[userId] = results[idx].value.sched;
         } else {
           errs[userId] = results[idx].error?.message || "Failed to load schedule";
         }
@@ -3522,7 +3776,7 @@ export default function App() {
     reloadSchedules();
   }, [reloadSchedules]);
 
-  const reloadAttendance = useCallback(async () => {
+  const reloadAttendance = useCallback(async ({ force = false } = {}) => {
     if (!api) {
       // Keep previous data while API/session wiring is not ready.
       return;
@@ -3548,8 +3802,26 @@ export default function App() {
 
     try {
       const items = validEmployees.map((emp) => String(getUserId(emp)));
+      const rangeKey = `${startDate}|${endDate}|${businessTimeZone}`;
+      const rangeCache = appDataCacheRef.current.attendanceByKey[rangeKey] || {};
+      appDataCacheRef.current.attendanceByKey[rangeKey] = rangeCache;
+      const missingItems = force
+        ? items
+        : items.filter((userId) => !Array.isArray(rangeCache?.[userId]));
 
-      const results = await mapWithConcurrency(items, 6, async (userId) => {
+      if (!missingItems.length) {
+        setLogsByUserId((prev) => {
+          const merged = {};
+          for (const userId of items) {
+            merged[userId] = Array.isArray(rangeCache[userId]) ? rangeCache[userId] : prev?.[userId] || [];
+          }
+          return merged;
+        });
+        setAttendanceErrorsByUserId({});
+        return;
+      }
+
+      const results = await mapWithConcurrency(missingItems, 6, async (userId) => {
         const payload = await api.getAttendanceLogs({ userId, startDate, endDate }, ac.signal);
         return {
           userId,
@@ -3563,10 +3835,11 @@ export default function App() {
       const errs = {};
 
       for (let idx = 0; idx < results.length; idx++) {
-        const userId = items[idx];
+        const userId = missingItems[idx];
         if (results[idx].ok) {
           nextLogs[userId] = results[idx].value.logs;
           nextRawPayloads[userId] = results[idx].value.payload;
+          rangeCache[userId] = results[idx].value.logs;
         } else {
           errs[userId] = results[idx].error?.message || "Failed to load attendance logs";
         }
@@ -3601,7 +3874,7 @@ export default function App() {
     reloadAttendance();
   }, [reloadAttendance]);
 
-  const reloadTodayLogs = useCallback(async () => {
+  const reloadTodayLogs = useCallback(async ({ force = false } = {}) => {
     if (!api) {
       // Keep previous data while API/session wiring is not ready.
       return;
@@ -3627,8 +3900,25 @@ export default function App() {
 
     try {
       const items = validEmployees.map((emp) => String(getUserId(emp)));
+      const todayCacheKey = `${todayBusinessKey}|${attendanceResetTime}|${businessTimeZone}`;
+      const dayCache = appDataCacheRef.current.todayLogsByKey[todayCacheKey] || {};
+      appDataCacheRef.current.todayLogsByKey[todayCacheKey] = dayCache;
+      const missingItems = force
+        ? items
+        : items.filter((userId) => !Array.isArray(dayCache?.[userId]));
 
-      const results = await mapWithConcurrency(items, 8, async (userId) => {
+      if (!missingItems.length) {
+        setTodayLogsByUserId((prev) => {
+          const merged = {};
+          for (const userId of items) {
+            merged[userId] = Array.isArray(dayCache[userId]) ? dayCache[userId] : prev?.[userId] || [];
+          }
+          return merged;
+        });
+        return;
+      }
+
+      const results = await mapWithConcurrency(missingItems, 8, async (userId) => {
         const payload = await api.getAttendanceLogs(
           { userId, startDate: fetchStart, endDate: fetchEnd },
           ac.signal
@@ -3648,10 +3938,11 @@ export default function App() {
       const next = {};
       const nextRawPayloads = {};
       for (let idx = 0; idx < results.length; idx++) {
-        const userId = items[idx];
+        const userId = missingItems[idx];
         if (results[idx].ok) {
           next[userId] = results[idx].value.logs;
           nextRawPayloads[userId] = results[idx].value.payload;
+          dayCache[userId] = results[idx].value.logs;
         }
       }
 
@@ -3683,29 +3974,8 @@ export default function App() {
     reloadTodayLogs();
   }, [reloadTodayLogs]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let running = false;
-
-    const run = async () => {
-      if (cancelled || running) return;
-      running = true;
-      try {
-        await reloadTodayLogs();
-      } finally {
-        running = false;
-      }
-    };
-
-    const id = setInterval(() => {
-      run();
-    }, 15000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [reloadTodayLogs]);
+  // Cost control: no attendance polling. Initial data is cached in App.jsx.
+  // Refresh only via explicit user actions or browser refresh.
 
   const liveAgentsForSidebar = useMemo(() => {
     const idToName = new Map();
@@ -4431,6 +4701,7 @@ export default function App() {
                   await reloadNotifications();
                   await reloadOverBreakNotes();
                 }}
+                onRefreshBreakForUser={reloadBreakStatusForUser}
                 onOpenTaskDetails={handleOpenAssignmentTask}
                 pageData={sharedPageData}
               />

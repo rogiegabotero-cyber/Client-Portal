@@ -4,6 +4,7 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
+  onSnapshot,
   serverTimestamp,
   Timestamp,
   doc,
@@ -705,6 +706,35 @@ export async function getActiveBreaks() {
   return rows;
 }
 
+export function subscribeActiveBreakUpdates(onChange, onError) {
+  let isInitial = true;
+
+  return onSnapshot(
+    query(collection(db, BREAK_LOGS_COLLECTION), where("isActive", "==", true)),
+    (snapshot) => {
+      const changes = Array.isArray(snapshot?.docChanges?.()) ? snapshot.docChanges() : [];
+      const changedUserIds = Array.from(
+        new Set(
+          changes
+            .map((change) => String(change?.doc?.data?.()?.userId || "").trim())
+            .filter(Boolean)
+        )
+      );
+
+      if (typeof onChange === "function") {
+        onChange({
+          isInitial,
+          changeCount: changes.length,
+          changedUserIds,
+        });
+      }
+
+      isInitial = false;
+    },
+    onError
+  );
+}
+
 export async function getBreakLogsForUserOnDate(userId, date = new Date()) {
   const uid = String(userId || "").trim();
   if (!uid) return [];
@@ -1036,6 +1066,37 @@ export async function getNotificationsForUser(user, options = {}) {
   });
 
   return archiveFiltered;
+}
+
+export function subscribeBreakNotificationUpdates(onChange, onError) {
+  let isInitial = true;
+
+  return onSnapshot(
+    collection(db, BREAK_NOTIFICATIONS_COLLECTION),
+    (snapshot) => {
+      const changes = Array.isArray(snapshot?.docChanges?.()) ? snapshot.docChanges() : [];
+      const changedRows = changes.map((change) => {
+        const row = change?.doc?.data?.() || {};
+        return {
+          userId: String(row?.userId || "").trim(),
+          audience: String(row?.audience || "").trim().toLowerCase(),
+          role: normalizeRoleValue(row?.role),
+          type: String(row?.type || "").trim().toLowerCase(),
+        };
+      });
+
+      if (typeof onChange === "function") {
+        onChange({
+          isInitial,
+          changeCount: changes.length,
+          changedRows,
+        });
+      }
+
+      isInitial = false;
+    },
+    onError
+  );
 }
 
 export async function markNotificationRead(notificationId) {

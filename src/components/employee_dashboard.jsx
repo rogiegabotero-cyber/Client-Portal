@@ -4,6 +4,7 @@ import {
   startBreak,
   endBreak,
   DAILY_BREAK_LIMIT_MINUTES,
+  calculateBreakUsageMinutes,
   getBreakLogsByUserIdsInRange,
 } from "../services/breakService";
 import {
@@ -357,6 +358,8 @@ const EMPTY_NOTEPAD_HTML = '<p><br></p>';
 const NOTEPAD_VIEW_MY = "my";
 const NOTEPAD_VIEW_GROUP = "group";
 const NOTEPAD_VIEW_BIN = "bin";
+const NOTEPAD_DOCS_CACHE_BY_EMPLOYEE = new Map();
+const NOTEPAD_NOTIFICATION_EVENT_CACHE = new Set();
 
 const sanitizeNotepadMemberUserIds = (value = []) =>
   Array.from(
@@ -655,10 +658,13 @@ export default function EmployeeDashboard({
   activeBreaksByUserId = {},
   breakUsageByUserId = {},
   onBreakStatusChanged,
+  onRefreshBreakForUser,
   onOpenTaskDetails,
   pageData = null,
 }) {
   const requestedHistoryRef = useRef(new Set());
+  const breakLogsCacheRef = useRef({});
+  const notepadMetaLoadedRef = useRef(false);
 
   const employeeIds = useMemo(
     () =>
@@ -717,7 +723,7 @@ export default function EmployeeDashboard({
   const taskFilterMenuRef = useRef(null);
   const notepadEditorRef = useRef(null);
   const notepadDueSoonNotifyInFlightRef = useRef(new Set());
-  const notepadNotificationEventCacheRef = useRef(new Set());
+  const notepadNotificationEventCacheRef = useRef(NOTEPAD_NOTIFICATION_EVENT_CACHE);
 
   const viewerRole = normalize(
     pageData?.viewer?.role || pageData?.currentUser?.role || pageData?.user?.role || ""
@@ -754,6 +760,10 @@ export default function EmployeeDashboard({
 
     return employeeIds[0] || "";
   }, [lockedEmployeeId, selectedEmployeeId, localSelectedId, employeeIds]);
+  const normalizedSelectedUserId = useMemo(
+    () => String(effectiveSelectedId || "").trim(),
+    [effectiveSelectedId]
+  );
 
   const setSelected = (id) => {
     const requestedId = String(id || "");
@@ -1043,24 +1053,8 @@ export default function EmployeeDashboard({
     });
   }, [effectiveSelectedId, onFetchFullHistory, historyByUserId, loadingHistoryByUserId]);
 
-  useEffect(() => {
-    if (!onFetchFullHistory) return;
-
-    const list = Array.isArray(employees) ? employees : [];
-    for (const emp of list) {
-      const uid = String(getUserId(emp) ?? emp?.userId ?? emp?.id ?? "").trim();
-      if (!uid) continue;
-
-      const existing = Array.isArray(historyByUserId?.[uid]) && historyByUserId[uid].length > 0;
-      const loading = !!loadingHistoryByUserId?.[uid];
-      if (existing || loading || requestedHistoryRef.current.has(uid)) continue;
-
-      requestedHistoryRef.current.add(uid);
-      Promise.resolve(onFetchFullHistory(uid)).catch(() => {
-        requestedHistoryRef.current.delete(uid);
-      });
-    }
-  }, [employees, onFetchFullHistory, historyByUserId, loadingHistoryByUserId]);
+  // Cost control: do not prefetch full history for every employee.
+  // Full history is loaded only for the selected employee, then cached by App.jsx.
 
   useEffect(() => {
     if (!isBreakLogsDrawerOpen) return;
@@ -1073,6 +1067,15 @@ export default function EmployeeDashboard({
       return;
     }
 
+    const cacheKey = `${uid}|${breakLogFilter}`;
+    const cachedRows = breakLogsCacheRef.current[cacheKey];
+    if (Array.isArray(cachedRows) && breakLogRefreshToken === 0) {
+      setBreakLogRows(cachedRows);
+      setBreakLogError("");
+      setBreakLogLoading(false);
+      return;
+    }
+
     let active = true;
     setBreakLogLoading(true);
     setBreakLogError("");
@@ -1080,7 +1083,9 @@ export default function EmployeeDashboard({
     Promise.resolve(getBreakLogsByUserIdsInRange([uid]))
       .then((rowsByUserId) => {
         if (!active) return;
-        setBreakLogRows(Array.isArray(rowsByUserId?.[uid]) ? rowsByUserId[uid] : []);
+        const rows = Array.isArray(rowsByUserId?.[uid]) ? rowsByUserId[uid] : [];
+        breakLogsCacheRef.current[cacheKey] = rows;
+        setBreakLogRows(rows);
       })
       .catch((err) => {
         if (!active) return;
@@ -1202,13 +1207,59 @@ export default function EmployeeDashboard({
     return days.size;
   }, [nowMs, hasHistory, historyLogs, logsToday, businessTimeZone]);
 
-  const isOnBreak = !!activeBreaksByUserId?.[String(effectiveSelectedId)];
-  const activeBreak = activeBreaksByUserId?.[String(effectiveSelectedId)] || null;
-  const breakUsage = breakUsageByUserId?.[String(effectiveSelectedId)] || {
-    totalMinutes: 0,
-    activeBreakMinutes: 0,
-    remainingMinutes: DAILY_BREAK_LIMIT_MINUTES,
-  };
+  const selectedBreakLogs = useMemo(() => {
+    const uid = normalizedSelectedUserId;
+    if (!uid) return [];
+    const rows =
+      pageData?.breakLogsByUserId?.[uid] ||
+      pageData?.breakLogsByUserId?.[String(effectiveSelectedId || "")];
+    return Array.isArray(rows) ? rows : [];
+  }, [normalizedSelectedUserId, effectiveSelectedId, pageData]);
+
+  const derivedBreakUsage = useMemo(() => {
+    if (!selectedBreakLogs.length) return null;
+    const usage = calculateBreakUsageMinutes(
+      selectedBreakLogs,
+      Number.isFinite(liveNowMs) ? liveNowMs : Date.now()
+    );
+    if (!usage || typeof usage !== "object") return null;
+    return usage;
+  }, [selectedBreakLogs, liveNowMs]);
+
+  const selectedBreakUsageRaw =
+    breakUsageByUserId?.[normalizedSelectedUserId] ||
+    breakUsageByUserId?.[String(effectiveSelectedId || "")] ||
+    {};
+  const selectedBreakUsage =
+    selectedBreakUsageRaw && typeof selectedBreakUsageRaw === "object" ? selectedBreakUsageRaw : {};
+
+  const breakUsage = useMemo(() => {
+    const storedTotalMinutes = Math.max(0, Number(selectedBreakUsage.totalMinutes || 0));
+    const storedActiveMinutes = Math.max(0, Number(selectedBreakUsage.activeBreakMinutes || 0));
+    const derivedTotalMinutes = Math.max(0, Number(derivedBreakUsage?.totalMinutes || 0));
+    const derivedActiveMinutes = Math.max(0, Number(derivedBreakUsage?.activeBreakMinutes || 0));
+    const totalMinutes = Math.max(storedTotalMinutes, derivedTotalMinutes);
+    const activeBreakMinutes = Math.max(storedActiveMinutes, derivedActiveMinutes);
+
+    return {
+      totalMinutes,
+      activeBreakMinutes,
+      remainingMinutes: Math.max(0, DAILY_BREAK_LIMIT_MINUTES - totalMinutes),
+    };
+  }, [selectedBreakUsage, derivedBreakUsage]);
+
+  const activeBreak =
+    activeBreaksByUserId?.[normalizedSelectedUserId] ||
+    activeBreaksByUserId?.[String(effectiveSelectedId || "")] ||
+    null;
+  const isOnBreak = !!activeBreak;
+
+  useEffect(() => {
+    if (typeof onRefreshBreakForUser !== "function") return;
+    if (!normalizedSelectedUserId) return;
+
+    Promise.resolve(onRefreshBreakForUser(normalizedSelectedUserId)).catch(() => {});
+  }, [normalizedSelectedUserId, onRefreshBreakForUser]);
 
   useEffect(() => {
     if (!Number.isFinite(nowMs)) return;
@@ -1291,7 +1342,7 @@ export default function EmployeeDashboard({
     setBreakError("");
 
     try {
-      const userId = String(getUserId(employee) ?? "");
+      const userId = String(getUserId(employee) ?? effectiveSelectedId ?? "").trim();
       const name = employee?.name || employee?.fullName || employee?.displayName || "";
       const email = employee?.email || "";
 
@@ -1314,7 +1365,30 @@ export default function EmployeeDashboard({
 
       setBreakLogRefreshToken((prev) => prev + 1);
     } catch (err) {
-      setBreakError(err?.message || "Failed to update break");
+      const rawMessage = String(err?.message || "").trim();
+      const normalizedMessage = rawMessage.toLowerCase();
+      const hasBreakStateMismatch =
+        normalizedMessage.includes("already has an active break") ||
+        normalizedMessage.includes("no active break found");
+
+      if (hasBreakStateMismatch && typeof onBreakStatusChanged === "function") {
+        try {
+          await onBreakStatusChanged();
+          setBreakLogRefreshToken((prev) => prev + 1);
+          setBreakError(
+            normalizedMessage.includes("already has an active break")
+              ? "User is already on break. Synced latest status."
+              : "User is not on an active break. Synced latest status."
+          );
+          return;
+        } catch (syncErr) {
+          const syncMessage = String(syncErr?.message || "").trim();
+          setBreakError(syncMessage || rawMessage || "Failed to update break");
+          return;
+        }
+      }
+
+      setBreakError(rawMessage || "Failed to update break");
     } finally {
       setBreakLoading(false);
     }
@@ -1541,23 +1615,37 @@ export default function EmployeeDashboard({
     [syncNotepadDraftFromEditor]
   );
 
-  const getNotepadDocsForEmployee = useCallback(async (employeeUserIdValue = "") => {
-    const employeeUserId = String(employeeUserIdValue || "").trim();
-    if (!employeeUserId) return [];
+  const getNotepadDocsForEmployee = useCallback(
+    async (employeeUserIdValue = "", options = {}) => {
+      const force = !!options?.force;
+      const employeeUserId = String(employeeUserIdValue || "").trim();
+      if (!employeeUserId) return [];
 
-    const notesCollection = collection(db, EMPLOYEE_NOTEPAD_COLLECTION);
-    const [personalSnapshot, groupSnapshot] = await Promise.all([
-      getDocs(query(notesCollection, where("employeeUserId", "==", employeeUserId))),
-      getDocs(query(notesCollection, where("memberUserIds", "array-contains", employeeUserId))),
-    ]);
+      if (!force) {
+        const cachedDocs = NOTEPAD_DOCS_CACHE_BY_EMPLOYEE.get(employeeUserId);
+        if (Array.isArray(cachedDocs)) {
+          return cachedDocs;
+        }
+      }
 
-    const docsById = new Map();
-    for (const noteDoc of personalSnapshot.docs) docsById.set(noteDoc.id, noteDoc);
-    for (const noteDoc of groupSnapshot.docs) docsById.set(noteDoc.id, noteDoc);
-    return Array.from(docsById.values());
-  }, []);
+      const notesCollection = collection(db, EMPLOYEE_NOTEPAD_COLLECTION);
+      const [personalSnapshot, groupSnapshot] = await Promise.all([
+        getDocs(query(notesCollection, where("employeeUserId", "==", employeeUserId))),
+        getDocs(query(notesCollection, where("memberUserIds", "array-contains", employeeUserId))),
+      ]);
 
-  const refreshNotepadIconMeta = useCallback(async () => {
+      const docsById = new Map();
+      for (const noteDoc of personalSnapshot.docs) docsById.set(noteDoc.id, noteDoc);
+      for (const noteDoc of groupSnapshot.docs) docsById.set(noteDoc.id, noteDoc);
+      const mergedDocs = Array.from(docsById.values());
+      NOTEPAD_DOCS_CACHE_BY_EMPLOYEE.set(employeeUserId, mergedDocs);
+      return mergedDocs;
+    },
+    []
+  );
+
+  const refreshNotepadIconMeta = useCallback(async (options = {}) => {
+    const force = !!options?.force;
     const employeeUserId = String(effectiveSelectedId || "").trim();
     if (!employeeUserId) {
       setNotepadIconCount(0);
@@ -1566,7 +1654,7 @@ export default function EmployeeDashboard({
     }
 
     try {
-      const noteDocs = await getNotepadDocsForEmployee(employeeUserId);
+      const noteDocs = await getNotepadDocsForEmployee(employeeUserId, { force });
       const rows = noteDocs.map((noteDoc) => {
         const mapped = mapNotepadDocToRow(noteDoc, employeeUserId);
         return {
@@ -1710,7 +1798,8 @@ export default function EmployeeDashboard({
   ]);
 
   const loadNotepadNotes = useCallback(
-    async (preferredNoteId = "") => {
+    async (preferredNoteId = "", options = {}) => {
+      const force = !!options?.force;
       const employeeUserId = String(effectiveSelectedId || "").trim();
       if (!employeeUserId) {
         setNotepadNotes([]);
@@ -1733,7 +1822,7 @@ export default function EmployeeDashboard({
       setNotepadError("");
 
       try {
-        const noteDocs = await getNotepadDocsForEmployee(employeeUserId);
+        const noteDocs = await getNotepadDocsForEmployee(employeeUserId, { force });
         const rows = noteDocs
           .map((noteDoc) => mapNotepadDocToRow(noteDoc, employeeUserId))
           .sort((a, b) => {
@@ -1909,8 +1998,8 @@ export default function EmployeeDashboard({
         notepadEditorRef.current.focus();
       }
       setNotepadStatusText("Group note created.");
-      await refreshNotepadIconMeta();
-      await loadNotepadNotes(docRef.id);
+      await refreshNotepadIconMeta({ force: true });
+      await loadNotepadNotes(docRef.id, { force: true });
     } catch (err) {
       setNotepadError(err?.message || "Failed to create group note.");
     } finally {
@@ -1993,8 +2082,8 @@ export default function EmployeeDashboard({
         }
 
         setNotepadStatusText(nextCompleted ? "Marked as complete." : "Marked as active.");
-        await refreshNotepadIconMeta();
-        await loadNotepadNotes(noteId);
+        await refreshNotepadIconMeta({ force: true });
+        await loadNotepadNotes(noteId, { force: true });
       } catch (err) {
         setNotepadError(err?.message || "Failed to update note status.");
       } finally {
@@ -2038,8 +2127,8 @@ export default function EmployeeDashboard({
           setSelectedNotepadNoteId("");
         }
         setNotepadStatusText("Moved to recycle bin.");
-        await refreshNotepadIconMeta();
-        await loadNotepadNotes();
+        await refreshNotepadIconMeta({ force: true });
+        await loadNotepadNotes("", { force: true });
       } catch (err) {
         setNotepadError(err?.message || "Failed to move note to recycle bin.");
       } finally {
@@ -2079,8 +2168,8 @@ export default function EmployeeDashboard({
         });
 
         setNotepadStatusText("Note restored.");
-        await refreshNotepadIconMeta();
-        await loadNotepadNotes(noteId);
+        await refreshNotepadIconMeta({ force: true });
+        await loadNotepadNotes(noteId, { force: true });
       } catch (err) {
         setNotepadError(err?.message || "Failed to restore note.");
       } finally {
@@ -2110,8 +2199,8 @@ export default function EmployeeDashboard({
       try {
         await deleteDoc(doc(db, EMPLOYEE_NOTEPAD_COLLECTION, noteId));
         setNotepadStatusText("Note permanently deleted.");
-        await refreshNotepadIconMeta();
-        await loadNotepadNotes();
+        await refreshNotepadIconMeta({ force: true });
+        await loadNotepadNotes("", { force: true });
       } catch (err) {
         setNotepadError(err?.message || "Failed to delete note.");
       } finally {
@@ -2289,8 +2378,8 @@ export default function EmployeeDashboard({
         notepadEditorRef.current.innerHTML = finalContentHtml;
       }
       setNotepadStatusText("Saved.");
-      await refreshNotepadIconMeta();
-      await loadNotepadNotes(keepSelectedId);
+      await refreshNotepadIconMeta({ force: true });
+      await loadNotepadNotes(keepSelectedId, { force: true });
     } catch (err) {
       setNotepadError(err?.message || "Failed to save note.");
     } finally {
@@ -2318,17 +2407,9 @@ export default function EmployeeDashboard({
   }, [isNotepadDrawerOpen, loadNotepadNotes]);
 
   useEffect(() => {
+    if (notepadMetaLoadedRef.current) return;
+    notepadMetaLoadedRef.current = true;
     refreshNotepadIconMeta();
-  }, [refreshNotepadIconMeta]);
-
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      refreshNotepadIconMeta();
-    }, 15000);
-
-    return () => {
-      clearInterval(intervalId);
-    };
   }, [refreshNotepadIconMeta]);
 
   useEffect(() => {
