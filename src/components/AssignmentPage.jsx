@@ -46,7 +46,11 @@ const getViewerName = (viewer) =>
 
 const isAdminLikeRole = (role) => {
   const r = normalize(role);
-  return !!r;
+  return (
+    r === "admin" ||
+    r === "super_admin" ||
+    r === "super admin"
+  );
 };
 
 const canCreateAssignmentsForRole = (role) => {
@@ -102,6 +106,8 @@ const toYmd = (date) => {
   return d.toISOString().slice(0, 10);
 };
 
+const toYm = (date) => toYmd(date).slice(0, 7);
+
 const prettyMonth = (date) =>
   date.toLocaleDateString([], { month: "long", year: "numeric" });
 
@@ -116,6 +122,7 @@ const prettyDate = (dateStr) => {
   });
 };
 const MAX_CALENDAR_TASK_MARKERS = 6;
+const PRIORITY_TONE_ORDER = ["today", "urgent", "high", "medium", "low"];
 
 const getTaskStatusMeta = (task) => {
   const days = getDaysUntilDeadline(task?.deadlineDate);
@@ -137,6 +144,30 @@ const getTaskStatusMeta = (task) => {
     return { label: "Due Tomorrow", tone: "warning" };
   }
   return { label: task?.status || "Pending", tone: "pending" };
+};
+
+const getTaskPriorityTone = (task) => {
+  const days = getDaysUntilDeadline(task?.deadlineDate);
+  if (days === 0) return "today";
+
+  const priorityKey = normalizeStatusKey(task?.priority);
+  if (priorityKey === "urgent") return "urgent";
+  if (priorityKey === "high") return "high";
+  if (priorityKey === "low") return "low";
+  if (priorityKey === "medium") return "medium";
+  return "medium";
+};
+
+const getCalendarCellPriorityTone = (tasks = []) => {
+  const tones = new Set(
+    (Array.isArray(tasks) ? tasks : []).map((task) => getTaskPriorityTone(task)).filter(Boolean)
+  );
+
+  for (const tone of PRIORITY_TONE_ORDER) {
+    if (tones.has(tone)) return tone;
+  }
+
+  return "";
 };
 const ASSIGNMENT_STATUS_FILTERS = [
   { key: "all", label: "All" },
@@ -208,6 +239,7 @@ export default function AssignmentPage({
   const [showAllAssignmentsDrawer, setShowAllAssignmentsDrawer] = useState(false);
   const [showArchivedDrawer, setShowArchivedDrawer] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
+  const [calendarFilterMonth, setCalendarFilterMonth] = useState(() => toYm(new Date()));
   const [saving, setSaving] = useState(false);
   const [archivingTaskId, setArchivingTaskId] = useState("");
   const [archiveConfirmTask, setArchiveConfirmTask] = useState(null);
@@ -247,7 +279,7 @@ export default function AssignmentPage({
     [isManager]
   );
   const canPermanentlyDeleteArchived = useMemo(() => isManager, [isManager]);
-  const canViewMyTasks = useMemo(() => isManager, [isManager]);
+  const canViewMyTasks = useMemo(() => !!viewerId, [viewerId]);
   const isAnyDrawerOpen = useMemo(
     () => Boolean(showCreateAssignmentDrawer || showAllAssignmentsDrawer || showArchivedDrawer || selectedTask),
     [showCreateAssignmentDrawer, showAllAssignmentsDrawer, showArchivedDrawer, selectedTask]
@@ -535,10 +567,18 @@ export default function AssignmentPage({
     [searchedAssignments, statusFilter]
   );
 
+  const calendarFilteredAssignments = useMemo(() => {
+    const filterMonth = toText(calendarFilterMonth).trim();
+    if (!/^\d{4}-\d{2}$/.test(filterMonth)) return searchedAssignments;
+    return searchedAssignments.filter((task) =>
+      toText(task?.deadlineDate).trim().startsWith(`${filterMonth}-`)
+    );
+  }, [searchedAssignments, calendarFilterMonth]);
+
   const assignmentsByDate = useMemo(() => {
     const map = new Map();
 
-    for (const task of searchedAssignments) {
+    for (const task of calendarFilteredAssignments) {
       const key = String(task?.deadlineDate || "");
       if (!key) continue;
       if (!map.has(key)) map.set(key, []);
@@ -546,7 +586,7 @@ export default function AssignmentPage({
     }
 
     return map;
-  }, [searchedAssignments]);
+  }, [calendarFilteredAssignments]);
 
   const myTasks = useMemo(() => {
     if (!viewerId) return [];
@@ -558,8 +598,53 @@ export default function AssignmentPage({
       return String(item?.employeeUserId) === viewerId;
     });
   }, [assignments, viewerId]);
+  const assignedTasks = useMemo(() => {
+    return assignments.filter((item) => {
+      const assigneeIds = Array.isArray(item?.employeeUserIds)
+        ? item.employeeUserIds.map((id) => toText(id)).filter(Boolean)
+        : [];
+      if (assigneeIds.length > 0) return true;
+      if (toText(item?.employeeUserId)) return true;
+      return !!toText(item?.employeeName);
+    });
+  }, [assignments]);
 
   const calendarDates = useMemo(() => getCalendarGridDates(calendarMonth), [calendarMonth]);
+  const calendarHeaderLabel = useMemo(() => prettyMonth(calendarMonth), [calendarMonth]);
+
+  const handleCalendarFilterMonthChange = (value) => {
+    const next = toText(value).trim();
+    setCalendarFilterMonth(next);
+
+    if (/^\d{4}-\d{2}$/.test(next)) {
+      const d = new Date(`${next}-01T12:00:00`);
+      if (!Number.isNaN(d.getTime())) {
+        setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+      }
+    }
+  };
+
+  const handleCalendarPrev = () => {
+    setCalendarMonth((prev) => {
+      const next = new Date(prev.getFullYear(), prev.getMonth() - 1, 1);
+      setCalendarFilterMonth(toYm(next));
+      return next;
+    });
+  };
+
+  const handleCalendarNext = () => {
+    setCalendarMonth((prev) => {
+      const next = new Date(prev.getFullYear(), prev.getMonth() + 1, 1);
+      setCalendarFilterMonth(toYm(next));
+      return next;
+    });
+  };
+
+  const handleCalendarToday = () => {
+    const today = new Date();
+    setCalendarMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    setCalendarFilterMonth(toYm(today));
+  };
 
   const getTaskAccessState = (task) => {
     const assignedUserIds = Array.isArray(task?.employeeUserIds)
@@ -1194,11 +1279,12 @@ export default function AssignmentPage({
                 ) : (
                   myTasks.map((task) => {
                     const meta = getTaskStatusMeta(task);
+                    const priorityTone = getTaskPriorityTone(task);
                     return (
                       <button
                         type="button"
                         key={task.id}
-                        className="assignment-task-card compact"
+                        className={`assignment-task-card compact assignment-task-card-priority-${priorityTone}`}
                         onClick={() => openTaskDetails(task)}
                       >
                         <div className="assignment-task-card-top">
@@ -1217,6 +1303,43 @@ export default function AssignmentPage({
                 )}
               </div>
             </div>
+
+            <div className="assignment-panel">
+              <div className="assignment-panel-head">
+                <span>All Tasks</span>
+                <span className="assignment-count">{assignedTasks.length}</span>
+              </div>
+
+              <div className="assignment-task-list compact">
+                {assignedTasks.length === 0 ? (
+                  <div className="assignment-empty">No assigned tasks found.</div>
+                ) : (
+                  assignedTasks.map((task) => {
+                    const meta = getTaskStatusMeta(task);
+                    const priorityTone = getTaskPriorityTone(task);
+                    return (
+                      <button
+                        type="button"
+                        key={`assigned-${task.id}`}
+                        className={`assignment-task-card compact assignment-task-card-priority-${priorityTone}`}
+                        onClick={() => openTaskDetails(task)}
+                      >
+                        <div className="assignment-task-card-top">
+                          <div className="assignment-task-card-title">{task.title}</div>
+                          <span className={`assignment-status-pill ${meta.tone}`}>
+                            {meta.label}
+                          </span>
+                        </div>
+                        <div className="assignment-task-card-meta">
+                          <span>{task.employeeName || "Unassigned"}</span>
+                          <span>{prettyDate(task.deadlineDate)}</span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
           </section>
         ) : null}
 
@@ -1225,33 +1348,32 @@ export default function AssignmentPage({
             <div className="assignment-calendar-header">
               <div className="assignment-calendar-title-wrap">
                 <CalendarDays size={18} />
-                <h2>{prettyMonth(calendarMonth)}</h2>
+                <h2>{calendarHeaderLabel}</h2>
               </div>
 
               <div className="assignment-calendar-nav">
                 <button
                   type="button"
-                  onClick={() =>
-                    setCalendarMonth(
-                      (prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1)
-                    )
-                  }
+                  onClick={handleCalendarPrev}
                 >
                   <ChevronLeft size={16} />
                 </button>
+                <input
+                  type="month"
+                  className="assignment-calendar-date-filter"
+                  value={calendarFilterMonth}
+                  onChange={(e) => handleCalendarFilterMonthChange(e.target.value)}
+                  aria-label="Filter calendar by month"
+                />
                 <button
                   type="button"
-                  onClick={() => setCalendarMonth(new Date())}
+                  onClick={handleCalendarToday}
                 >
                   Today
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setCalendarMonth(
-                      (prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1)
-                    )
-                  }
+                  onClick={handleCalendarNext}
                 >
                   <ChevronRight size={16} />
                 </button>
@@ -1270,6 +1392,7 @@ export default function AssignmentPage({
               {calendarDates.map((dateObj) => {
                 const ymd = toYmd(dateObj);
                 const dayTasks = assignmentsByDate.get(ymd) || [];
+                const dayPriorityTone = getCalendarCellPriorityTone(dayTasks);
                 const visibleDayTasks = dayTasks.slice(0, MAX_CALENDAR_TASK_MARKERS);
                 const hiddenDayTaskCount = Math.max(0, dayTasks.length - visibleDayTasks.length);
                 const isCurrentMonth =
@@ -1281,6 +1404,7 @@ export default function AssignmentPage({
                     key={ymd}
                     className={[
                       "assignment-calendar-cell",
+                      dayPriorityTone ? `assignment-calendar-cell-priority-${dayPriorityTone}` : "",
                       isCurrentMonth ? "" : "is-other-month",
                       isToday ? "is-today" : "",
                     ].join(" ")}

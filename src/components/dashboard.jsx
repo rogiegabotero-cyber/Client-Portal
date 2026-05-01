@@ -839,14 +839,14 @@ const ATTENDANCE_BUCKETS = [
 ];
 
 const ATTENDANCE_SCORE_WEIGHTS = {
-  early: 1.2,
+  early: 1.0,
   onTime: 1.0,
-  late: 0.35,
-  pto: 0.75,
-  absent: 0.05,
+  late: 0.7,
+  pto: 1.0,
+  absent: 0,
   ncns: 0,
 };
-const ATTENDANCE_SCORE_BEST_DAY_POINTS = 1.2;
+const ATTENDANCE_SCORE_BEST_DAY_POINTS = 1.0;
 const AGENT_ATTENDANCE_MONTH_ALL = "ALL";
 const PAYABLE_MONTH_SELECT_NONE = "";
 
@@ -1031,6 +1031,8 @@ const PayableHoursTooltip = ({ active, payload, label }) => {
 
 export default function Dashboard({
   employees = [],
+  liveAgents = [],
+  loadingLiveAgents = false,
   loading = false,
   error = "",
   startDate,
@@ -1200,10 +1202,11 @@ export default function Dashboard({
     }
   }, [hoursWindow]);
 
-  const validEmployees = useMemo(
+  const allValidEmployees = useMemo(
     () => (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e)),
     [employees]
   );
+  const validEmployees = allValidEmployees;
 
   const defaultPayableCustomStartDate = useMemo(() => {
     const currentEnd = String(endDate || "");
@@ -2087,7 +2090,11 @@ export default function Dashboard({
         Number(counts.pto || 0) * ATTENDANCE_SCORE_WEIGHTS.pto +
         Number(counts.absent || 0) * ATTENDANCE_SCORE_WEIGHTS.absent +
         Number(counts.ncns || 0) * ATTENDANCE_SCORE_WEIGHTS.ncns;
-      const rate =
+      const hasPenaltyStatus =
+        Number(counts.late || 0) > 0 ||
+        Number(counts.absent || 0) > 0 ||
+        Number(counts.ncns || 0) > 0;
+      const rawRate =
         totalCounted > 0
           ? Math.max(
               0,
@@ -2101,6 +2108,7 @@ export default function Dashboard({
               )
             )
           : 0;
+      const rate = hasPenaltyStatus ? Math.min(rawRate, 99) : rawRate;
       const pieBackground = buildPieConicGradient(
         ATTENDANCE_BUCKETS.map((item) => ({
           label: item.label,
@@ -2122,7 +2130,7 @@ export default function Dashboard({
         counts,
         totalCounted,
         pieBackground,
-        tooltipSummary: `${tooltipSummary} | Score model: Early/On Time up, Late/Absent/NCNS down`,
+        tooltipSummary: `${tooltipSummary} | Score model: Early/On Time/PTO = full credit, Late/Absent reduce score, NCNS has the biggest deduction`,
       });
     }
 
@@ -3128,7 +3136,9 @@ export default function Dashboard({
             {hoursWindow === "today" ? (
               <div id="kpi" className="kpi">
                 <div className="kpiLabel">LIVE</div>
-                <div className="kpiValue">{data.counts.live}</div>
+                <div className="kpiValue">
+                  {loadingLiveAgents ? "..." : Array.isArray(liveAgents) ? liveAgents.length : 0}
+                </div>
               </div>
             ) : null}
           </div>
@@ -3450,7 +3460,7 @@ export default function Dashboard({
       <div className="agentAttendancePanel">
         <div className="agentAttendancePanelTop">
           <div className="agentAttendancePanelHead">
-            Best Attendance Per Employee (Early/On Time weighted, Late/Absent lower score)
+            Best Attendance Per Employee (Early/On Time/PTO full credit, Late/Absent lower score, NCNS biggest deduction)
           </div>
           <div className="agentAttendanceMonthFilter">
             <label htmlFor="agent-attendance-month-filter">Month</label>

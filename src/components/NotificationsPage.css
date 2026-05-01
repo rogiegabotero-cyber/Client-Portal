@@ -21,6 +21,10 @@
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
 }
 
 .notif-page-mark-all-btn:hover {
@@ -30,6 +34,21 @@
 .notif-page-mark-all-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.notif-page-btn-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(15, 23, 42, 0.25);
+  border-top-color: #0f172a;
+  border-radius: 999px;
+  animation: notifPageSpin 0.7s linear infinite;
+}
+
+@keyframes notifPageSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .notif-page-head-actions {

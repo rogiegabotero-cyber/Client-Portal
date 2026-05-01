@@ -2644,8 +2644,7 @@
 
 .agentAttendanceStrip {
   display: flex;
-  justify-content: center;
-  gap: 5rem;
+  justify-content: space-between;
   overflow-x: auto;
   padding: 5px 10px;
 }

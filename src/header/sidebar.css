@@ -23,8 +23,9 @@
   position: sticky;   /* ✅ sticks within the sidebar scroll container */
   top: 0;             /* ✅ stays at the top */
   z-index: 100;
-  background: linear-gradient(180deg, #83000b, #6b0009); /* ✅ prevents content showing under */
+  background: linear-gradient(180deg, #83000b, #630008); /* ✅ prevents content showing under */
   padding-bottom: 8px; /* optional spacing */
+  border-bottom: 1px solid rgba(231, 231, 231, 0.671);
 }
 
 /* Brand */
@@ -95,13 +96,11 @@
 
 /* Card */
 .sb-card {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  padding: 12px;
-  margin: 10px 8px 14px;
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.25);
+  padding: 5px;
+  margin: 5px 0px 7px 10px;
   position: sticky;
+  overflow: auto;
+  max-height: 175px;
 }
 
 .sb-card-title {
@@ -112,8 +111,9 @@
   letter-spacing: 0.6px;
   font-size: 12px;
   opacity: 0.95;
-  margin-bottom: 10px;
   text-transform: uppercase;
+  width: 100%;
+  padding-left: 8px;
 }
 
 /* Live agents */
@@ -133,7 +133,6 @@
   width: 100%;
   background: rgba(255, 255, 255, 0.08);
   color: #ffffff;
-  padding: 2px;
   border-radius: 999px;
   cursor: pointer;
   text-align: left;

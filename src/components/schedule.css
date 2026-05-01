@@ -41,11 +41,12 @@
 /* ---------- Page Shell ---------- */
 .schx{
   min-width:0;
-  padding:20px;
-  color:var(--text);
-  background:var(--bg0);
-  width:100%;
-  box-sizing:border-box;
+  margin:8px;
+  background:none;
+  background-color: none;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
 }
 
 /* ---------- Topbar ---------- */
@@ -77,9 +78,21 @@
   transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
   white-space: nowrap;
   flex: 0 0 auto;
-  margin:0 5px;
   box-shadow:0 1px 2px rgba(15,23,42,.03);
   color: #ffffff;
+}
+
+.schxBtnIcon{
+  width:40px;
+  min-width:40px;
+  padding:0;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.schxBtnIconSpin{
+  animation: schxSpin 0.9s linear infinite;
 }
 
 .schxTitle{
@@ -99,12 +112,11 @@
 
 .schxControls{
   display:flex;
-  gap:10px;
   align-items:flex-end;
   flex-wrap:nowrap;
   overflow-x:auto;
-  padding-bottom:4px;
   -webkit-overflow-scrolling:touch;
+  gap: 8px;
 }
 
 .schxModeToggle{
@@ -118,7 +130,6 @@
   flex-direction: column;
   justify-content: end;
   align-items: end;
-  gap:6px;
   flex:0 0 auto;
 }
 
@@ -135,7 +146,7 @@
 }
 
 .schxInput{
-  height:40px;
+  height:25px;
   padding:0 12px;
   border-radius:12px;
   border:1px solid var(--border);
@@ -179,6 +190,7 @@
   justify-content:center;
   white-space:nowrap;
   flex:0 0 auto;
+  display: none;
 }
 
 .schxPillValue {
@@ -206,10 +218,11 @@
 
 /* ---------- KPI Tiles ---------- */
 .schxKpis{
-  margin-top:16px;
+  margin-top:8px;
   display:grid;
   grid-template-columns:repeat(3, minmax(0, 1fr));
   gap:14px;
+  display: none;
 }
 
 .schxTile{
@@ -259,20 +272,23 @@
 
 /* ---------- Table Card ---------- */
 .schxCard{
-  margin-top:16px;
   border:1px solid var(--border);
   background:#ffffff;
-  border-radius:20px;
+  border-radius:10px;
   overflow:hidden;
   box-shadow:var(--shadow);
+  flex:1;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
 }
 
 .schxCardHead{
-  padding:14px 18px;
+  padding:8px;
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap:12px;
+  gap:6px;
   border-bottom:1px solid var(--borderSoft);
   background:linear-gradient(180deg, #353a448a, #707885);
 }
@@ -289,10 +305,13 @@
   color: rgba(255, 255, 255, 0.65);
   font-weight: 900;
   font-size: 12px;
+  width: 100%;
 }
 
 .schxTableWrap{
   overflow:auto;
+  flex:1;
+  min-height:0;
 }
 
 .schxTable{
@@ -307,7 +326,7 @@
   top:0;
   z-index:2;
   text-align:left;
-  padding:12px 14px;
+  padding:6px 10px;
   font-size:10px;
   font-weight:600;
   text-transform:uppercase;
@@ -318,7 +337,7 @@
 }
 
 .schxTable td{
-  padding:12px 14px;
+  padding:6px 14px;
   border-bottom:1px solid var(--borderSoft);
   font-size:12px;
   font-weight:500;
@@ -516,6 +535,7 @@
 @media (max-width: 1200px){
   .schxKpis{
     grid-template-columns:repeat(2, minmax(0,1fr));
+    display: none;
   }
 }
 

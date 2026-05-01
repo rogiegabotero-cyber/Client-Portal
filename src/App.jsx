@@ -42,6 +42,7 @@ import {
   transferPortalUserToEmployeeRole,
   updatePortalUserAllowedPages,
 } from "./auth/firebaseAuthService";
+import { getStoredSession } from "./auth/authService";
 import {
   DAILY_BREAK_LIMIT_MINUTES,
   getActiveBreakForUser,
@@ -54,10 +55,8 @@ import {
   deleteAllOverBreakNotes,
   deleteNotification,
   deleteOverBreakNote,
-  getBreakLogsForUserOnDate,
+  getBreakLogsByUserIdsInRange,
   calculateBreakUsageMinutes,
-  ensureBreakReminder,
-  ensureOverBreakEscalation,
   getNotificationsForUser,
   markNotificationRead,
   markAllNotificationsRead,
@@ -124,11 +123,26 @@ import {
   tsMs,
 } from "./utils/attendanceLog";
 
-import { UserPlus, LogOut, Megaphone, CalendarCheck, ClipboardList, X } from "lucide-react";
+import {
+  UserPlus,
+  LogOut,
+  Megaphone,
+  CalendarCheck,
+  ClipboardList,
+  RefreshCcw,
+  X,
+} from "lucide-react";
 import InvoicesPage from "./components/InvoicesPage";
 import AssignmentPage from "./components/AssignmentPage";
 import PerformanceReportPage from "./components/PerformanceReportPage";
 import ManageAnnouncementsPage from "./components/ManageAnnouncementsPage";
+import { db } from "./firebase";
+import {
+  doc as fsDoc,
+  onSnapshot as fsOnSnapshot,
+  serverTimestamp as fsServerTimestamp,
+  setDoc as fsSetDoc,
+} from "firebase/firestore";
 
 /* ----------------------------- helpers ----------------------------- */
 const isAnnouncementNotification = (typeValue) => {
@@ -202,6 +216,9 @@ const CORE_PAGE_KEYS = PAGE_KEYS.filter(
   (page) => page !== "control_panel" && !PERFORMANCE_PAGE_KEYS.includes(page)
 );
 const ROLE_BULK_MANAGED_PAGE_KEYS = PAGE_KEYS.filter((page) => page !== "control_panel");
+const LIVE_ATTENDANCE_POLL_MS = 10 * 1000;
+const PORTAL_RUNTIME_COLLECTION = "portal_runtime";
+const PORTAL_GLOBAL_RUNTIME_DOC = "global_live_updates";
 
 const toPreviewText = (value, maxLen = 140) => {
   const cleaned = String(value || "").replace(/\s+/g, " ").trim();
@@ -491,6 +508,40 @@ const getBusinessDayLogsFromList = (logs, businessDayKey, resetTime, businessTim
     if (!ts) return false;
     return getBusinessDayKey(ts, resetTime, businessTimeZone) === businessDayKey;
   });
+};
+
+const buildAttendanceLogIdentity = (log, businessTimeZone = "America/Chicago") => {
+  const id = String(pick(log || {}, ["id", "_id", "logId", "attendanceLogId"], "")).trim();
+  const eventTs = String(getLogEventTs(log) || "").trim();
+  const status = String(
+    pick(log || {}, ["status", "attendanceStatus", "dailyStatus", "remark"], "")
+  )
+    .trim()
+    .toLowerCase();
+  const type = String(pick(log || {}, ["type", "logType", "eventType"], "")).trim().toLowerCase();
+  const dayKey = String(resolveAttendanceDayKeyFromRecord(log, businessTimeZone) || "").trim();
+  return [id, eventTs, status, type, dayKey].join("|");
+};
+
+const replaceBusinessDayLogsInList = (
+  existingLogs,
+  nextDayLogs,
+  businessDayKey,
+  attendanceResetTime,
+  businessTimeZone
+) => {
+  const keepLogs = (Array.isArray(existingLogs) ? existingLogs : []).filter((log) => {
+    const explicitDayKey = resolveAttendanceDayKeyFromRecord(log, businessTimeZone);
+    if (explicitDayKey) return explicitDayKey !== businessDayKey;
+
+    const ts = getLogEventTs(log);
+    if (!ts) return true;
+    return getBusinessDayKey(ts, attendanceResetTime, businessTimeZone) !== businessDayKey;
+  });
+
+  const merged = [...keepLogs, ...(Array.isArray(nextDayLogs) ? nextDayLogs : [])];
+  merged.sort((a, b) => getLogEventMs(b) - getLogEventMs(a));
+  return merged;
 };
 
 const getAttendanceStatusText = (log) =>
@@ -931,6 +982,14 @@ export default function App() {
   const [selectedLiveAgentId, setSelectedLiveAgentId] = useState("");
   const [showLiveAgentModal, setShowLiveAgentModal] = useState(false);
   const [liveAgentLogStatus, setLiveAgentLogStatus] = useState("ALL");
+  const [isRestartingSessions, setIsRestartingSessions] = useState(false);
+  const [isPageSwitchLoading, setIsPageSwitchLoading] = useState(false);
+  const [hasCompletedInitialShellLoad, setHasCompletedInitialShellLoad] = useState(false);
+  const [showLoginBootSkeleton, setShowLoginBootSkeleton] = useState(false);
+  const hasMountedPageSwitchRef = useRef(false);
+  const initialShellLoadSessionKeyRef = useRef("");
+  const initialShellLoadStartedAtRef = useRef(0);
+  const hasShownLoginBootSkeletonRef = useRef(false);
 
   const authSessionKey = useMemo(() => {
     if (!isAuthenticated || !user) return "";
@@ -944,6 +1003,10 @@ export default function App() {
   const attendanceAbortRef = useRef(null);
   const todayAbortRef = useRef(null);
   const lastAuthSessionKeyRef = useRef("");
+  const todayLogIdentityByUserRef = useRef({});
+  const todayLogIdentityPrimedRef = useRef(false);
+  const sessionRestartPrimedRef = useRef(false);
+  const lastSessionRestartMsRef = useRef(0);
 
   // In-memory app cache: centralizes API results in App.jsx and reuses them
   // across page navigation. Browser refresh recreates this ref, so data resets.
@@ -965,6 +1028,8 @@ export default function App() {
   const [toastQueue, setToastQueue] = useState([]);
   const seenToastIdsRef = useRef(new Set());
   const notificationToastSessionStartMsRef = useRef(0);
+  const notificationsRef = useRef([]);
+  const archivedNotificationsRef = useRef([]);
   const profileImagesByUserIdRef = useRef({});
   const profileImagesInitializedRef = useRef(false);
   const announcementsRef = useRef([]);
@@ -1008,6 +1073,19 @@ export default function App() {
       canAccessPage(user.role, "manage_announcements", user?.allowedPages),
     [user]
   );
+  const canRestartAllSessions = useMemo(() => {
+    if (!isAuthenticated || !user) return false;
+    const role = normalizeRole(user.role);
+    return role === ROLES.SUPER_ADMIN || role === ROLES.ADMIN;
+  }, [isAuthenticated, user]);
+  const hasStoredAuthenticatedSession = useMemo(() => {
+    try {
+      const stored = getStoredSession();
+      return !!stored?.isAuthenticated;
+    } catch {
+      return false;
+    }
+  }, [authReady]);
   const canAccessNotificationArchive = useMemo(
     () => !!isAuthenticated && !!user,
     [isAuthenticated, user]
@@ -1211,6 +1289,74 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!authReady || !isAuthenticated || !user) {
+      initialShellLoadSessionKeyRef.current = "";
+      initialShellLoadStartedAtRef.current = 0;
+      setHasCompletedInitialShellLoad(false);
+      return;
+    }
+
+    const nextSessionKey = authSessionKey || "__authenticated__";
+    if (initialShellLoadSessionKeyRef.current === nextSessionKey) return;
+
+    initialShellLoadSessionKeyRef.current = nextSessionKey;
+    initialShellLoadStartedAtRef.current = Date.now();
+    setHasCompletedInitialShellLoad(false);
+  }, [authReady, isAuthenticated, user, authSessionKey]);
+
+  useEffect(() => {
+    if (!authReady || !isAuthenticated || !user) return;
+    if (hasCompletedInitialShellLoad) return;
+
+    const criticalLoading =
+      loadingUsers || loadingSchedules || loadingAttendance || loadingTodayLogs;
+    if (criticalLoading) return;
+
+    const elapsed = Date.now() - Number(initialShellLoadStartedAtRef.current || 0);
+    const minSkeletonMs = 520;
+    if (elapsed >= minSkeletonMs) {
+      setHasCompletedInitialShellLoad(true);
+      return;
+    }
+
+    const timerId = setTimeout(() => {
+      setHasCompletedInitialShellLoad(true);
+    }, minSkeletonMs - Math.max(0, elapsed));
+
+    return () => clearTimeout(timerId);
+  }, [
+    authReady,
+    isAuthenticated,
+    user,
+    hasCompletedInitialShellLoad,
+    loadingUsers,
+    loadingSchedules,
+    loadingAttendance,
+    loadingTodayLogs,
+  ]);
+
+  useEffect(() => {
+    if (!authReady) return;
+    if (isAuthenticated) {
+      setShowLoginBootSkeleton(false);
+      return;
+    }
+    if (authScreen !== "login") {
+      setShowLoginBootSkeleton(false);
+      return;
+    }
+    if (hasShownLoginBootSkeletonRef.current) return;
+
+    setShowLoginBootSkeleton(true);
+    const timerId = setTimeout(() => {
+      hasShownLoginBootSkeletonRef.current = true;
+      setShowLoginBootSkeleton(false);
+    }, 700);
+
+    return () => clearTimeout(timerId);
+  }, [authReady, isAuthenticated, authScreen]);
+
+  useEffect(() => {
     if (!showLogoutConfirm) return;
 
     const onKeyDown = (e) => {
@@ -1222,6 +1368,26 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showLogoutConfirm]);
+
+  useEffect(() => {
+    if (!authReady || !isAuthenticated) {
+      hasMountedPageSwitchRef.current = false;
+      setIsPageSwitchLoading(false);
+      return;
+    }
+
+    if (!hasMountedPageSwitchRef.current) {
+      hasMountedPageSwitchRef.current = true;
+      return;
+    }
+
+    setIsPageSwitchLoading(true);
+    const timerId = setTimeout(() => {
+      setIsPageSwitchLoading(false);
+    }, 320);
+
+    return () => clearTimeout(timerId);
+  }, [activePage, authReady, isAuthenticated]);
 
   useEffect(() => {
     if (!showAnnouncementModal) return;
@@ -1360,6 +1526,50 @@ export default function App() {
     ]);
   }, []);
 
+  useEffect(() => {
+    notificationsRef.current = Array.isArray(notifications) ? notifications : [];
+  }, [notifications]);
+
+  useEffect(() => {
+    archivedNotificationsRef.current = Array.isArray(archivedNotifications) ? archivedNotifications : [];
+  }, [archivedNotifications]);
+
+  const handleRestartAllSessions = useCallback(async () => {
+    if (!canRestartAllSessions || isRestartingSessions) return;
+
+    setIsRestartingSessions(true);
+    try {
+      const actorUserId = String(
+        getUserId(user) || user?.uid || user?.userId || user?.id || user?.email || ""
+      ).trim();
+
+      await fsSetDoc(
+        fsDoc(db, PORTAL_RUNTIME_COLLECTION, PORTAL_GLOBAL_RUNTIME_DOC),
+        {
+          restartSessionsAt: fsServerTimestamp(),
+          restartSessionsByUserId: actorUserId || "__unknown__",
+          updatedAt: fsServerTimestamp(),
+        },
+        { merge: true }
+      );
+
+      pushToast({
+        type: "success",
+        title: "Restart Sent",
+        message: "All connected portal sessions will refresh now.",
+      });
+    } catch (err) {
+      console.error("Failed to broadcast session restart:", err);
+      pushToast({
+        type: "error",
+        title: "Restart Failed",
+        message: err?.message || "Could not send restart command to all sessions.",
+      });
+    } finally {
+      setIsRestartingSessions(false);
+    }
+  }, [canRestartAllSessions, isRestartingSessions, pushToast, user]);
+
   const getTodayScheduleStartUtcMs = useCallback(
     (userId) => {
       const sched = schedulesByUserId?.[String(userId)];
@@ -1480,6 +1690,143 @@ export default function App() {
     ]
   );
 
+  const enrichNotificationRows = useCallback((rows = []) => {
+    const announcementRows = announcementsRef.current;
+    return (Array.isArray(rows) ? rows : []).map((row) => {
+      if (!isAnnouncementNotification(row?.type)) return row;
+      if (String(row?.message || "").trim()) return row;
+
+      const announcementId = String(row?.announcementId || "").trim();
+      if (!announcementId) return row;
+
+      const match = announcementRows.find(
+        (item) => String(item?.id || "").trim() === announcementId
+      );
+      if (!match) return row;
+
+      const notePreview = toPreviewText(
+        pick(match, ["note", "announcement", "announcementNote", "message", "text"], ""),
+        140
+      );
+      const fallbackTitle = pick(match, ["headline", "title", "subject"], "Announcement");
+
+      return {
+        ...row,
+        title: String(row?.title || "").trim() || fallbackTitle,
+        message: notePreview || String(row?.message || ""),
+      };
+    });
+  }, []);
+
+  const queueFreshUnreadNotificationToasts = useCallback((rows = []) => {
+    const unread = (Array.isArray(rows) ? rows : []).filter((row) => !row?.read);
+    const sessionStartMs = Number(notificationToastSessionStartMsRef.current);
+    const sessionFreshUnread = unread.filter((row) => {
+      const createdAtMs = toMillis(row?.createdAt);
+      if (!Number.isFinite(createdAtMs) || !Number.isFinite(sessionStartMs) || sessionStartMs <= 0) {
+        return false;
+      }
+      return createdAtMs >= sessionStartMs;
+    });
+    const freshUnread = sessionFreshUnread.filter((row) => !seenToastIdsRef.current.has(row.id));
+
+    if (freshUnread.length > 0) {
+      setToastQueue((prev) => [
+        ...prev,
+        ...freshUnread.map((row) => ({
+          id: row.id,
+          type: "info",
+          title: row.title || "Notification",
+          message: row.message || "",
+        })),
+      ]);
+
+      freshUnread.forEach((row) => seenToastIdsRef.current.add(row.id));
+    }
+  }, []);
+
+  const sortAndDedupeNotifications = useCallback((rows = []) => {
+    const byId = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const id = String(row?.id || "").trim();
+      if (!id) continue;
+      byId.set(id, row);
+    }
+
+    const deduped = Array.from(byId.values());
+    deduped.sort((a, b) => {
+      const aMs = toMillis(a?.createdAt ?? a?.updatedAt);
+      const bMs = toMillis(b?.createdAt ?? b?.updatedAt);
+      if (Number.isFinite(bMs) && Number.isFinite(aMs) && bMs !== aMs) return bMs - aMs;
+      if (Number.isFinite(bMs) && !Number.isFinite(aMs)) return 1;
+      if (Number.isFinite(aMs) && !Number.isFinite(bMs)) return -1;
+      return String(b?.id || "").localeCompare(String(a?.id || ""));
+    });
+    return deduped;
+  }, []);
+
+  const applyRealtimeNotificationChanges = useCallback(
+    (changedDocs = []) => {
+      const docs = Array.isArray(changedDocs) ? changedDocs : [];
+      if (!docs.length) return false;
+
+      const viewerIdentity = currentViewerIdentity || {};
+      let activeRows = Array.isArray(notificationsRef.current) ? [...notificationsRef.current] : [];
+      let archivedRows = Array.isArray(archivedNotificationsRef.current)
+        ? [...archivedNotificationsRef.current]
+        : [];
+      let touched = false;
+
+      for (const item of docs) {
+        const changeType = String(item?.changeType || "").trim().toLowerCase();
+        const row = item?.row && typeof item.row === "object" ? item.row : {};
+        const id = String(item?.id || row?.id || "").trim();
+        if (!id) continue;
+
+        const removeFromLists = () => {
+          const nextActive = activeRows.filter((entry) => String(entry?.id || "").trim() !== id);
+          const nextArchived = archivedRows.filter((entry) => String(entry?.id || "").trim() !== id);
+          if (nextActive.length !== activeRows.length || nextArchived.length !== archivedRows.length) {
+            touched = true;
+          }
+          activeRows = nextActive;
+          archivedRows = nextArchived;
+        };
+
+        removeFromLists();
+        if (changeType === "removed") continue;
+
+        if (!isNotificationChangeRelevantForViewer(row, viewerIdentity)) continue;
+
+        const enrichedRow = enrichNotificationRows([{ ...row, id }])[0] || { ...row, id };
+        if (enrichedRow?.archived) {
+          archivedRows.unshift(enrichedRow);
+        } else {
+          activeRows.unshift(enrichedRow);
+        }
+        touched = true;
+      }
+
+      if (!touched) return false;
+
+      const nextActive = sortAndDedupeNotifications(activeRows);
+      const nextArchived = sortAndDedupeNotifications(archivedRows);
+
+      notificationsRef.current = nextActive;
+      archivedNotificationsRef.current = nextArchived;
+      setNotifications(nextActive);
+      setArchivedNotifications(nextArchived);
+      queueFreshUnreadNotificationToasts(nextActive);
+      return true;
+    },
+    [
+      currentViewerIdentity,
+      enrichNotificationRows,
+      queueFreshUnreadNotificationToasts,
+      sortAndDedupeNotifications,
+    ]
+  );
+
   const reloadNotifications = useCallback(async () => {
     if (!isAuthenticated || !user) {
       setNotifications((prev) => (prev.length ? [] : prev));
@@ -1500,67 +1847,22 @@ export default function App() {
       ]);
       const activeList = Array.isArray(activeRowsRaw) ? activeRowsRaw : [];
       const archivedList = Array.isArray(archivedRowsRaw) ? archivedRowsRaw : [];
-      const announcementRows = announcementsRef.current;
-      const enrichRows = (rows = []) =>
-        rows.map((row) => {
-        if (!isAnnouncementNotification(row?.type)) return row;
-        if (String(row?.message || "").trim()) return row;
-
-        const announcementId = String(row?.announcementId || "").trim();
-        if (!announcementId) return row;
-
-        const match = announcementRows.find(
-          (item) => String(item?.id || "").trim() === announcementId
-        );
-        if (!match) return row;
-
-        const notePreview = toPreviewText(
-          pick(match, ["note", "announcement", "announcementNote", "message", "text"], ""),
-          140
-        );
-        const fallbackTitle = pick(match, ["headline", "title", "subject"], "Announcement");
-
-        return {
-          ...row,
-          title: String(row?.title || "").trim() || fallbackTitle,
-          message: notePreview || String(row?.message || ""),
-        };
-      });
-
-      const enrichedActiveRows = enrichRows(activeList);
-      const enrichedArchivedRows = enrichRows(archivedList);
+      const enrichedActiveRows = enrichNotificationRows(activeList);
+      const enrichedArchivedRows = enrichNotificationRows(archivedList);
 
       setNotifications(enrichedActiveRows);
       setArchivedNotifications(enrichedArchivedRows);
-
-      const unread = enrichedActiveRows.filter((row) => !row?.read);
-      const sessionStartMs = Number(notificationToastSessionStartMsRef.current);
-      const sessionFreshUnread = unread.filter((row) => {
-        const createdAtMs = toMillis(row?.createdAt);
-        if (!Number.isFinite(createdAtMs) || !Number.isFinite(sessionStartMs) || sessionStartMs <= 0) {
-          return false;
-        }
-        return createdAtMs >= sessionStartMs;
-      });
-      const freshUnread = sessionFreshUnread.filter((row) => !seenToastIdsRef.current.has(row.id));
-
-      if (freshUnread.length > 0) {
-        setToastQueue((prev) => [
-          ...prev,
-          ...freshUnread.map((row) => ({
-            id: row.id,
-            type: "info",
-            title: row.title || "Notification",
-            message: row.message || "",
-          })),
-        ]);
-
-        freshUnread.forEach((row) => seenToastIdsRef.current.add(row.id));
-      }
+      queueFreshUnreadNotificationToasts(enrichedActiveRows);
     } catch (err) {
       console.error("Failed to load notifications:", err);
     }
-  }, [currentViewerIdentity, isAuthenticated, user]);
+  }, [
+    currentViewerIdentity,
+    enrichNotificationRows,
+    isAuthenticated,
+    queueFreshUnreadNotificationToasts,
+    user,
+  ]);
 
   const reloadOverBreakNotes = useCallback(async () => {
     if (!isAuthenticated || !user) {
@@ -2076,37 +2378,6 @@ export default function App() {
         if (!uid) continue;
 
         next[uid] = row;
-
-        try {
-          const reminderResult = await ensureBreakReminder({
-            userId: uid,
-            name: row?.name || "",
-            email: row?.email || "",
-            activeBreak: row,
-          });
-
-          if (reminderResult?.created) {
-            await reloadNotifications();
-          }
-        } catch (err) {
-          console.error("Failed to create break reminder:", err);
-        }
-
-        try {
-          const overBreakResult = await ensureOverBreakEscalation({
-            userId: uid,
-            name: row?.name || "",
-            email: row?.email || "",
-            activeBreak: row,
-          });
-
-          if (overBreakResult?.created || overBreakResult?.updated) {
-            await reloadNotifications();
-            await reloadOverBreakNotes();
-          }
-        } catch (err) {
-          console.error("Failed to save over-break escalation:", err);
-        }
       }
 
       setActiveBreaksByUserId(next);
@@ -2116,7 +2387,7 @@ export default function App() {
     } finally {
       setLoadingBreaks(false);
     }
-  }, [isAuthenticated, reloadNotifications, reloadOverBreakNotes, user]);
+  }, [isAuthenticated, user]);
 
   const reloadBreakUsage = useCallback(async () => {
     if (!isAuthenticated || !user) {
@@ -2144,23 +2415,20 @@ export default function App() {
         )
       );
 
-      const results = await mapWithConcurrency(items, 6, async (userId) => {
-        const logs = await getBreakLogsForUserOnDate(userId, new Date());
-        return {
-          userId,
-          logs,
-          usage: calculateBreakUsageMinutes(logs, Date.now()),
-        };
-      });
-
       const nextUsage = {};
       const nextLogs = {};
+      const todayBusinessKey = getTodayAttendanceKey(attendanceResetTime, businessTimeZone);
+      const logsByUserId = await getBreakLogsByUserIdsInRange(items, {
+        startDayKey: todayBusinessKey,
+        endDayKey: todayBusinessKey,
+        attendanceResetTime,
+        businessTimeZone,
+      });
 
-      for (const result of results) {
-        if (result?.ok) {
-          nextUsage[result.value.userId] = result.value.usage;
-          nextLogs[result.value.userId] = Array.isArray(result.value.logs) ? result.value.logs : [];
-        }
+      for (const userId of items) {
+        const logs = Array.isArray(logsByUserId?.[userId]) ? logsByUserId[userId] : [];
+        nextLogs[userId] = logs;
+        nextUsage[userId] = calculateBreakUsageMinutes(logs, Date.now());
       }
 
       setBreakUsageByUserId((prev) => {
@@ -2199,7 +2467,14 @@ export default function App() {
     } finally {
       setLoadingBreakUsage(false);
     }
-  }, [isAuthenticated, user, validEmployees, loadingUsers]);
+  }, [
+    isAuthenticated,
+    user,
+    validEmployees,
+    loadingUsers,
+    attendanceResetTime,
+    businessTimeZone,
+  ]);
 
   const reloadBreakStatusForUser = useCallback(
     async (userId) => {
@@ -2208,10 +2483,17 @@ export default function App() {
       if (!isAuthenticated || !user) return;
 
       try {
-        const [activeBreak, logs] = await Promise.all([
+        const todayBusinessKey = getTodayAttendanceKey(attendanceResetTime, businessTimeZone);
+        const [activeBreak, logsByUserId] = await Promise.all([
           getActiveBreakForUser(uid),
-          getBreakLogsForUserOnDate(uid, new Date()),
+          getBreakLogsByUserIdsInRange([uid], {
+            startDayKey: todayBusinessKey,
+            endDayKey: todayBusinessKey,
+            attendanceResetTime,
+            businessTimeZone,
+          }),
         ]);
+        const logs = Array.isArray(logsByUserId?.[uid]) ? logsByUserId[uid] : [];
 
         setActiveBreaksByUserId((prev) => {
           const next = { ...(prev && typeof prev === "object" ? prev : {}) };
@@ -2243,23 +2525,21 @@ export default function App() {
         console.error(`Failed to load break status for user ${uid}:`, err);
       }
     },
-    [isAuthenticated, user]
+    [isAuthenticated, user, attendanceResetTime, businessTimeZone]
   );
 
   useEffect(() => {
     if (!isAuthenticated || !user || !currentViewerIdentity?.userId) return undefined;
 
     const unsubscribe = subscribeBreakNotificationUpdates(
+      currentViewerIdentity,
       (payload) => {
         if (payload?.isInitial) return;
         if (!Number(payload?.changeCount || 0)) return;
 
-        const changedRows = Array.isArray(payload?.changedRows) ? payload.changedRows : [];
-        const hasRelevantChange =
-          changedRows.length === 0 ||
-          changedRows.some((row) => isNotificationChangeRelevantForViewer(row, currentViewerIdentity));
-
-        if (!hasRelevantChange) return;
+        const changedDocs = Array.isArray(payload?.changedDocs) ? payload.changedDocs : [];
+        const applied = applyRealtimeNotificationChanges(changedDocs);
+        if (applied) return;
 
         reloadNotifications().catch((err) => {
           console.error("Realtime notification refresh failed:", err);
@@ -2278,6 +2558,7 @@ export default function App() {
     user,
     currentViewerIdentity?.userId,
     currentViewerIdentity?.role,
+    applyRealtimeNotificationChanges,
     reloadNotifications,
   ]);
 
@@ -3460,6 +3741,10 @@ export default function App() {
   useEffect(() => {
     if (!isAuthenticated || !user) {
       lastAuthSessionKeyRef.current = "";
+      todayLogIdentityByUserRef.current = {};
+      todayLogIdentityPrimedRef.current = false;
+      sessionRestartPrimedRef.current = false;
+      lastSessionRestartMsRef.current = 0;
       return;
     }
 
@@ -3467,9 +3752,53 @@ export default function App() {
     if (lastAuthSessionKeyRef.current === nextSessionKey) return;
 
     lastAuthSessionKeyRef.current = nextSessionKey;
+    todayLogIdentityByUserRef.current = {};
+    todayLogIdentityPrimedRef.current = false;
+    sessionRestartPrimedRef.current = false;
+    lastSessionRestartMsRef.current = 0;
     setActivePage(resolveDefaultActivePage(user));
     setSelectedEmployeeId("");
   }, [isAuthenticated, user, authSessionKey]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user || isLoggingOut) {
+      sessionRestartPrimedRef.current = false;
+      lastSessionRestartMsRef.current = 0;
+      return undefined;
+    }
+
+    const runtimeRef = fsDoc(db, PORTAL_RUNTIME_COLLECTION, PORTAL_GLOBAL_RUNTIME_DOC);
+    const unsubscribe = fsOnSnapshot(
+      runtimeRef,
+      (snapshot) => {
+        const exists = typeof snapshot?.exists === "function" ? snapshot.exists() : !!snapshot?.exists;
+        const payload = exists ? snapshot.data() || {} : {};
+        const restartMs = toMillis(payload?.restartSessionsAt);
+
+        if (!sessionRestartPrimedRef.current) {
+          sessionRestartPrimedRef.current = true;
+          lastSessionRestartMsRef.current = Number.isFinite(restartMs) ? restartMs : 0;
+          return;
+        }
+
+        if (!Number.isFinite(restartMs) || restartMs <= 0) return;
+        if (restartMs <= Number(lastSessionRestartMsRef.current || 0)) return;
+
+        lastSessionRestartMsRef.current = restartMs;
+
+        if (typeof window !== "undefined" && typeof window.location?.reload === "function") {
+          window.location.reload();
+        }
+      },
+      (err) => {
+        console.error("Session restart listener error:", err);
+      }
+    );
+
+    return () => {
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
+  }, [isAuthenticated, user, isLoggingOut]);
 
   useEffect(() => {
     if (!user) return;
@@ -3874,108 +4203,253 @@ export default function App() {
     reloadAttendance();
   }, [reloadAttendance]);
 
-  const reloadTodayLogs = useCallback(async ({ force = false } = {}) => {
-    if (!api) {
-      // Keep previous data while API/session wiring is not ready.
-      return;
-    }
-
-    if (validEmployees.length === 0) {
-      // Avoid clearing while users are still loading; clear only when empty is definitive.
-      if (!loadingUsers) {
-        setTodayLogsByUserId({});
-      }
-      return;
-    }
-
-    todayAbortRef.current?.abort?.();
-    const ac = new AbortController();
-    todayAbortRef.current = ac;
-
-    setLoadingTodayLogs(true);
-
-    const todayBusinessKey = getTodayAttendanceKey(attendanceResetTime, businessTimeZone);
-    const fetchStart = addDaysYmd(todayBusinessKey, -1);
-    const fetchEnd = addDaysYmd(todayBusinessKey, 1);
-
-    try {
-      const items = validEmployees.map((emp) => String(getUserId(emp)));
-      const todayCacheKey = `${todayBusinessKey}|${attendanceResetTime}|${businessTimeZone}`;
-      const dayCache = appDataCacheRef.current.todayLogsByKey[todayCacheKey] || {};
-      appDataCacheRef.current.todayLogsByKey[todayCacheKey] = dayCache;
-      const missingItems = force
-        ? items
-        : items.filter((userId) => !Array.isArray(dayCache?.[userId]));
-
-      if (!missingItems.length) {
-        setTodayLogsByUserId((prev) => {
-          const merged = {};
-          for (const userId of items) {
-            merged[userId] = Array.isArray(dayCache[userId]) ? dayCache[userId] : prev?.[userId] || [];
-          }
-          return merged;
-        });
+  const reloadTodayLogs = useCallback(
+    async ({ force = false, silent = false } = {}) => {
+      if (!api) {
+        // Keep previous data while API/session wiring is not ready.
         return;
       }
 
-      const results = await mapWithConcurrency(missingItems, 8, async (userId) => {
-        const payload = await api.getAttendanceLogs(
-          { userId, startDate: fetchStart, endDate: fetchEnd },
-          ac.signal
-        );
-
-        const arr = normalizeAttendanceLogsPayload(payload, userId, businessTimeZone);
-        const filtered = getBusinessDayLogsFromList(
-          arr,
-          todayBusinessKey,
-          attendanceResetTime,
-          businessTimeZone
-        );
-
-        return { userId, payload, logs: filtered };
-      });
-
-      const next = {};
-      const nextRawPayloads = {};
-      for (let idx = 0; idx < results.length; idx++) {
-        const userId = missingItems[idx];
-        if (results[idx].ok) {
-          next[userId] = results[idx].value.logs;
-          nextRawPayloads[userId] = results[idx].value.payload;
-          dayCache[userId] = results[idx].value.logs;
+      if (validEmployees.length === 0) {
+        // Avoid clearing while users are still loading; clear only when empty is definitive.
+        if (!loadingUsers) {
+          setTodayLogsByUserId({});
         }
+        todayLogIdentityByUserRef.current = {};
+        todayLogIdentityPrimedRef.current = false;
+        return;
       }
 
-      logAttendanceJsonPayloads(`business-day ${todayBusinessKey}`, nextRawPayloads, next);
-      logAbsentStatusScan(`business-day ${todayBusinessKey}`, next);
-      setTodayLogsByUserId((prev) => {
-        const merged = {};
-        for (const userId of items) {
-          if (Object.prototype.hasOwnProperty.call(next, userId)) {
-            merged[userId] = next[userId];
-          } else if (Array.isArray(prev?.[userId])) {
-            merged[userId] = prev[userId];
-          } else {
-            merged[userId] = [];
+      todayAbortRef.current?.abort?.();
+      const ac = new AbortController();
+      todayAbortRef.current = ac;
+
+      if (!silent) {
+        setLoadingTodayLogs(true);
+      }
+
+      const todayBusinessKey = getTodayAttendanceKey(attendanceResetTime, businessTimeZone);
+      const fetchStart = addDaysYmd(todayBusinessKey, -1);
+      const fetchEnd = addDaysYmd(todayBusinessKey, 1);
+
+      try {
+        const items = validEmployees.map((emp) => String(getUserId(emp)));
+        const todayCacheKey = `${todayBusinessKey}|${attendanceResetTime}|${businessTimeZone}`;
+        const dayCache = appDataCacheRef.current.todayLogsByKey[todayCacheKey] || {};
+        appDataCacheRef.current.todayLogsByKey[todayCacheKey] = dayCache;
+        const missingItems = force
+          ? items
+          : items.filter((userId) => !Array.isArray(dayCache?.[userId]));
+
+        if (!missingItems.length) {
+          setTodayLogsByUserId((prev) => {
+            const merged = {};
+            for (const userId of items) {
+              merged[userId] = Array.isArray(dayCache[userId])
+                ? dayCache[userId]
+                : prev?.[userId] || [];
+            }
+            return merged;
+          });
+          return;
+        }
+
+        const results = await mapWithConcurrency(missingItems, 8, async (userId) => {
+          const payload = await api.getAttendanceLogs(
+            { userId, startDate: fetchStart, endDate: fetchEnd },
+            ac.signal
+          );
+
+          const arr = normalizeAttendanceLogsPayload(payload, userId, businessTimeZone);
+          const filtered = getBusinessDayLogsFromList(
+            arr,
+            todayBusinessKey,
+            attendanceResetTime,
+            businessTimeZone
+          );
+
+          return { userId, payload, logs: filtered };
+        });
+
+        const next = {};
+        const nextRawPayloads = {};
+        for (let idx = 0; idx < results.length; idx++) {
+          const userId = missingItems[idx];
+          if (results[idx].ok) {
+            next[userId] = results[idx].value.logs;
+            nextRawPayloads[userId] = results[idx].value.payload;
+            dayCache[userId] = results[idx].value.logs;
           }
         }
-        return merged;
-      });
-    } catch (err) {
-      if (err?.name !== "AbortError") {
-        console.error("Failed to load business-day logs:", err);
+
+        logAttendanceJsonPayloads(`business-day ${todayBusinessKey}`, nextRawPayloads, next);
+        logAbsentStatusScan(`business-day ${todayBusinessKey}`, next);
+
+        const resolvedTodayLogsByUserId = {};
+        for (const userId of items) {
+          if (Object.prototype.hasOwnProperty.call(next, userId)) {
+            resolvedTodayLogsByUserId[userId] = Array.isArray(next[userId]) ? next[userId] : [];
+          } else if (Array.isArray(dayCache[userId])) {
+            resolvedTodayLogsByUserId[userId] = dayCache[userId];
+          } else {
+            resolvedTodayLogsByUserId[userId] = [];
+          }
+        }
+
+        const previousIdentityByUser = todayLogIdentityByUserRef.current || {};
+        const nextIdentityByUser = {};
+        const changedUserIds = [];
+        let detectedNewTimeIn = false;
+
+        for (const userId of items) {
+          const userLogs = Array.isArray(resolvedTodayLogsByUserId[userId])
+            ? resolvedTodayLogsByUserId[userId]
+            : [];
+          const prevSet =
+            previousIdentityByUser[userId] instanceof Set
+              ? previousIdentityByUser[userId]
+              : new Set(
+                  Array.isArray(previousIdentityByUser[userId])
+                    ? previousIdentityByUser[userId]
+                    : []
+                );
+          const nextSet = new Set();
+          const newLogs = [];
+
+          for (const log of userLogs) {
+            const identity = buildAttendanceLogIdentity(log, businessTimeZone);
+            nextSet.add(identity);
+            if (todayLogIdentityPrimedRef.current && !prevSet.has(identity)) {
+              newLogs.push(log);
+            }
+          }
+
+          nextIdentityByUser[userId] = nextSet;
+
+          if (newLogs.length > 0) {
+            changedUserIds.push(userId);
+            if (!detectedNewTimeIn && newLogs.some((log) => isIn(log))) {
+              detectedNewTimeIn = true;
+            }
+          }
+        }
+
+        todayLogIdentityByUserRef.current = nextIdentityByUser;
+        if (!todayLogIdentityPrimedRef.current) {
+          todayLogIdentityPrimedRef.current = true;
+        }
+
+        setTodayLogsByUserId((prev) => {
+          const merged = {};
+          for (const userId of items) {
+            if (Object.prototype.hasOwnProperty.call(next, userId)) {
+              merged[userId] = next[userId];
+            } else if (Array.isArray(prev?.[userId])) {
+              merged[userId] = prev[userId];
+            } else {
+              merged[userId] = [];
+            }
+          }
+          return merged;
+        });
+
+        if (
+          todayBusinessKey >= startDate &&
+          todayBusinessKey <= endDate &&
+          changedUserIds.length > 0
+        ) {
+          setLogsByUserId((prev) => {
+            const nextRange = { ...(prev && typeof prev === "object" ? prev : {}) };
+            for (const userId of changedUserIds) {
+              nextRange[userId] = replaceBusinessDayLogsInList(
+                prev?.[userId],
+                resolvedTodayLogsByUserId[userId],
+                todayBusinessKey,
+                attendanceResetTime,
+                businessTimeZone
+              );
+            }
+            return nextRange;
+          });
+
+          const rangeKey = `${startDate}|${endDate}|${businessTimeZone}`;
+          const rangeCache = appDataCacheRef.current.attendanceByKey?.[rangeKey];
+          if (rangeCache && typeof rangeCache === "object") {
+            for (const userId of changedUserIds) {
+              rangeCache[userId] = replaceBusinessDayLogsInList(
+                rangeCache?.[userId],
+                resolvedTodayLogsByUserId[userId],
+                todayBusinessKey,
+                attendanceResetTime,
+                businessTimeZone
+              );
+            }
+          }
+        }
+
+        if (detectedNewTimeIn) {
+          setNowMs(Date.now());
+        }
+      } catch (err) {
+        if (err?.name !== "AbortError") {
+          console.error("Failed to load business-day logs:", err);
+        }
+      } finally {
+        if (!silent) {
+          setLoadingTodayLogs(false);
+        }
       }
-    } finally {
-      setLoadingTodayLogs(false);
-    }
-  }, [api, validEmployees, attendanceResetTime, businessTimeZone, loadingUsers]);
+    },
+    [
+      api,
+      validEmployees,
+      attendanceResetTime,
+      businessTimeZone,
+      loadingUsers,
+      startDate,
+      endDate,
+    ]
+  );
 
   useEffect(() => {
-    reloadTodayLogs();
+    reloadTodayLogs({ force: true });
   }, [reloadTodayLogs]);
 
-  // Cost control: no attendance polling. Initial data is cached in App.jsx.
-  // Refresh only via explicit user actions or browser refresh.
+  useEffect(() => {
+    if (!isAuthenticated || !user) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const poll = () => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      reloadTodayLogs({ force: true, silent: true }).catch((err) => {
+        if (!cancelled) {
+          console.error("Live attendance listener refresh failed:", err);
+        }
+      });
+    };
+
+    const intervalId = setInterval(poll, LIVE_ATTENDANCE_POLL_MS);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        poll();
+      }
+    };
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
+    };
+  }, [isAuthenticated, user, reloadTodayLogs]);
 
   const liveAgentsForSidebar = useMemo(() => {
     const idToName = new Map();
@@ -4412,6 +4886,64 @@ export default function App() {
     });
   };
 
+  const renderShellSkeletonOverlay = (label = "Loading page...") => (
+    <div className="portal-skeleton-overlay" role="status" aria-live="polite" aria-busy="true">
+      <div className="portal-skeleton-shell" aria-hidden="true">
+        <div className="portal-skeleton-sidebar">
+          <div className="portal-skeleton-logo portal-skeleton-wave" />
+          {Array.from({ length: 8 }).map((_, idx) => (
+            <div key={`sb-${idx}`} className="portal-skeleton-nav-item portal-skeleton-wave" />
+          ))}
+        </div>
+        <div className="portal-skeleton-content">
+          <div className="portal-skeleton-header portal-skeleton-wave" />
+          <div className="portal-skeleton-topbar">
+            <div className="portal-skeleton-title portal-skeleton-wave" />
+            <div className="portal-skeleton-actions">
+              {Array.from({ length: 3 }).map((_, idx) => (
+                <div key={`act-${idx}`} className="portal-skeleton-btn portal-skeleton-wave" />
+              ))}
+            </div>
+          </div>
+          <div className="portal-skeleton-grid">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div key={`card-${idx}`} className="portal-skeleton-card portal-skeleton-wave" />
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="portal-skeleton-center">
+        <div className="portal-logout-spinner" />
+        <div className="portal-logout-text">{label}</div>
+      </div>
+    </div>
+  );
+
+  const renderLoginSkeletonOverlay = (label = "Preparing sign in...") => (
+    <div
+      className="portal-skeleton-overlay portal-skeleton-overlay-login"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <div className="portal-login-skeleton-card" aria-hidden="true">
+        <div className="portal-login-skeleton-left">
+          <div className="portal-login-skeleton-title portal-skeleton-wave" />
+          <div className="portal-login-skeleton-text portal-skeleton-wave" />
+          <div className="portal-login-skeleton-text short portal-skeleton-wave" />
+          <div className="portal-login-skeleton-input portal-skeleton-wave" />
+          <div className="portal-login-skeleton-input portal-skeleton-wave" />
+          <div className="portal-login-skeleton-btn portal-skeleton-wave" />
+        </div>
+        <div className="portal-login-skeleton-right portal-skeleton-wave" />
+      </div>
+      <div className="portal-skeleton-center">
+        <div className="portal-logout-spinner" />
+        <div className="portal-logout-text">{label}</div>
+      </div>
+    </div>
+  );
+
   if (isLoggingOut) {
     return (
       <div className="portal-logout-overlay" role="status" aria-live="polite" aria-busy="true">
@@ -4422,24 +4954,34 @@ export default function App() {
   }
 
   if (!authReady) {
-    return (
-      <div className="portal-auth-loading" role="status" aria-live="polite" aria-busy="true">
-        <div className="portal-logout-spinner" />
-        <div className="portal-logout-text"><p>Restoring session...</p></div>
-      </div>
-    );
+    return hasStoredAuthenticatedSession
+      ? renderShellSkeletonOverlay("Restoring workspace...")
+      : renderLoginSkeletonOverlay("Preparing sign in...");
   }
 
   if (!isAuthenticated) {
     return authScreen === "register" ? (
       <RegisterPortalUser onBackToLogin={() => setAuthScreen("login")} />
     ) : (
-      <LoginPage onGoToRegister={() => setAuthScreen("register")} />
+      <div className="portal-login-boot-wrap">
+        <LoginPage onGoToRegister={() => setAuthScreen("register")} />
+        {showLoginBootSkeleton ? renderLoginSkeletonOverlay("Loading sign in...") : null}
+      </div>
     );
   }
 
+  const showShellSkeletonOverlay = !hasCompletedInitialShellLoad;
+  const shellSkeletonLabel = "Preparing dashboard...";
+
   return (
     <div className="app-shell">
+      {isPageSwitchLoading ? (
+        <div className="portal-page-transition-spinner-wrap" role="status" aria-live="polite" aria-busy="true">
+          <div className="portal-page-transition-spinner" />
+        </div>
+      ) : null}
+      {showShellSkeletonOverlay ? renderShellSkeletonOverlay(shellSkeletonLabel) : null}
+
       <Sidebar
         activePage={activePage}
         setActivePage={setActivePage}
@@ -4495,6 +5037,18 @@ export default function App() {
               >
                 <Megaphone size={16} strokeWidth={2} />
                 <span>Post Announcement</span>
+              </button>
+            ) : null}
+
+            {canRestartAllSessions ? (
+              <button
+                className="portal-btn portal-btn-secondary"
+                onClick={handleRestartAllSessions}
+                disabled={isRestartingSessions}
+                title="Refresh all active portal sessions"
+              >
+                <RefreshCcw size={16} strokeWidth={2} />
+                <span>{isRestartingSessions ? "Restarting..." : "Restart Sessions"}</span>
               </button>
             ) : null}
 
@@ -4641,6 +5195,8 @@ export default function App() {
             <div className="portal-page-pad">
               <Dashboard
                 employees={allEmployeesForSharedPages}
+                liveAgents={liveAgentsForSidebar}
+                loadingLiveAgents={showLiveAgentsStartupLoading}
                 loading={
                   loadingUsers ||
                   loadingSchedules ||

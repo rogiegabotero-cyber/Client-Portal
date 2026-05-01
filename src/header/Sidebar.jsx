@@ -92,13 +92,13 @@ export default function Sidebar({
           </div>
         </div>
 
-        <div className="sb-card">
-          <div className="sb-card-title">
-            <Users size={16} />
-            <span>LIVE AGENTS</span>
-            {loadingLive && <span className="sb-live-dot" />}
-          </div>
+        <div className="sb-card-title">
+          <Users size={16} />
+          <span>LIVE AGENTS ({Array.isArray(liveAgents) ? liveAgents.length : 0})</span>
+          {loadingLive && <span className="sb-live-dot" />}
+        </div>
 
+        <div className="sb-card">
           <div className="sb-live-list">
             {loadingLive ? (
               <div className="sb-live-loading" role="status" aria-live="polite">

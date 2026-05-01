@@ -959,53 +959,47 @@ export default function AttendancePage({
         <div className="attxTile">
           <div className="attxTileLabel">Early</div>
           <div className="attxTileValue">{kpis.early}</div>
-          <div className="attxTileHint">Clocked in before schedule</div>
         </div>
 
         <div className="attxTile">
           <div className="attxTileLabel">On Time</div>
           <div className="attxTileValue">{kpis.onTime}</div>
-          <div className="attxTileHint">On-time or present status</div>
         </div>
 
         <div className="attxTile">
           <div className="attxTileLabel">Late</div>
           <div className="attxTileValue">{kpis.late}</div>
-          <div className="attxTileHint">Late status from attendance logs</div>
         </div>
 
         <div className="attxTile">
           <div className="attxTileLabel">PTO</div>
           <div className="attxTileValue">{kpis.pto}</div>
-          <div className="attxTileHint">PTO, leave, or vacation status</div>
         </div>
 
         <div className="attxTile">
           <div className="attxTileLabel">Absent</div>
           <div className="attxTileValue">{kpis.absent}</div>
-          <div className="attxTileHint">Absent status</div>
         </div>
 
         <div className="attxTile">
           <div className="attxTileLabel">NCNS</div>
           <div className="attxTileValue">{kpis.ncns}</div>
-          <div className="attxTileHint">No Show / NCNS status</div>
         </div>
       </div>
 
       <div className="attxField">
-        <div className="attxField1">
-          <div className="attxLabel">Search</div>
-          <input
-            className="attxInput"
-            placeholder="Search name / email / userId / date / status..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
+        
         <div className="badenggg">
-          Showing: {startDate} -&gt; {endDate} ({rangeDays === 1 ? "Today" : `Last ${rangeDays} days`})
-          <div>
+          <div className="attxField1">
+            <div className="attxLabel">Search</div>
+            <input
+              className="attxInput"
+              placeholder="Search name / email / userId / date / status..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          <div className="badenggg2">
             {rangeOptions.map((n) => (
               <button
                 key={n}
@@ -1053,12 +1047,6 @@ export default function AttendancePage({
             <div className="attxSub attxSubCard">
               Range: {startDate} -&gt; {endDate}  |  Users: {validEmployees.length}
               {perUserErrorCount ? `  |  Errors: ${perUserErrorCount}` : ""}
-            </div>
-          </div>
-          <div className="attxCardMetaWrap">
-            <div className="attxCardTitle">Daily Attendance</div>
-            <div className="attxCardMeta">
-              Showing {filtered.length} of {visibleRows.length}
             </div>
           </div>
         </div>
@@ -1154,17 +1142,6 @@ export default function AttendancePage({
             </tbody>
           </table>
 
-          {loading && (
-            <div className="attxLoadingOverlay" role="status" aria-live="polite">
-              <div className="attxLoadingModal">
-                <div className="attxSpinner" />
-                <div className="attxLoadingText">Fetching attendance logs...</div>
-                <div className="attxLoadingSub">
-                  Range: {startDate} -&gt; {endDate}  |  Users: {validEmployees.length}
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 

@@ -279,11 +279,30 @@
   background: #0f172a;
   color: #ffffff;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .notif-read-all-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.notif-btn-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #ffffff;
+  border-radius: 999px;
+  animation: notifBtnSpin 0.7s linear infinite;
+}
+
+@keyframes notifBtnSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .notif-list {
@@ -513,7 +532,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: start;
   justify-content: center;
   text-align: center;
 }
@@ -526,7 +545,7 @@
   color: #ffffff;
   letter-spacing: -0.01em;
   line-height: 1.2;
-  text-align: center;
+  text-align: start;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;

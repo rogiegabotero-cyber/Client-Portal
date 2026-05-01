@@ -1,6 +1,7 @@
 ﻿// src/components/SchedulePage.jsx
 import React, { useMemo, useState } from "react";
 import "./schedule.css";
+import { RotateCw } from "lucide-react";
 import {
   getDisplayName,
   getProfileImageUrl,
@@ -208,6 +209,11 @@ export default function SchedulePage({
   pageData = null,
 }) {
   const [query, setQuery] = useState("");
+  const handleReloadClick = () => {
+    if (typeof onReload === "function") {
+      onReload({ force: true });
+    }
+  };
   const profileImagesByUserId =
     pageData?.profileImagesByUserId && typeof pageData.profileImagesByUserId === "object"
       ? pageData.profileImagesByUserId
@@ -279,27 +285,7 @@ export default function SchedulePage({
 
   return (
     <div className="schx">
-      <div className="schxTop">
-        <div className="schxControls">
-          <div className="schxField schxFieldSearch">
-            <div className="schxLabel">Search</div>
-            <input
-              className="schxInput"
-              placeholder="Search name / email / userId / days / time..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
-
-          <button className="schxBtn" type="button" onClick={onReload} disabled={loading}>
-            {loading ? "Loading..." : "Reload"}
-          </button>
-
-          <div className="schxPill">
-            Rows: <span className="schxPillValue">{filtered.length}</span>
-          </div>
-        </div>
-      </div>
+      
 
       {error && <div className="schxAlert">{error}</div>}
 
@@ -325,9 +311,36 @@ export default function SchedulePage({
 
       <div className="schxCard">
         <div className="schxCardHead">
-          <div className="schxCardTitle">Schedule Table</div>
           <div className="schxCardMeta">
             Showing {filtered.length} of {rows.length}
+          </div>
+          <div className="schxTop">
+            <div className="schxControls">
+              <div className="schxField schxFieldSearch">
+                <div className="schxLabel">Search</div>
+                <input
+                  className="schxInput"
+                  placeholder="Search name / email / userId / days / time..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+
+              <button
+                className="schxBtn schxBtnIcon"
+                type="button"
+                onClick={handleReloadClick}
+                disabled={loading}
+                aria-label={loading ? "Reloading schedules" : "Reload schedules"}
+                title={loading ? "Reloading schedules..." : "Reload schedules"}
+              >
+                <RotateCw size={16} className={loading ? "schxBtnIconSpin" : ""} />
+              </button>
+
+              <div className="schxPill">
+                Rows: <span className="schxPillValue">{filtered.length}</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -461,15 +474,6 @@ export default function SchedulePage({
         </div>
       </div>
 
-      {loading && (
-        <div className="schxLoadingOverlay" role="status" aria-live="polite">
-          <div className="schxLoadingModal">
-            <div className="schxSpinner" />
-            <div className="schxLoadingText">Fetching schedules...</div>
-            <div className="schxLoadingSub">Users: {validEmployees.length}</div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

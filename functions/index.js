@@ -2,6 +2,8 @@ const nodeCrypto = require("node:crypto");
 const admin = require("firebase-admin");
 const { setGlobalOptions } = require("firebase-functions");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const logger = require("firebase-functions/logger");
 
 setGlobalOptions({ maxInstances: 10, region: "us-central1" });
@@ -92,6 +94,402 @@ const PORTAL_ROLES = new Set([
 const toText = (value) => String(value || "").trim();
 const normalizeEmail = (value) => toText(value).toLowerCase();
 const normalizeRole = (value) => toText(value).toLowerCase().replace(/\s+/g, "_");
+const toDocToken = (value, fallback = "na") => {
+  const cleaned = toText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned || fallback;
+};
+
+const BREAK_LOGS_COLLECTION = "break_logs";
+const BREAK_NOTIFICATIONS_COLLECTION = "break_notifications";
+const OVERBREAK_NOTES_COLLECTION = "over_break_notes";
+const BREAK_LIMIT_MINUTES = 60;
+const BREAK_WARNING_MINUTES = 55;
+const OVERBREAK_GRACE_MINUTES = 5;
+const OVERBREAK_TRIGGER_MINUTES = BREAK_LIMIT_MINUTES + OVERBREAK_GRACE_MINUTES;
+const BREAK_BROADCAST_ROLES = [
+  ROLES.SUPER_ADMIN,
+  ROLES.ADMIN,
+  ROLES.ACCOUNTING,
+  ROLES.VISITOR,
+];
+
+const broadcastUsersCache = {
+  expiresAt: 0,
+  rows: [],
+};
+
+const toMillis = (value) => {
+  if (!value && value !== 0) return NaN;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+  if (typeof value?.toMillis === "function") {
+    const ms = value.toMillis();
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+  if (typeof value?.toDate === "function") {
+    const ms = value.toDate().getTime();
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+  if (typeof value?.seconds === "number") {
+    const nanos = Number(value?.nanoseconds || 0);
+    const ms = Math.round(value.seconds * 1000 + nanos / 1000000);
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : NaN;
+};
+
+const minutesBetween = (startValue, endValue) => {
+  const startMs = toMillis(startValue);
+  const endMs = toMillis(endValue);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return 0;
+  return Math.max(0, Math.round((endMs - startMs) / 60000));
+};
+
+const formatDurationLabel = (mins) => {
+  const total = Math.max(0, Math.round(Number(mins) || 0));
+  const hrs = Math.floor(total / 60);
+  const rem = total % 60;
+  if (hrs && rem) return `${hrs}h ${rem}m`;
+  if (hrs) return `${hrs}h`;
+  return `${rem}m`;
+};
+
+const buildBreakNotificationDocId = ({ userId = "", type = "", breakLogId = "" }) =>
+  [
+    toDocToken(userId, "user"),
+    toDocToken(type, "type"),
+    toDocToken(breakLogId, "event"),
+  ].join("__");
+
+const getBreakDisplayName = (row = {}, fallbackUserId = "") =>
+  toText(row?.name || row?.displayName || row?.email || fallbackUserId) || "Employee";
+
+const buildBreakMeta = (row = {}) => ({
+  userId: toText(row?.userId),
+  name: toText(row?.name),
+  email: normalizeEmail(row?.email),
+});
+
+const toBreakState = (row = {}) => ({
+  isActive: !!row?.isActive,
+  reminderSent: !!row?.reminderSent,
+  limitReachedAlertSent: !!row?.limitReachedAlertSent,
+  overBreakAlertSent: !!row?.overBreakAlertSent,
+  overBreakSaved: !!row?.overBreakSaved,
+});
+
+const getBroadcastUsers = async () => {
+  const now = Date.now();
+  if (Array.isArray(broadcastUsersCache.rows) && Number(broadcastUsersCache.expiresAt || 0) > now) {
+    return broadcastUsersCache.rows;
+  }
+
+  const snap = await db
+    .collection(USERS_COLLECTION)
+    .where("role", "in", BREAK_BROADCAST_ROLES)
+    .get();
+
+  const rows = snap.docs
+    .map((docSnap) => docSnap.data() || {})
+    .map((row) => ({
+      userId: toText(row?.userId || row?.uid),
+      role: normalizeRole(row?.role),
+    }))
+    .filter((row) => !!row.userId);
+
+  broadcastUsersCache.rows = rows;
+  broadcastUsersCache.expiresAt = now + 60 * 1000;
+  return rows;
+};
+
+const createBreakNotificationIfMissing = async ({
+  recipientUserId,
+  recipientRole = "",
+  breakLogId = "",
+  actorName = "",
+  actorEmail = "",
+  type = "",
+  title = "",
+  message = "",
+  minutesUsed = 0,
+  minutesRemaining = 0,
+  totalBreakMinutes = 0,
+  overBreakMinutes = 0,
+  overBreakId = "",
+}) => {
+  const userId = toText(recipientUserId);
+  const normalizedType = toText(type).toLowerCase();
+  const normalizedBreakLogId = toText(breakLogId);
+  if (!userId || !normalizedType || !normalizedBreakLogId) return false;
+
+  const notificationId = buildBreakNotificationDocId({
+    userId,
+    type: normalizedType,
+    breakLogId: normalizedBreakLogId,
+  });
+  const ref = db.collection(BREAK_NOTIFICATIONS_COLLECTION).doc(notificationId);
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  try {
+    await ref.create({
+      userId,
+      audience: "employee",
+      role: normalizeRole(recipientRole) || ROLES.EMPLOYEE,
+      name: toText(actorName),
+      email: normalizeEmail(actorEmail),
+      breakLogId: normalizedBreakLogId,
+      overBreakId: toText(overBreakId),
+      type: normalizedType,
+      title: toText(title),
+      message: toText(message),
+      targetPage: "notifications",
+      minutesUsed: Math.max(0, Number(minutesUsed) || 0),
+      minutesRemaining: Math.max(0, Number(minutesRemaining) || 0),
+      totalBreakMinutes: Math.max(0, Number(totalBreakMinutes) || 0),
+      overBreakMinutes: Math.max(0, Number(overBreakMinutes) || 0),
+      read: false,
+      archived: false,
+      archivedAt: null,
+      archivedByUserId: "",
+      archivedByName: "",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return true;
+  } catch (err) {
+    const code = Number(err?.code);
+    const strCode = toText(err?.code || err?.status).toLowerCase();
+    if (code === 6 || strCode === "already-exists") {
+      return false;
+    }
+    throw err;
+  }
+};
+
+const broadcastBreakNotification = async ({
+  breakLogId = "",
+  actorUserId = "",
+  actorName = "",
+  actorEmail = "",
+  type = "",
+  title = "",
+  message = "",
+  minutesUsed = 0,
+  minutesRemaining = 0,
+  totalBreakMinutes = 0,
+  overBreakMinutes = 0,
+  overBreakId = "",
+}) => {
+  const normalizedBreakLogId = toText(breakLogId);
+  if (!normalizedBreakLogId || !toText(type)) return 0;
+
+  const recipients = new Map();
+  const portalUsers = await getBroadcastUsers();
+  for (const user of portalUsers) {
+    if (!toText(user?.userId)) continue;
+    recipients.set(toText(user.userId), {
+      userId: toText(user.userId),
+      role: normalizeRole(user?.role),
+    });
+  }
+
+  const normalizedActorUserId = toText(actorUserId);
+  if (normalizedActorUserId) {
+    recipients.set(normalizedActorUserId, {
+      userId: normalizedActorUserId,
+      role: ROLES.EMPLOYEE,
+    });
+  }
+
+  let createdCount = 0;
+  for (const recipient of recipients.values()) {
+    const created = await createBreakNotificationIfMissing({
+      recipientUserId: recipient.userId,
+      recipientRole: recipient.role,
+      breakLogId: normalizedBreakLogId,
+      actorName,
+      actorEmail,
+      type,
+      title,
+      message,
+      minutesUsed,
+      minutesRemaining,
+      totalBreakMinutes,
+      overBreakMinutes,
+      overBreakId,
+    });
+    if (created) createdCount += 1;
+  }
+
+  return createdCount;
+};
+
+const saveOverBreakNote = async ({ breakLogId = "", row = {}, totalBreakMinutes = 0 }) => {
+  const normalizedBreakLogId = toText(breakLogId);
+  const userId = toText(row?.userId);
+  if (!normalizedBreakLogId || !userId) return "";
+
+  const overBreakMinutes = Math.max(0, totalBreakMinutes - BREAK_LIMIT_MINUTES);
+  const now = admin.firestore.Timestamp.now();
+  const startedAtMs = toMillis(row?.startedAt);
+  const overBreakStartMs = Number.isFinite(startedAtMs)
+    ? startedAtMs + OVERBREAK_TRIGGER_MINUTES * 60 * 1000
+    : Date.now();
+  const overBreakStartedAt = admin.firestore.Timestamp.fromMillis(overBreakStartMs);
+
+  await db.collection(OVERBREAK_NOTES_COLLECTION).doc(normalizedBreakLogId).set(
+    {
+      userId,
+      name: toText(row?.name),
+      email: normalizeEmail(row?.email),
+      breakLogId: normalizedBreakLogId,
+      startedAt: row?.startedAt || null,
+      endedAt: row?.endedAt || null,
+      overBreakStartedAt,
+      totalBreakMinutes: Math.max(0, Number(totalBreakMinutes) || 0),
+      overBreakMinutes,
+      overBreakDurationLabel: formatDurationLabel(overBreakMinutes),
+      graceMinutes: OVERBREAK_GRACE_MINUTES,
+      limitMinutes: BREAK_LIMIT_MINUTES,
+      triggerMinutes: OVERBREAK_TRIGGER_MINUTES,
+      note: `Employee exceeded the 1-hour break limit. Current over-break: ${formatDurationLabel(
+        overBreakMinutes
+      )}. Total break: ${formatDurationLabel(totalBreakMinutes)}.`,
+      archived: false,
+      archivedAt: null,
+      archivedByUserId: "",
+      archivedByName: "",
+      updatedAt: now,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return normalizedBreakLogId;
+};
+
+const processBreakThresholds = async ({
+  breakLogId = "",
+  beforeRow = {},
+  afterRow = {},
+  nowMs = Date.now(),
+}) => {
+  const normalizedBreakLogId = toText(breakLogId);
+  const userId = toText(afterRow?.userId || beforeRow?.userId);
+  if (!normalizedBreakLogId || !userId) return { updates: {} };
+
+  const startedAt = afterRow?.startedAt || beforeRow?.startedAt;
+  const totalBreakMinutes = minutesBetween(startedAt, nowMs);
+  const overBreakMinutes = Math.max(0, totalBreakMinutes - BREAK_LIMIT_MINUTES);
+  const displayName = getBreakDisplayName(afterRow, userId);
+  const actorMeta = buildBreakMeta(afterRow);
+  const beforeState = toBreakState(beforeRow);
+  const afterState = toBreakState(afterRow);
+  const updates = {};
+
+  if (totalBreakMinutes >= BREAK_WARNING_MINUTES && !afterState.reminderSent && !beforeState.reminderSent) {
+    await broadcastBreakNotification({
+      breakLogId: normalizedBreakLogId,
+      actorUserId: userId,
+      actorName: actorMeta.name || displayName,
+      actorEmail: actorMeta.email,
+      type: "break_warning",
+      title: "Break limit almost reached",
+      message: `${displayName} is 5 minutes away from the 1-hour break limit.`,
+      minutesUsed: totalBreakMinutes,
+      minutesRemaining: Math.max(0, BREAK_LIMIT_MINUTES - totalBreakMinutes),
+      totalBreakMinutes,
+      overBreakMinutes,
+    });
+    updates.reminderSent = true;
+    updates.reminderSentAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
+  if (
+    totalBreakMinutes >= BREAK_LIMIT_MINUTES &&
+    !afterState.limitReachedAlertSent &&
+    !beforeState.limitReachedAlertSent
+  ) {
+    await broadcastBreakNotification({
+      breakLogId: normalizedBreakLogId,
+      actorUserId: userId,
+      actorName: actorMeta.name || displayName,
+      actorEmail: actorMeta.email,
+      type: "break_limit_reached",
+      title: "Break limit reached",
+      message: `${displayName} has reached the 1-hour break limit.`,
+      minutesUsed: totalBreakMinutes,
+      minutesRemaining: 0,
+      totalBreakMinutes,
+      overBreakMinutes,
+    });
+    updates.limitReachedAlertSent = true;
+    updates.limitReachedAlertSentAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
+  if (
+    totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES &&
+    (!afterState.overBreakAlertSent || !afterState.overBreakSaved) &&
+    (!beforeState.overBreakAlertSent || !beforeState.overBreakSaved)
+  ) {
+    const overBreakId = await saveOverBreakNote({
+      breakLogId: normalizedBreakLogId,
+      row: afterRow,
+      totalBreakMinutes,
+    });
+
+    await broadcastBreakNotification({
+      breakLogId: normalizedBreakLogId,
+      actorUserId: userId,
+      actorName: actorMeta.name || displayName,
+      actorEmail: actorMeta.email,
+      type: "over_break_broadcast",
+      title: "Over break alert",
+      message: `${displayName} exceeded the break limit by ${formatDurationLabel(
+        overBreakMinutes
+      )}. Total break: ${formatDurationLabel(totalBreakMinutes)}.`,
+      minutesUsed: totalBreakMinutes,
+      minutesRemaining: 0,
+      totalBreakMinutes,
+      overBreakMinutes,
+      overBreakId,
+    });
+
+    await createBreakNotificationIfMissing({
+      recipientUserId: userId,
+      recipientRole: ROLES.EMPLOYEE,
+      breakLogId: normalizedBreakLogId,
+      actorName: actorMeta.name || displayName,
+      actorEmail: actorMeta.email,
+      type: "over_break_employee",
+      title: "Over-break recorded",
+      message: "Your break exceeded the 1-hour break limit.",
+      minutesUsed: totalBreakMinutes,
+      minutesRemaining: 0,
+      totalBreakMinutes,
+      overBreakMinutes,
+      overBreakId,
+    });
+
+    updates.overBreakSaved = true;
+    updates.overBreakSavedAt = admin.firestore.FieldValue.serverTimestamp();
+    updates.overBreakAlertSent = true;
+    updates.overBreakAlertSentAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
+  return {
+    updates,
+    totalBreakMinutes,
+    overBreakMinutes,
+  };
+};
 
 const listFromValue = (value) => (Array.isArray(value) ? value : []);
 
@@ -652,3 +1050,104 @@ exports.adminResetEmployeePassword = onCall(callableRuntimeOptions, async (reque
     authUserUpdated,
   };
 });
+
+exports.processBreakLogWrite = onDocumentWritten(
+  {
+    region: "us-central1",
+    document: `${BREAK_LOGS_COLLECTION}/{breakLogId}`,
+    retry: false,
+  },
+  async (event) => {
+    const breakLogId = toText(event?.params?.breakLogId);
+    const beforeRow = event?.data?.before?.exists ? event.data.before.data() || {} : {};
+    const afterExists = !!event?.data?.after?.exists;
+    const afterRow = afterExists ? event.data.after.data() || {} : {};
+    if (!afterExists || !breakLogId) return;
+
+    const beforeActive = !!beforeRow?.isActive;
+    const afterActive = !!afterRow?.isActive;
+    const userId = toText(afterRow?.userId || beforeRow?.userId);
+    const displayName = getBreakDisplayName(afterRow, userId);
+
+    if (!event?.data?.before?.exists && afterActive) {
+      await broadcastBreakNotification({
+        breakLogId,
+        actorUserId: userId,
+        actorName: toText(afterRow?.name || displayName),
+        actorEmail: normalizeEmail(afterRow?.email),
+        type: "break_started",
+        title: "Employee on break",
+        message: `${displayName} is currently on break.`,
+        minutesUsed: 0,
+        minutesRemaining: BREAK_LIMIT_MINUTES,
+        totalBreakMinutes: 0,
+        overBreakMinutes: 0,
+      });
+      return;
+    }
+
+    if (beforeActive && !afterActive) {
+      const endedAtMs = toMillis(afterRow?.endedAt) || Date.now();
+      const { updates, totalBreakMinutes, overBreakMinutes } = await processBreakThresholds({
+        breakLogId,
+        beforeRow,
+        afterRow,
+        nowMs: endedAtMs,
+      });
+
+      if (Object.keys(updates).length > 0) {
+        updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        await db.collection(BREAK_LOGS_COLLECTION).doc(breakLogId).set(updates, { merge: true });
+      }
+
+      await broadcastBreakNotification({
+        breakLogId,
+        actorUserId: userId,
+        actorName: toText(afterRow?.name || displayName),
+        actorEmail: normalizeEmail(afterRow?.email),
+        type: "break_ended",
+        title: "Employee back from break",
+        message: `${displayName} is back from break. Total break time: ${formatDurationLabel(
+          totalBreakMinutes
+        )}.`,
+        minutesUsed: totalBreakMinutes,
+        minutesRemaining: Math.max(0, BREAK_LIMIT_MINUTES - totalBreakMinutes),
+        totalBreakMinutes,
+        overBreakMinutes,
+      });
+    }
+  }
+);
+
+exports.processActiveBreakThresholds = onSchedule(
+  {
+    region: "us-central1",
+    schedule: "every 1 minutes",
+    timeZone: "America/Chicago",
+    retryCount: 0,
+  },
+  async () => {
+    const activeBreakSnap = await db
+      .collection(BREAK_LOGS_COLLECTION)
+      .where("isActive", "==", true)
+      .get();
+
+    const nowMs = Date.now();
+    for (const docSnap of activeBreakSnap.docs) {
+      const breakLogId = toText(docSnap.id);
+      const row = docSnap.data() || {};
+
+      const { updates } = await processBreakThresholds({
+        breakLogId,
+        beforeRow: row,
+        afterRow: row,
+        nowMs,
+      });
+
+      if (Object.keys(updates).length > 0) {
+        updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        await db.collection(BREAK_LOGS_COLLECTION).doc(breakLogId).set(updates, { merge: true });
+      }
+    }
+  }
+);

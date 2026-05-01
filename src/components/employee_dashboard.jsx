@@ -341,15 +341,15 @@ const ATTENDANCE_BUCKETS = [
 ];
 
 const ATTENDANCE_SCORE_WEIGHTS = Object.freeze({
-  early: 1.2,
+  early: 1.0,
   onTime: 1.0,
-  late: 0.35,
-  pto: 0.75,
-  absent: 0.05,
+  late: 0.7,
+  pto: 1.0,
+  absent: 0,
   ncns: 0,
 });
 
-const ATTENDANCE_SCORE_BEST_DAY_POINTS = 1.2;
+const ATTENDANCE_SCORE_BEST_DAY_POINTS = 1.0;
 const AGENT_ATTENDANCE_MONTH_ALL = "ALL";
 const AGENT_DONUTS_PREVIEW = 24;
 const EMPLOYEE_NOTEPAD_COLLECTION = "employee_notepad_notes";
@@ -741,14 +741,55 @@ export default function EmployeeDashboard({
       pageData?.user?.id ||
       ""
   ).trim();
+  const viewerEmail = String(
+    pageData?.viewer?.email ||
+      pageData?.currentUser?.email ||
+      pageData?.user?.email ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const viewerLinkedEmployeeId = useMemo(() => {
+    const rows = Array.isArray(employees) ? employees : [];
+    const idCandidates = [
+      getUserId(pageData?.viewer?.employee),
+      getUserId(pageData?.currentUser?.employee),
+      getUserId(pageData?.user?.employee),
+      pageData?.viewer?.employeeId,
+      pageData?.currentUser?.employeeId,
+      pageData?.user?.employeeId,
+      viewerUserId,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    for (const candidate of idCandidates) {
+      if (employeeIds.includes(candidate)) return candidate;
+    }
+
+    if (viewerEmail) {
+      const match = rows.find(
+        (row) => String(row?.email || "").trim().toLowerCase() === viewerEmail
+      );
+      const matchedId = String(getUserId(match) || "").trim();
+      if (matchedId) return matchedId;
+    }
+
+    return "";
+  }, [employees, employeeIds, pageData, viewerUserId, viewerEmail]);
 
   const lockedEmployeeId = useMemo(() => {
     if (viewerRole !== "employee") return "";
-    if (!viewerUserId) return "";
-    return employeeIds.find((id) => String(id) === viewerUserId) || viewerUserId;
-  }, [viewerRole, viewerUserId, employeeIds]);
+    if (viewerLinkedEmployeeId) return viewerLinkedEmployeeId;
+    return "";
+  }, [viewerRole, viewerLinkedEmployeeId]);
 
   const canSwitchEmployee = viewerRole !== "employee" && employeeIds.length > 1;
+
+  const attendanceScoreEmployees = useMemo(() => {
+    return Array.isArray(employees) ? employees : [];
+  }, [employees]);
 
   const effectiveSelectedId = useMemo(() => {
     if (lockedEmployeeId) return lockedEmployeeId;
@@ -1052,6 +1093,25 @@ export default function EmployeeDashboard({
       requestedHistoryRef.current.delete(uid);
     });
   }, [effectiveSelectedId, onFetchFullHistory, historyByUserId, loadingHistoryByUserId]);
+
+  useEffect(() => {
+    if (!onFetchFullHistory) return;
+
+    const rows = Array.isArray(employees) ? employees : [];
+    for (const emp of rows) {
+      const uid = String(getUserId(emp) ?? emp?.userId ?? emp?.id ?? "").trim();
+      if (!uid) continue;
+
+      const existing = Array.isArray(historyByUserId?.[uid]) && historyByUserId[uid].length > 0;
+      const loading = !!loadingHistoryByUserId?.[uid];
+      if (existing || loading || requestedHistoryRef.current.has(uid)) continue;
+
+      requestedHistoryRef.current.add(uid);
+      Promise.resolve(onFetchFullHistory(uid)).catch(() => {
+        requestedHistoryRef.current.delete(uid);
+      });
+    }
+  }, [employees, onFetchFullHistory, historyByUserId, loadingHistoryByUserId]);
 
   // Cost control: do not prefetch full history for every employee.
   // Full history is loaded only for the selected employee, then cached by App.jsx.
@@ -2540,7 +2600,7 @@ export default function EmployeeDashboard({
     const zone = String(businessTimeZone || "").trim() || "America/Chicago";
     const monthSet = new Set();
 
-    for (const emp of Array.isArray(employees) ? employees : []) {
+    for (const emp of attendanceScoreEmployees) {
       const userId = String(getUserId(emp) ?? emp?.userId ?? emp?.id ?? "").trim();
       if (!userId) continue;
       const historyLogs = Array.isArray(historyByUserId?.[userId]) ? historyByUserId[userId] : [];
@@ -2555,7 +2615,7 @@ export default function EmployeeDashboard({
     }
 
     return Array.from(monthSet.values()).sort((a, b) => b.localeCompare(a));
-  }, [employees, historyByUserId, logsByUserId, businessTimeZone]);
+  }, [attendanceScoreEmployees, historyByUserId, logsByUserId, businessTimeZone]);
 
   const effectiveSelectedAgentAttendanceMonth = useMemo(() => {
     if (selectedAgentAttendanceMonth === AGENT_ATTENDANCE_MONTH_ALL) {
@@ -2573,7 +2633,7 @@ export default function EmployeeDashboard({
   const agentAttendanceRates = useMemo(() => {
     const zone = String(businessTimeZone || "").trim() || "America/Chicago";
 
-    const rows = (Array.isArray(employees) ? employees : []).map((emp, index) => {
+    const rows = attendanceScoreEmployees.map((emp, index) => {
       const userId = String(getUserId(emp) ?? emp?.userId ?? emp?.id ?? "").trim();
       const name = toText(getDisplayName(emp)) || userId || `Employee ${index + 1}`;
       const historyLogs = Array.isArray(historyByUserId?.[userId]) ? historyByUserId[userId] : [];
@@ -2617,7 +2677,11 @@ export default function EmployeeDashboard({
         Number(counts.pto || 0) * ATTENDANCE_SCORE_WEIGHTS.pto +
         Number(counts.absent || 0) * ATTENDANCE_SCORE_WEIGHTS.absent +
         Number(counts.ncns || 0) * ATTENDANCE_SCORE_WEIGHTS.ncns;
-      const rate =
+      const hasPenaltyStatus =
+        Number(counts.late || 0) > 0 ||
+        Number(counts.absent || 0) > 0 ||
+        Number(counts.ncns || 0) > 0;
+      const rawRate =
         totalCounted > 0
           ? Math.max(
               0,
@@ -2629,6 +2693,7 @@ export default function EmployeeDashboard({
               )
             )
           : 0;
+      const rate = hasPenaltyStatus ? Math.min(rawRate, 99) : rawRate;
 
       const pieBackground = buildPieConicGradient(
         ATTENDANCE_BUCKETS.map((item) => ({
@@ -2650,7 +2715,7 @@ export default function EmployeeDashboard({
         counts,
         totalCounted,
         pieBackground,
-        tooltipSummary: `${tooltipSummary} | Score model: Early/On Time up, Late/Absent/NCNS down`,
+        tooltipSummary: `${tooltipSummary} | Score model: Early/On Time/PTO = full credit, Late/Absent reduce score, NCNS has the biggest deduction`,
       };
     });
 
@@ -2674,7 +2739,7 @@ export default function EmployeeDashboard({
       return String(a.name || "").localeCompare(String(b.name || ""));
     });
   }, [
-    employees,
+    attendanceScoreEmployees,
     historyByUserId,
     logsByUserId,
     businessTimeZone,
@@ -3217,7 +3282,7 @@ export default function EmployeeDashboard({
           <div className="agentAttendancePanel">
             <div className="agentAttendancePanelTop">
               <div className="agentAttendancePanelHead">
-                Best Attendance Per Employee (Early/On Time weighted, Late/Absent lower score)
+                Best Attendance Per Employee (Early/On Time/PTO full credit, Late/Absent lower score, NCNS biggest deduction)
               </div>
               <div className="agentAttendanceMonthFilter">
                 <label htmlFor="employee-agent-attendance-month-filter">Month</label>

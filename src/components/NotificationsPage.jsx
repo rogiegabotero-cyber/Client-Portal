@@ -42,6 +42,7 @@ export default function NotificationsPage({
     targetId: "",
   });
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [markAllReadBusy, setMarkAllReadBusy] = useState(false);
   const actionMenuRef = useRef(null);
 
   const unreadIds = useMemo(
@@ -237,16 +238,36 @@ export default function NotificationsPage({
     }
   };
 
+  const handleMarkAllRead = async () => {
+    if (markAllReadBusy) return;
+    if (isArchiveView || unreadIds.length === 0) return;
+    if (typeof onMarkAllRead !== "function") return;
+
+    setMarkAllReadBusy(true);
+    try {
+      await onMarkAllRead(unreadIds);
+    } finally {
+      setMarkAllReadBusy(false);
+    }
+  };
+
   return (
     <div className="notif-page">
       <div className="notif-page-head">
         <button
           type="button"
           className="notif-page-mark-all-btn"
-          disabled={isArchiveView || unreadIds.length === 0}
-          onClick={() => onMarkAllRead?.(unreadIds)}
+          disabled={markAllReadBusy || isArchiveView || unreadIds.length === 0}
+          onClick={handleMarkAllRead}
         >
-          Mark all as read
+          {markAllReadBusy ? (
+            <>
+              <span className="notif-page-btn-spinner" aria-hidden="true" />
+              <span>Processing...</span>
+            </>
+          ) : (
+            "Mark all as read"
+          )}
         </button>
 
         <div className="notif-page-head-actions" ref={actionMenuRef}>

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+﻿import React, { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import "./header.css";
 import { Bell, Eye, EyeOff, Settings } from "lucide-react";
@@ -34,6 +34,7 @@ const Header = ({
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [avatarErrored, setAvatarErrored] = useState(false);
+  const [markAllNotificationsLoading, setMarkAllNotificationsLoading] = useState(false);
   const notifRef = useRef(null);
   const settingsMenuRef = useRef(null);
 
@@ -184,6 +185,19 @@ const Header = ({
   const openChangePasswordModal = () => {
     setSettingsMenuOpen(false);
     setPasswordModalOpen(true);
+  };
+
+  const handleMarkAllNotificationsRead = async () => {
+    if (markAllNotificationsLoading) return;
+    if (unreadIds.length === 0) return;
+    if (typeof onMarkAllNotificationsRead !== "function") return;
+
+    setMarkAllNotificationsLoading(true);
+    try {
+      await onMarkAllNotificationsRead(unreadIds);
+    } finally {
+      setMarkAllNotificationsLoading(false);
+    }
   };
 
   const handleChangePassword = async () => {
@@ -406,14 +420,17 @@ const Header = ({
                 <button
                   type="button"
                   className="notif-read-all-btn"
-                  disabled={unreadIds.length === 0}
-                  onClick={async () => {
-                    if (typeof onMarkAllNotificationsRead === "function") {
-                      await onMarkAllNotificationsRead(unreadIds);
-                    }
-                  }}
+                  disabled={markAllNotificationsLoading || unreadIds.length === 0}
+                  onClick={handleMarkAllNotificationsRead}
                 >
-                  Mark all as Read
+                  {markAllNotificationsLoading ? (
+                    <>
+                      <span className="notif-btn-spinner" aria-hidden="true" />
+                      <span>Processing...</span>
+                    </>
+                  ) : (
+                    "Mark all as Read"
+                  )}
                 </button>
               </div>
 
@@ -471,7 +488,7 @@ const Header = ({
           <button
             type="button"
             onClick={closeProfileDrawer}
-            className="header-profile-drawer-backdrop"
+            className=""
             aria-label="Close profile drawer"
           />
 

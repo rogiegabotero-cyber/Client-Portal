@@ -21,6 +21,7 @@ import {
   getDocs,
   limit,
   onSnapshot,
+  orderBy,
   query,
   runTransaction,
   setDoc,
@@ -35,6 +36,7 @@ import { toMillis } from "../utils/common";
 const PORTAL_USER_REQUESTS_COLLECTION = "portal_user_requests";
 const BREAK_NOTIFICATIONS_COLLECTION = "break_notifications";
 const ACTIVE_SESSIONS_COLLECTION = "portal_active_sessions";
+const ACTIVE_SESSION_STALE_THRESHOLD_MS = 20 * 60 * 1000;
 const REQUEST_ROLE_OPTIONS = [ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
 const PORTAL_ROLE_OPTIONS = [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
 const PASSWORD_HASH_PREFIX = "portal_v1";
@@ -382,7 +384,13 @@ export async function createPortalUserRequest({
 }
 
 export async function getPortalUserRequests() {
-  const snap = await getDocs(collection(db, PORTAL_USER_REQUESTS_COLLECTION));
+  const snap = await getDocs(
+    query(
+      collection(db, PORTAL_USER_REQUESTS_COLLECTION),
+      orderBy("createdAt", "desc"),
+      limit(250)
+    )
+  );
 
   const rows = snap.docs.map((item) => ({
     id: item.id,
@@ -1200,6 +1208,34 @@ export async function claimPortalActiveSession({
   };
 }
 
+export async function touchPortalActiveSession({ userId, sessionKey } = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  const expectedSessionKey = String(sessionKey || "").trim();
+
+  if (!normalizedUserId || !expectedSessionKey) return false;
+
+  const sessionRef = doc(db, ACTIVE_SESSIONS_COLLECTION, normalizedUserId);
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+  let updated = false;
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(sessionRef);
+    if (!snap.exists()) return;
+
+    const currentKey = String(snap.data()?.sessionKey || "").trim();
+    if (!currentKey || currentKey !== expectedSessionKey) return;
+
+    tx.update(sessionRef, {
+      updatedAt: serverTimestamp(),
+      ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+    });
+    updated = true;
+  });
+
+  return updated;
+}
+
 export async function isPortalActiveSessionValid({ userId, sessionKey } = {}) {
   const normalizedUserId = String(userId || "").trim();
   const expectedSessionKey = String(sessionKey || "").trim();
@@ -1234,6 +1270,83 @@ export function subscribeToPortalActiveSession({
       onInvalid();
     }
   });
+}
+
+export function subscribePortalActiveSessions({
+  onChange,
+  onError,
+  staleThresholdMs = ACTIVE_SESSION_STALE_THRESHOLD_MS,
+  cleanupStale = true,
+} = {}) {
+  const sessionsRef = collection(db, ACTIVE_SESSIONS_COLLECTION);
+  const normalizedThresholdMs = Number(staleThresholdMs);
+  const activeThresholdMs =
+    Number.isFinite(normalizedThresholdMs) && normalizedThresholdMs > 0
+      ? normalizedThresholdMs
+      : ACTIVE_SESSION_STALE_THRESHOLD_MS;
+  const staleCleanupCooldownMs = 10 * 60 * 1000;
+  const lastCleanupAttemptByUserId = new Map();
+
+  return onSnapshot(
+    sessionsRef,
+    (snapshot) => {
+      const rows = [];
+      const nowMs = Date.now();
+      const staleUserIdsToCleanup = [];
+
+      for (const docSnap of snapshot.docs || []) {
+        const data = docSnap.data() || {};
+        const userId = String(data?.userId || docSnap.id || "").trim();
+        if (!userId) continue;
+
+        const updatedAtMs = toMillis(data?.updatedAt ?? data?.updatedAtClientUtcIso ?? null);
+        if (!Number.isFinite(updatedAtMs)) continue;
+        if (nowMs - updatedAtMs > activeThresholdMs) {
+          if (cleanupStale) {
+            const lastAttemptAt = Number(lastCleanupAttemptByUserId.get(userId) || 0);
+            if (!Number.isFinite(lastAttemptAt) || nowMs - lastAttemptAt >= staleCleanupCooldownMs) {
+              lastCleanupAttemptByUserId.set(userId, nowMs);
+              staleUserIdsToCleanup.push(userId);
+            }
+          }
+          continue;
+        }
+
+        rows.push({
+          userId,
+          role: normalizePortalRole(data?.role || ""),
+          name: String(data?.name || "").trim(),
+          email: normalizeEmail(data?.email || ""),
+          updatedAtMs,
+        });
+      }
+
+      rows.sort((a, b) => {
+        const left = String(a?.name || a?.email || a?.userId || "");
+        const right = String(b?.name || b?.email || b?.userId || "");
+        return left.localeCompare(right);
+      });
+
+      if (typeof onChange === "function") {
+        onChange(rows);
+      }
+
+      if (cleanupStale && staleUserIdsToCleanup.length) {
+        Promise.allSettled(
+          staleUserIdsToCleanup.map((uid) =>
+            deleteDoc(doc(db, ACTIVE_SESSIONS_COLLECTION, uid))
+          )
+        ).catch(() => {
+          // Ignore stale cleanup failures (for example, permission constraints).
+        });
+      }
+    },
+    (error) => {
+      if (typeof onError === "function") {
+        onError(error);
+      }
+    }
+  );
 }
 
 export async function releasePortalActiveSession({ userId, sessionKey } = {}) {

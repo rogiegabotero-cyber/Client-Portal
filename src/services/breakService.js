@@ -10,11 +10,17 @@ import {
   doc,
   query,
   where,
+  limit,
+  setDoc,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { getBusinessDayKey } from "../utils/attendanceDate";
 import { toMillis } from "../utils/common";
 import { buildTimeZoneMeta, resolveStorageTimeZone } from "../utils/timeZoneMeta";
+import {
+  recordFirestoreGetDocsRead,
+  recordFirestoreSnapshotRead,
+} from "../utils/firestoreReadMetrics";
 
 export const DAILY_BREAK_LIMIT_MINUTES = 60;
 export const BREAK_REMINDER_MINUTES = 55;
@@ -27,6 +33,36 @@ const BREAK_LOGS_COLLECTION = "break_logs";
 const BREAK_NOTIFICATIONS_COLLECTION = "break_notifications";
 const OVERBREAK_NOTES_COLLECTION = "over_break_notes";
 const USERS_COLLECTION = "users";
+const NOTIFICATION_BROADCAST_AUDIENCES = ["broadcast", "all", "everyone"];
+const IN_QUERY_CHUNK_SIZE = 10;
+const BREAK_RANGE_CACHE_TTL_MS = 30 * 1000;
+const NOTIFICATION_VIEW_CACHE_TTL_MS = 20 * 1000;
+const NOTIFICATION_QUERY_LIMIT = 180;
+const OVERBREAK_QUERY_LIMIT = 240;
+const PORTAL_USERS_CACHE_TTL_MS = 60 * 1000;
+
+const breakRangeCache = new Map();
+const notificationsViewCache = new Map();
+const portalUsersCache = {
+  expiresAt: 0,
+  rows: [],
+};
+
+const trackedGetDocs = async (label, sourceQuery) => {
+  const snapshot = await getDocs(sourceQuery);
+  recordFirestoreGetDocsRead(label, snapshot);
+  return snapshot;
+};
+
+const estimateSnapshotReadCount = (snapshot, { isInitial = false } = {}) => {
+  const fullCount = Array.isArray(snapshot?.docs)
+    ? snapshot.docs.length
+    : Number(snapshot?.size || 0);
+  if (isInitial) return Math.max(0, Number(fullCount || 0));
+
+  const changes = Array.isArray(snapshot?.docChanges?.()) ? snapshot.docChanges() : [];
+  return Math.max(0, Number(changes.length || 0));
+};
 
 const toDate = (value) => {
   if (!value) return null;
@@ -76,18 +112,6 @@ const formatDurationLabel = (mins) => {
   return `${rem}m`;
 };
 
-const startOfLocalDay = (baseDate = new Date()) => {
-  const d = new Date(baseDate);
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
-
-const endOfLocalDay = (baseDate = new Date()) => {
-  const d = new Date(baseDate);
-  d.setHours(23, 59, 59, 999);
-  return d;
-};
-
 const normalizeYmd = (value) => {
   const str = String(value || "").trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
@@ -99,10 +123,234 @@ const normalizeYmd = (value) => {
   return `${y}-${m}-${day}`;
 };
 
-async function getPortalUsers() {
-  const snap = await getDocs(collection(db, USERS_COLLECTION));
+const chunkArray = (arr = [], size = IN_QUERY_CHUNK_SIZE) => {
+  const list = Array.isArray(arr) ? arr : [];
+  const chunkSize = Math.max(1, Number(size) || IN_QUERY_CHUNK_SIZE);
+  const out = [];
 
-  return snap.docs
+  for (let idx = 0; idx < list.length; idx += chunkSize) {
+    out.push(list.slice(idx, idx + chunkSize));
+  }
+
+  return out;
+};
+
+const toCacheKeyUserIds = (userIds = []) =>
+  Array.from(
+    new Set((Array.isArray(userIds) ? userIds : []).map((v) => String(v || "").trim()).filter(Boolean))
+  )
+    .sort()
+    .join(",");
+
+const buildBreakRangeCacheKey = (userIds = [], options = {}) => {
+  const idsKey = toCacheKeyUserIds(userIds);
+  const start = normalizeYmd(options?.startDayKey || "");
+  const end = normalizeYmd(options?.endDayKey || "");
+  const resetTime = String(options?.attendanceResetTime || "05:00").trim() || "05:00";
+  const timeZone = String(options?.businessTimeZone || "America/Chicago").trim() || "America/Chicago";
+  return [idsKey, start || "__all__", end || "__all__", resetTime, timeZone].join("|");
+};
+
+const cloneBreakLogsByUserId = (payload = {}) => {
+  const out = {};
+  for (const [userId, rows] of Object.entries(payload && typeof payload === "object" ? payload : {})) {
+    out[userId] = Array.isArray(rows) ? [...rows] : [];
+  }
+  return out;
+};
+
+const getCachedBreakRange = (cacheKey) => {
+  const hit = breakRangeCache.get(String(cacheKey || ""));
+  if (!hit) return null;
+  if (Date.now() > Number(hit?.expiresAt || 0)) {
+    breakRangeCache.delete(String(cacheKey || ""));
+    return null;
+  }
+  return cloneBreakLogsByUserId(hit.data || {});
+};
+
+const setCachedBreakRange = (cacheKey, data) => {
+  breakRangeCache.set(String(cacheKey || ""), {
+    expiresAt: Date.now() + BREAK_RANGE_CACHE_TTL_MS,
+    data: cloneBreakLogsByUserId(data || {}),
+  });
+};
+
+const invalidateBreakRangeCache = () => {
+  breakRangeCache.clear();
+};
+
+const buildNotificationViewerCacheKey = ({ uid = "", userRole = "" } = {}) =>
+  `${String(uid || "").trim()}|${normalizeRoleValue(userRole || "")}`;
+
+const invalidateNotificationViewCache = () => {
+  notificationsViewCache.clear();
+};
+
+const loadVisibleNotificationRowsForViewer = async ({ uid = "", userRole = "" } = {}) => {
+  const normalizedUid = String(uid || "").trim();
+  if (!normalizedUid) return [];
+
+  const cacheKey = buildNotificationViewerCacheKey({ uid: normalizedUid, userRole });
+  const now = Date.now();
+  const hit = notificationsViewCache.get(cacheKey);
+  if (hit) {
+    if (hit.pendingPromise) {
+      return hit.pendingPromise;
+    }
+    if (Number(hit.expiresAt || 0) > now && Array.isArray(hit.rows)) {
+      return hit.rows;
+    }
+  }
+
+  const pendingPromise = (async () => {
+    let rows = [];
+
+    try {
+      const queries = buildNotificationQueriesForViewer(normalizedUid, userRole, {});
+      if (!queries.length) return [];
+
+      const snapshots = await Promise.all(
+        queries.map((q, idx) => trackedGetDocs(`notifications.viewer.${idx}`, q))
+      );
+      rows = dedupeRowsById(
+        snapshots.flatMap((snap) => snap.docs.map((d) => notificationRowFromDoc(d)))
+      );
+    } catch {
+      // Fallback for environments that don't have all required compound indexes yet.
+      const snap = await trackedGetDocs(
+        "notifications.viewer.fallbackAll",
+        collection(db, BREAK_NOTIFICATIONS_COLLECTION)
+      );
+      rows = snap.docs.map((d) => notificationRowFromDoc(d));
+    }
+
+    const visibleRows = rows.filter((row) =>
+      isNotificationVisibleToUser(row, { uid: normalizedUid, userRole })
+    );
+
+    visibleRows.sort((a, b) => {
+      const aMs = toMillis(a?.createdAt);
+      const bMs = toMillis(b?.createdAt);
+      return bMs - aMs;
+    });
+
+    notificationsViewCache.set(cacheKey, {
+      expiresAt: Date.now() + NOTIFICATION_VIEW_CACHE_TTL_MS,
+      rows: visibleRows,
+      pendingPromise: null,
+    });
+
+    return visibleRows;
+  })();
+
+  notificationsViewCache.set(cacheKey, {
+    expiresAt: now + NOTIFICATION_VIEW_CACHE_TTL_MS,
+    rows: [],
+    pendingPromise,
+  });
+
+  return pendingPromise;
+};
+
+const notificationRowFromDoc = (d) => ({
+  id: d.id,
+  ...d.data(),
+});
+
+const dedupeRowsById = (rows = []) => {
+  const map = new Map();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = String(row?.id || "").trim();
+    if (!id || map.has(id)) continue;
+    map.set(id, row);
+  }
+
+  return Array.from(map.values());
+};
+
+const isPortalRequestPendingNotificationVisible = (userRole = "") =>
+  userRole === "admin" || userRole === "super_admin";
+
+const isNotificationVisibleToUser = (row = {}, { uid = "", userRole = "" } = {}) => {
+  const audience = String(row?.audience || "").trim().toLowerCase();
+  const rowUserId = String(row?.userId || "").trim();
+  const rowRole = normalizeRoleValue(row?.role);
+  const type = String(row?.type || "").trim().toLowerCase();
+  const visitorBlockedTypes = new Set([
+    "break_warning",
+    "break_limit_reached",
+    "over_break_broadcast",
+  ]);
+
+  if (userRole === "visitor" && visitorBlockedTypes.has(type)) {
+    return false;
+  }
+
+  if (rowUserId) {
+    return rowUserId === uid;
+  }
+
+  if (NOTIFICATION_BROADCAST_AUDIENCES.includes(audience)) {
+    return true;
+  }
+
+  if (rowRole && rowRole === userRole) return true;
+  if (audience && audience === userRole) return true;
+
+  if (type === "portal_user_request_pending") {
+    return isPortalRequestPendingNotificationVisible(userRole);
+  }
+
+  return false;
+};
+
+const buildNotificationQueriesForViewer = (uid, userRole, { archived } = {}) => {
+  const normalizedUid = String(uid || "").trim();
+  const normalizedRole = normalizeRoleValue(userRole || "");
+  if (!normalizedUid) return [];
+
+  const coll = collection(db, BREAK_NOTIFICATIONS_COLLECTION);
+  const includeArchivedFilter = typeof archived === "boolean";
+  const maybeArchivedWhere = includeArchivedFilter ? [where("archived", "==", archived)] : [];
+  const out = [];
+
+  out.push(query(coll, where("userId", "==", normalizedUid), ...maybeArchivedWhere, limit(NOTIFICATION_QUERY_LIMIT)));
+  for (const audience of NOTIFICATION_BROADCAST_AUDIENCES) {
+    out.push(query(coll, where("audience", "==", audience), ...maybeArchivedWhere, limit(NOTIFICATION_QUERY_LIMIT)));
+  }
+
+  if (normalizedRole) {
+    out.push(query(coll, where("role", "==", normalizedRole), ...maybeArchivedWhere, limit(NOTIFICATION_QUERY_LIMIT)));
+    out.push(
+      query(coll, where("audience", "==", normalizedRole), ...maybeArchivedWhere, limit(NOTIFICATION_QUERY_LIMIT))
+    );
+  }
+
+  if (isPortalRequestPendingNotificationVisible(normalizedRole)) {
+    out.push(
+      query(
+        coll,
+        where("type", "==", "portal_user_request_pending"),
+        ...maybeArchivedWhere,
+        limit(NOTIFICATION_QUERY_LIMIT)
+      )
+    );
+  }
+
+  return out;
+};
+
+async function getPortalUsers() {
+  const now = Date.now();
+  if (Array.isArray(portalUsersCache.rows) && Number(portalUsersCache.expiresAt || 0) > now) {
+    return portalUsersCache.rows;
+  }
+
+  const snap = await trackedGetDocs("users.portalUsers", collection(db, USERS_COLLECTION));
+
+  const rows = snap.docs
     .map((row) => ({
       id: row.id,
       ...row.data(),
@@ -122,12 +370,17 @@ async function getPortalUsers() {
       };
     })
     .filter((row) => row.userId);
+
+  portalUsersCache.rows = rows;
+  portalUsersCache.expiresAt = now + PORTAL_USERS_CACHE_TTL_MS;
+  return rows;
 }
 
 async function findExistingOverBreakByBreakLogId(breakLogId) {
   if (!breakLogId) return null;
 
-  const snap = await getDocs(
+  const snap = await trackedGetDocs(
+    "overBreak.findByBreakLogId",
     query(collection(db, OVERBREAK_NOTES_COLLECTION), where("breakLogId", "==", String(breakLogId)))
   );
   const rows = snap.docs.map((d) => ({
@@ -138,28 +391,29 @@ async function findExistingOverBreakByBreakLogId(breakLogId) {
   return rows.find((row) => String(row?.breakLogId || "") === String(breakLogId)) || null;
 }
 
-async function findNotificationByBreakLogIdTypeAndUserId(breakLogId, type, userId = "") {
-  if (!breakLogId || !type) return null;
+const toDocToken = (value, fallback = "na") => {
+  const cleaned = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned || fallback;
+};
 
-  const snap = await getDocs(
-    query(collection(db, BREAK_NOTIFICATIONS_COLLECTION), where("breakLogId", "==", String(breakLogId)))
-  );
-  const rows = snap.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-  }));
-
-  const normalizedUserId = String(userId || "").trim();
-
-  return (
-    rows.find((row) => {
-      if (String(row?.breakLogId || "") !== String(breakLogId)) return false;
-      if (String(row?.type || "") !== String(type)) return false;
-      if (!normalizedUserId) return true;
-      return String(row?.userId || "").trim() === normalizedUserId;
-    }) || null
-  );
-}
+const buildNotificationDocId = ({
+  userId = "",
+  type = "",
+  breakLogId = "",
+  overBreakId = "",
+  audience = "",
+}) => {
+  const eventToken = breakLogId || overBreakId || audience || "event";
+  return [
+    toDocToken(userId, "user"),
+    toDocToken(type, "type"),
+    toDocToken(eventToken, "event"),
+  ].join("__");
+};
 
 async function createNotification({
   userId = "",
@@ -180,10 +434,20 @@ async function createNotification({
 }) {
   const now = new Date();
   const storageTimeZone = resolveStorageTimeZone();
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedAudience = String(audience || "").trim() || "employee";
+  const normalizedType = String(type || "").trim();
+  const notificationId = buildNotificationDocId({
+    userId: normalizedUserId,
+    type: normalizedType,
+    breakLogId,
+    overBreakId,
+    audience: normalizedAudience,
+  });
 
-  const ref = await addDoc(collection(db, BREAK_NOTIFICATIONS_COLLECTION), {
-    userId: String(userId || "").trim(),
-    audience: String(audience || "").trim() || "employee",
+  await setDoc(doc(db, BREAK_NOTIFICATIONS_COLLECTION, notificationId), {
+    userId: normalizedUserId,
+    audience: normalizedAudience,
     role: String(role || "").trim(),
     name,
     email,
@@ -207,8 +471,9 @@ async function createNotification({
     ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
+  invalidateNotificationViewCache();
 
-  return ref.id;
+  return notificationId;
 }
 
 async function createBroadcastNotifications({
@@ -233,13 +498,6 @@ async function createBroadcastNotifications({
   for (const portalUser of portalUsers) {
     if (!portalUser?.userId) continue;
 
-    const existing = await findNotificationByBreakLogIdTypeAndUserId(
-      breakLogId,
-      type,
-      portalUser.userId
-    );
-    if (existing?.id) continue;
-
     const notificationId = await createNotification({
       userId: portalUser.userId,
       audience: "employee",
@@ -261,32 +519,22 @@ async function createBroadcastNotifications({
   }
 
   if (normalizedSkipUserId) {
-    const ownCopyExists =
-      createdIds.length > 0 ||
-      (await findNotificationByBreakLogIdTypeAndUserId(
-        breakLogId,
-        type,
-        normalizedSkipUserId
-      ));
-
-    if (!ownCopyExists) {
-      const fallbackId = await createNotification({
-        userId: normalizedSkipUserId,
-        audience: "employee",
-        breakLogId,
-        overBreakId,
-        type,
-        title,
-        message,
-        minutesUsed,
-        minutesRemaining,
-        totalBreakMinutes,
-        overBreakMinutes,
-        name: sourceName,
-        email: sourceEmail,
-      });
-      createdIds.push(fallbackId);
-    }
+    const fallbackId = await createNotification({
+      userId: normalizedSkipUserId,
+      audience: "employee",
+      breakLogId,
+      overBreakId,
+      type,
+      title,
+      message,
+      minutesUsed,
+      minutesRemaining,
+      totalBreakMinutes,
+      overBreakMinutes,
+      name: sourceName,
+      email: sourceEmail,
+    });
+    createdIds.push(fallbackId);
   }
 
   return createdIds;
@@ -409,14 +657,6 @@ async function ensureBroadcastStageNotification({
   for (const portalUser of portalUsers) {
     if (!portalUser?.userId) continue;
 
-    const existing = await findNotificationByBreakLogIdTypeAndUserId(
-      activeBreak.id,
-      type,
-      portalUser.userId
-    );
-
-    if (existing?.id) continue;
-
     await createNotification({
       userId: portalUser.userId,
       audience: "employee",
@@ -439,32 +679,24 @@ async function ensureBroadcastStageNotification({
 
   const normalizedUserId = String(userId || "").trim();
   if (normalizedUserId) {
-    const existingOwnCopy = await findNotificationByBreakLogIdTypeAndUserId(
-      activeBreak.id,
+    await createNotification({
+      userId: normalizedUserId,
+      audience: "employee",
+      role: "employee",
+      name,
+      email,
+      breakLogId: activeBreak.id,
+      overBreakId,
       type,
-      normalizedUserId
-    );
+      title,
+      message,
+      minutesUsed: totalBreakMinutes,
+      minutesRemaining: Math.max(0, DAILY_BREAK_LIMIT_MINUTES - totalBreakMinutes),
+      totalBreakMinutes,
+      overBreakMinutes,
+    });
 
-    if (!existingOwnCopy?.id) {
-      await createNotification({
-        userId: normalizedUserId,
-        audience: "employee",
-        role: "employee",
-        name,
-        email,
-        breakLogId: activeBreak.id,
-        overBreakId,
-        type,
-        title,
-        message,
-        minutesUsed: totalBreakMinutes,
-        minutesRemaining: Math.max(0, DAILY_BREAK_LIMIT_MINUTES - totalBreakMinutes),
-        totalBreakMinutes,
-        overBreakMinutes,
-      });
-
-      createdCount += 1;
-    }
+    createdCount += 1;
   }
 
   return {
@@ -512,19 +744,7 @@ export async function startBreak({ userId, name = "", email = "" }) {
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
 
-  const displayName = String(name || email || uid).trim();
-  await createBroadcastNotifications({
-    breakLogId: ref.id,
-    type: "break_started",
-    title: "Employee on break",
-    message: `${displayName} is currently on break.`,
-    sourceName: name,
-    sourceEmail: email,
-    totalBreakMinutes: 0,
-    minutesUsed: 0,
-    minutesRemaining: DAILY_BREAK_LIMIT_MINUTES,
-    skipUserId: uid,
-  });
+  invalidateBreakRangeCache();
 
   return {
     id: ref.id,
@@ -552,125 +772,24 @@ export async function endBreak(userId) {
   const now = new Date();
   const storageTimeZone = resolveStorageTimeZone();
   const totalBreakMinutes = minutesBetween(activeBreak.startedAt, now);
-  const overBreakMinutes = Math.max(0, totalBreakMinutes - BREAK_LIMIT_REACHED_MINUTES);
-
-  let overBreakRecord = null;
-
-  if (!activeBreak?.reminderSent && totalBreakMinutes >= BREAK_REMINDER_MINUTES) {
-    await ensureBreakReminder({
-      userId: uid,
-      name: activeBreak?.name || "",
-      email: activeBreak?.email || "",
-      activeBreak,
-    });
-  }
-
-  if (!activeBreak?.limitReachedAlertSent && totalBreakMinutes >= BREAK_LIMIT_REACHED_MINUTES) {
-    const displayName = String(activeBreak?.name || activeBreak?.email || uid).trim();
-
-    await ensureBroadcastStageNotification({
-      activeBreak,
-      type: "break_limit_reached",
-      title: "Break limit reached",
-      message: `${displayName} has reached the 1-hour break limit.`,
-      name: activeBreak?.name || "",
-      email: activeBreak?.email || "",
-      userId: uid,
-      totalBreakMinutes,
-      overBreakMinutes,
-    });
-
-    await updateDoc(doc(db, BREAK_LOGS_COLLECTION, activeBreak.id), {
-      limitReachedAlertSent: true,
-      limitReachedAlertSentAt: Timestamp.fromDate(now),
-      updatedAt: serverTimestamp(),
-      ...buildTimeZoneMeta("limitReachedAlertSentAtClient", now, storageTimeZone),
-      ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
-    });
-  }
-
-  if (totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES) {
-    overBreakRecord = await createOrUpdateOverBreakNote({
-      activeBreak,
-      userId: uid,
-      name: activeBreak?.name || "",
-      email: activeBreak?.email || "",
-      endedAt: now,
-    });
-
-    if (!activeBreak?.overBreakAlertSent) {
-      const displayName = String(activeBreak?.name || activeBreak?.email || uid).trim();
-
-      await ensureBroadcastStageNotification({
-        activeBreak,
-        type: "over_break_broadcast",
-        title: "Over break alert",
-        message: `${displayName} exceeded the break limit by ${formatDurationLabel(
-          Math.max(0, totalBreakMinutes - BREAK_LIMIT_REACHED_MINUTES)
-        )}. Total break: ${formatDurationLabel(totalBreakMinutes)}.`,
-        name: activeBreak?.name || "",
-        email: activeBreak?.email || "",
-        userId: uid,
-        totalBreakMinutes,
-        overBreakId: overBreakRecord?.id || "",
-        overBreakMinutes,
-      });
-    }
-  }
 
   await updateDoc(doc(db, BREAK_LOGS_COLLECTION, activeBreak.id), {
     endedAt: Timestamp.fromDate(now),
     isActive: false,
     totalBreakMinutes,
-    overBreakSaved: totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES,
-    overBreakSavedAt:
-      totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
-        ? Timestamp.fromDate(now)
-        : activeBreak?.overBreakSavedAt || null,
-    overBreakAlertSent:
-      totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
-        ? true
-        : activeBreak?.overBreakAlertSent || false,
-    overBreakAlertSentAt:
-      totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
-        ? Timestamp.fromDate(now)
-        : activeBreak?.overBreakAlertSentAt || null,
     updatedAt: serverTimestamp(),
     ...buildTimeZoneMeta("endedAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
-    ...(totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
-      ? buildTimeZoneMeta("overBreakSavedAtClient", now, storageTimeZone)
-      : {}),
-    ...(totalBreakMinutes >= OVERBREAK_TRIGGER_MINUTES
-      ? buildTimeZoneMeta("overBreakAlertSentAtClient", now, storageTimeZone)
-      : {}),
   });
-
-  const displayName = String(activeBreak?.name || activeBreak?.email || uid).trim();
-  await createBroadcastNotifications({
-    breakLogId: activeBreak.id,
-    overBreakId: overBreakRecord?.id || "",
-    type: "break_ended",
-    title: "Employee back from break",
-    message: `${displayName} is back from break. Total break time: ${formatDurationLabel(
-      totalBreakMinutes
-    )}.`,
-    sourceName: activeBreak?.name || "",
-    sourceEmail: activeBreak?.email || "",
-    totalBreakMinutes,
-    minutesUsed: totalBreakMinutes,
-    minutesRemaining: Math.max(0, DAILY_BREAK_LIMIT_MINUTES - totalBreakMinutes),
-    overBreakMinutes,
-    skipUserId: uid,
-  });
+  invalidateBreakRangeCache();
 
   return {
     id: activeBreak.id,
     userId: uid,
     endedAt: now,
     totalBreakMinutes,
-    overBreakMinutes,
-    overBreakRecord,
+    overBreakMinutes: Math.max(0, totalBreakMinutes - BREAK_LIMIT_REACHED_MINUTES),
+    overBreakRecord: null,
   };
 }
 
@@ -678,29 +797,49 @@ export async function getActiveBreakForUser(userId) {
   const uid = String(userId || "").trim();
   if (!uid) return null;
 
-  const snap = await getDocs(
-    query(collection(db, BREAK_LOGS_COLLECTION), where("userId", "==", uid))
-  );
-  const rows = snap.docs
-    .map((row) => ({
+  try {
+    const snap = await trackedGetDocs(
+      "breakLogs.activeByUser",
+      query(
+        collection(db, BREAK_LOGS_COLLECTION),
+        where("userId", "==", uid),
+        where("isActive", "==", true)
+      )
+    );
+    const rows = snap.docs.map((row) => ({
       id: row.id,
       ...row.data(),
-    }))
-    .filter((row) => String(row?.userId || "") === uid && !!row?.isActive);
+    }));
 
-  rows.sort((a, b) => toMillis(b.startedAt) - toMillis(a.startedAt));
-  return rows[0] || null;
+    rows.sort((a, b) => toMillis(b.startedAt) - toMillis(a.startedAt));
+    return rows[0] || null;
+  } catch {
+    const snap = await trackedGetDocs(
+      "breakLogs.byUser.fallbackAll",
+      query(collection(db, BREAK_LOGS_COLLECTION), where("userId", "==", uid))
+    );
+    const rows = snap.docs
+      .map((row) => ({
+        id: row.id,
+        ...row.data(),
+      }))
+      .filter((row) => String(row?.userId || "") === uid && !!row?.isActive);
+
+    rows.sort((a, b) => toMillis(b.startedAt) - toMillis(a.startedAt));
+    return rows[0] || null;
+  }
 }
 
 export async function getActiveBreaks() {
-  const snap = await getDocs(collection(db, BREAK_LOGS_COLLECTION));
+  const snap = await trackedGetDocs(
+    "breakLogs.activeAll",
+    query(collection(db, BREAK_LOGS_COLLECTION), where("isActive", "==", true))
+  );
 
-  const rows = snap.docs
-    .map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }))
-    .filter((row) => !!row?.isActive);
+  const rows = snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+  }));
 
   rows.sort((a, b) => toMillis(b.startedAt) - toMillis(a.startedAt));
   return rows;
@@ -712,6 +851,10 @@ export function subscribeActiveBreakUpdates(onChange, onError) {
   return onSnapshot(
     query(collection(db, BREAK_LOGS_COLLECTION), where("isActive", "==", true)),
     (snapshot) => {
+      recordFirestoreSnapshotRead(
+        "breakLogs.activeAll",
+        estimateSnapshotReadCount(snapshot, { isInitial })
+      );
       const changes = Array.isArray(snapshot?.docChanges?.()) ? snapshot.docChanges() : [];
       const changedUserIds = Array.from(
         new Set(
@@ -739,26 +882,14 @@ export async function getBreakLogsForUserOnDate(userId, date = new Date()) {
   const uid = String(userId || "").trim();
   if (!uid) return [];
 
-  const start = startOfLocalDay(date).getTime();
-  const end = endOfLocalDay(date).getTime();
-
-  const snap = await getDocs(
-    query(collection(db, BREAK_LOGS_COLLECTION), where("userId", "==", uid))
-  );
-
-  const rows = snap.docs
-    .map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }))
-    .filter((row) => {
-      if (String(row?.userId || "") !== uid) return false;
-      const startedMs = toMillis(row?.startedAt);
-      return Number.isFinite(startedMs) && startedMs >= start && startedMs <= end;
-    });
-
-  rows.sort((a, b) => toMillis(b.startedAt) - toMillis(a.startedAt));
-  return rows;
+  const ymd = normalizeYmd(date);
+  const rowsByUserId = await getBreakLogsByUserIdsInRange([uid], {
+    startDayKey: ymd,
+    endDayKey: ymd,
+    attendanceResetTime: "00:00",
+    businessTimeZone: "UTC",
+  });
+  return Array.isArray(rowsByUserId?.[uid]) ? rowsByUserId[uid] : [];
 }
 
 export async function getBreakLogsByUserIdsInRange(
@@ -775,20 +906,71 @@ export async function getBreakLogsByUserIdsInRange(
   );
   if (!normalizedIds.length) return {};
 
+  const cacheKey = buildBreakRangeCacheKey(normalizedIds, {
+    startDayKey,
+    endDayKey,
+    attendanceResetTime,
+    businessTimeZone,
+  });
+  const cached = getCachedBreakRange(cacheKey);
+  if (cached) return cached;
+
   const start = normalizeYmd(startDayKey);
   const end = normalizeYmd(endDayKey);
   const includeAll = !start || !end;
-  const allowedIds = new Set(normalizedIds);
-
-  const snap = await getDocs(collection(db, BREAK_LOGS_COLLECTION));
-
   const out = normalizedIds.reduce((acc, uid) => {
     acc[uid] = [];
     return acc;
   }, {});
 
-  for (const d of snap.docs) {
-    const row = { id: d.id, ...d.data() };
+  const idChunks = chunkArray(normalizedIds, IN_QUERY_CHUNK_SIZE);
+  const rows = [];
+
+  try {
+    for (const chunk of idChunks) {
+      if (!chunk.length) continue;
+
+      const queryParts = [where("userId", "in", chunk)];
+      if (!includeAll) {
+        // Expand one day on both edges to avoid false negatives around timezone boundaries.
+        const startUtc = new Date(`${start}T00:00:00.000Z`);
+        startUtc.setUTCDate(startUtc.getUTCDate() - 1);
+
+        const endUtc = new Date(`${end}T23:59:59.999Z`);
+        endUtc.setUTCDate(endUtc.getUTCDate() + 1);
+
+        queryParts.push(where("startedAt", ">=", Timestamp.fromDate(startUtc)));
+        queryParts.push(where("startedAt", "<=", Timestamp.fromDate(endUtc)));
+      }
+
+      const snap = await trackedGetDocs(
+        "breakLogs.rangeByUserChunk",
+        query(collection(db, BREAK_LOGS_COLLECTION), ...queryParts)
+      );
+      rows.push(
+        ...snap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        }))
+      );
+    }
+  } catch {
+    for (const uid of normalizedIds) {
+      const userRows = await trackedGetDocs(
+        "breakLogs.rangeByUserFallback",
+        query(collection(db, BREAK_LOGS_COLLECTION), where("userId", "==", uid))
+      );
+      rows.push(
+        ...userRows.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        }))
+      );
+    }
+  }
+
+  const allowedIds = new Set(normalizedIds);
+  for (const row of rows) {
     const uid = String(row?.userId || "").trim();
     if (!allowedIds.has(uid)) continue;
 
@@ -807,7 +989,8 @@ export async function getBreakLogsByUserIdsInRange(
     out[uid].sort((a, b) => toMillis(b.startedAt) - toMillis(a.startedAt));
   }
 
-  return out;
+  setCachedBreakRange(cacheKey, out);
+  return cloneBreakLogsByUserId(out);
 }
 
 export function calculateBreakUsageMinutes(logs, nowMs = Date.now()) {
@@ -878,6 +1061,7 @@ export async function ensureBreakReminder({
     ...buildTimeZoneMeta("reminderSentAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
+  invalidateBreakRangeCache();
 
   return {
     created: broadcastResult?.created || false,
@@ -965,32 +1149,24 @@ export async function ensureOverBreakEscalation({
     createdSomething = createdSomething || !!overBreakBroadcast?.created;
   }
 
-  const existingEmployeeNotif = await findNotificationByBreakLogIdTypeAndUserId(
-    activeBreak.id,
-    "over_break_employee",
-    uid
-  );
+  await createNotification({
+    userId: uid,
+    audience: "employee",
+    role: "employee",
+    name,
+    email,
+    breakLogId: activeBreak.id,
+    overBreakId: overBreakResult?.id || "",
+    type: "over_break_employee",
+    title: "Over-break recorded",
+    message: "Your break exceeded the 1-hour break limit.",
+    minutesUsed: totalBreakMinutes,
+    minutesRemaining: 0,
+    totalBreakMinutes,
+    overBreakMinutes,
+  });
 
-  if (!existingEmployeeNotif) {
-    await createNotification({
-      userId: uid,
-      audience: "employee",
-      role: "employee",
-      name,
-      email,
-      breakLogId: activeBreak.id,
-      overBreakId: overBreakResult?.id || "",
-      type: "over_break_employee",
-      title: "Over-break recorded",
-      message: "Your break exceeded the 1-hour break limit.",
-      minutesUsed: totalBreakMinutes,
-      minutesRemaining: 0,
-      totalBreakMinutes,
-      overBreakMinutes,
-    });
-
-    createdSomething = true;
-  }
+  createdSomething = true;
 
   await updateDoc(doc(db, BREAK_LOGS_COLLECTION, activeBreak.id), {
     overBreakSaved: true,
@@ -1002,6 +1178,7 @@ export async function ensureOverBreakEscalation({
     ...buildTimeZoneMeta("overBreakAlertSentAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
+  invalidateBreakRangeCache();
 
   return {
     created: createdSomething,
@@ -1015,88 +1192,101 @@ export async function getNotificationsForUser(user, options = {}) {
   const archivedOnly = !!options?.archived;
   const { userId: uid, role: userRole } = getUserIdentity(user);
   if (!uid) return [];
-  const visitorBlockedTypes = new Set([
-    "break_warning", // Break limit almost reached
-    "break_limit_reached", // Break limit reached
-    "over_break_broadcast", // Exceeded grace period / over-break alert
-  ]);
-
-  const snap = await getDocs(collection(db, BREAK_NOTIFICATIONS_COLLECTION));
-
-  const rows = snap.docs.map((d) => ({
-    id: d.id,
-    ...d.data(),
-  }));
-
-  const filtered = rows.filter((row) => {
-    const audience = String(row?.audience || "").trim().toLowerCase();
-    const rowUserId = String(row?.userId || "").trim();
-    const rowRole = normalizeRoleValue(row?.role);
-    const type = String(row?.type || "").trim().toLowerCase();
-
-    // Additive rule: hide break escalation notices from visitors.
-    if (userRole === "visitor" && visitorBlockedTypes.has(type)) {
-      return false;
-    }
-
-    if (rowUserId) {
-      return rowUserId === uid;
-    }
-
-    if (audience === "broadcast" || audience === "all" || audience === "everyone") {
-      return true;
-    }
-
-    if (rowRole && rowRole === userRole) return true;
-    if (audience && audience === userRole) return true;
-
-    if (type === "portal_user_request_pending") {
-      return userRole === "admin" || userRole === "super_admin";
-    }
-
-    return false;
-  });
-
-  const archiveFiltered = filtered.filter((row) => !!row?.archived === archivedOnly);
-
-  archiveFiltered.sort((a, b) => {
-    const aMs = toMillis(a?.createdAt);
-    const bMs = toMillis(b?.createdAt);
-    return bMs - aMs;
-  });
-
-  return archiveFiltered;
+  const visibleRows = await loadVisibleNotificationRowsForViewer({ uid, userRole });
+  return visibleRows.filter((row) => !!row?.archived === archivedOnly);
 }
 
-export function subscribeBreakNotificationUpdates(onChange, onError) {
-  let isInitial = true;
+export function subscribeBreakNotificationUpdates(
+  viewerOrOnChange,
+  onChangeOrOnError,
+  maybeOnError
+) {
+  const hasViewerContext =
+    !!viewerOrOnChange && typeof viewerOrOnChange === "object" && !Array.isArray(viewerOrOnChange);
+  const viewer = hasViewerContext ? viewerOrOnChange : null;
+  const onChange = hasViewerContext ? onChangeOrOnError : viewerOrOnChange;
+  const onError = hasViewerContext ? maybeOnError : onChangeOrOnError;
 
-  return onSnapshot(
-    collection(db, BREAK_NOTIFICATIONS_COLLECTION),
-    (snapshot) => {
-      const changes = Array.isArray(snapshot?.docChanges?.()) ? snapshot.docChanges() : [];
-      const changedRows = changes.map((change) => {
-        const row = change?.doc?.data?.() || {};
-        return {
-          userId: String(row?.userId || "").trim(),
-          audience: String(row?.audience || "").trim().toLowerCase(),
-          role: normalizeRoleValue(row?.role),
-          type: String(row?.type || "").trim().toLowerCase(),
-        };
-      });
+  const { userId: uid, role: userRole } = getUserIdentity(viewer || {});
 
-      if (typeof onChange === "function") {
-        onChange({
-          isInitial,
-          changeCount: changes.length,
-          changedRows,
-        });
-      }
+  const mapChangeRow = (change) => {
+    const row = change?.doc?.data?.() || {};
+    return {
+      userId: String(row?.userId || "").trim(),
+      audience: String(row?.audience || "").trim().toLowerCase(),
+      role: normalizeRoleValue(row?.role),
+      type: String(row?.type || "").trim().toLowerCase(),
+    };
+  };
+  const mapChangeDoc = (change) => {
+    const row = change?.doc?.data?.() || {};
+    return {
+      id: String(change?.doc?.id || row?.id || "").trim(),
+      changeType: String(change?.type || "").trim().toLowerCase(),
+      row: {
+        id: String(change?.doc?.id || row?.id || "").trim(),
+        ...row,
+      },
+    };
+  };
 
-      isInitial = false;
-    },
-    onError
-  );
+  const notify = (isInitial, changes = []) => {
+    if (!isInitial && Array.isArray(changes) && changes.length) {
+      invalidateNotificationViewCache();
+    }
+    if (typeof onChange !== "function") return;
+    onChange({
+      isInitial,
+      changeCount: changes.length,
+      changedRows: changes.map((item) => mapChangeRow(item)),
+      changedDocs: changes.map((item) => mapChangeDoc(item)).filter((item) => !!item.id),
+    });
+  };
+
+  if (!uid) {
+    let isInitial = true;
+    return onSnapshot(
+      query(collection(db, BREAK_NOTIFICATIONS_COLLECTION), limit(NOTIFICATION_QUERY_LIMIT)),
+      (snapshot) => {
+        recordFirestoreSnapshotRead(
+          "notifications.all",
+          estimateSnapshotReadCount(snapshot, { isInitial })
+        );
+        const changes = Array.isArray(snapshot?.docChanges?.()) ? snapshot.docChanges() : [];
+        notify(isInitial, changes);
+        isInitial = false;
+      },
+      onError
+    );
+  }
+
+  const relevantQueries = buildNotificationQueriesForViewer(uid, userRole, {});
+  if (!relevantQueries.length) return () => {};
+
+  const unsubscribes = [];
+  for (const q of relevantQueries) {
+    let isInitial = true;
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        recordFirestoreSnapshotRead(
+          "notifications.viewer",
+          estimateSnapshotReadCount(snapshot, { isInitial })
+        );
+        const changes = Array.isArray(snapshot?.docChanges?.()) ? snapshot.docChanges() : [];
+        notify(isInitial, changes);
+        isInitial = false;
+      },
+      onError
+    );
+    unsubscribes.push(unsubscribe);
+  }
+
+  return () => {
+    for (const unsubscribe of unsubscribes) {
+      if (typeof unsubscribe === "function") unsubscribe();
+    }
+  };
 }
 
 export async function markNotificationRead(notificationId) {
@@ -1112,6 +1302,7 @@ export async function markNotificationRead(notificationId) {
     ...buildTimeZoneMeta("readAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
+  invalidateNotificationViewCache();
 }
 
 export async function markAllNotificationsRead(notificationIds = []) {
@@ -1149,6 +1340,7 @@ export async function archiveNotification(notificationId, actor = {}) {
     ...buildTimeZoneMeta("archivedAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
+  invalidateNotificationViewCache();
 }
 
 export async function archiveAllNotifications(notificationIds = [], actor = {}) {
@@ -1177,12 +1369,14 @@ export async function restoreNotification(notificationId) {
     updatedAt: serverTimestamp(),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
+  invalidateNotificationViewCache();
 }
 
 export async function deleteNotification(notificationId) {
   const id = String(notificationId || "").trim();
   if (!id) return;
   await deleteDoc(doc(db, BREAK_NOTIFICATIONS_COLLECTION, id));
+  invalidateNotificationViewCache();
 }
 
 export async function deleteAllNotifications(notificationIds = []) {
@@ -1263,14 +1457,33 @@ export async function deleteAllOverBreakNotes(noteIds = []) {
 export async function getOverBreakNotes(user = null, options = {}) {
   void user;
   const archivedOnly = !!options?.archived;
-  const snap = await getDocs(collection(db, OVERBREAK_NOTES_COLLECTION));
+  let rows = [];
 
-  const rows = snap.docs
-    .map((d) => ({
+  try {
+    const snap = await trackedGetDocs(
+      "overBreak.listByArchived",
+      query(
+        collection(db, OVERBREAK_NOTES_COLLECTION),
+        where("archived", "==", archivedOnly),
+        limit(OVERBREAK_QUERY_LIMIT)
+      )
+    );
+    rows = snap.docs.map((d) => ({
       id: d.id,
       ...d.data(),
-    }))
-    .filter((row) => !!row?.archived === archivedOnly);
+    }));
+  } catch {
+    const snap = await trackedGetDocs(
+      "overBreak.listFallbackAll",
+      query(collection(db, OVERBREAK_NOTES_COLLECTION), limit(OVERBREAK_QUERY_LIMIT))
+    );
+    rows = snap.docs
+      .map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }))
+      .filter((row) => !!row?.archived === archivedOnly);
+  }
 
   rows.sort((a, b) => {
     const aMs = toMillis(a?.updatedAt || a?.createdAt);
@@ -1283,8 +1496,8 @@ export async function getOverBreakNotes(user = null, options = {}) {
 
 export async function resetAllNotificationData() {
   const [notificationsSnap, overBreakSnap] = await Promise.all([
-    getDocs(collection(db, BREAK_NOTIFICATIONS_COLLECTION)),
-    getDocs(collection(db, OVERBREAK_NOTES_COLLECTION)),
+    trackedGetDocs("notifications.resetAll", collection(db, BREAK_NOTIFICATIONS_COLLECTION)),
+    trackedGetDocs("overBreak.resetAll", collection(db, OVERBREAK_NOTES_COLLECTION)),
   ]);
 
   const deleteOps = [
@@ -1293,4 +1506,5 @@ export async function resetAllNotificationData() {
   ];
 
   await Promise.all(deleteOps);
+  invalidateNotificationViewCache();
 }
