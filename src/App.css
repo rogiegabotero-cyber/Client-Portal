@@ -768,7 +768,7 @@
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: transparent;
+  background: #ffffff;
   backdrop-filter: none;
   overflow: hidden;
 }
@@ -777,7 +777,7 @@
   display: flex;
   width: 100%;
   height: 100%;
-  opacity: 0.95;
+  opacity: 1;
 }
 
 .portal-skeleton-sidebar {
