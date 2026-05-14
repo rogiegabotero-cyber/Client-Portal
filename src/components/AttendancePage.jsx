@@ -1259,7 +1259,6 @@ export default function AttendancePage({
               </tbody>
             </table>
           </div>
-
           {!drawerHistoryLoading && drawerHistoryRows.length > historyLimit && (
             <div className="attxHistoryMore">
               <button className="attxBtn" type="button" onClick={() => setHistoryLimit((n) => n + 30)}>

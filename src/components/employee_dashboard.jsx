@@ -1410,6 +1410,8 @@ export default function EmployeeDashboard({
         throw new Error("Employee ID not found");
       }
 
+      const breakAction = isOnBreak ? "end" : "start";
+
       if (isOnBreak) {
         await endBreak(userId);
       } else {
@@ -1420,7 +1422,7 @@ export default function EmployeeDashboard({
       }
 
       if (typeof onBreakStatusChanged === "function") {
-        await onBreakStatusChanged();
+        await onBreakStatusChanged({ userId, action: breakAction });
       }
 
       setBreakLogRefreshToken((prev) => prev + 1);
@@ -1433,7 +1435,7 @@ export default function EmployeeDashboard({
 
       if (hasBreakStateMismatch && typeof onBreakStatusChanged === "function") {
         try {
-          await onBreakStatusChanged();
+          await onBreakStatusChanged({ userId: String(getUserId(employee) ?? effectiveSelectedId ?? "").trim(), action: "sync" });
           setBreakLogRefreshToken((prev) => prev + 1);
           setBreakError(
             normalizedMessage.includes("already has an active break")

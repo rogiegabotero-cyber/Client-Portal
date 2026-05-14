@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+﻿import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 
 import Header from "./header/header";
 import Sidebar from "./header/Sidebar";
@@ -107,6 +107,7 @@ import {
   restoreAnnouncement,
   updateAnnouncement,
 } from "./services/announcementService";
+import { fetchAttendanceLogsBatch } from "./services/attendanceBatchService";
 import {
   getDeviceTimeZone,
   getDisplayName,
@@ -216,7 +217,8 @@ const CORE_PAGE_KEYS = PAGE_KEYS.filter(
   (page) => page !== "control_panel" && !PERFORMANCE_PAGE_KEYS.includes(page)
 );
 const ROLE_BULK_MANAGED_PAGE_KEYS = PAGE_KEYS.filter((page) => page !== "control_panel");
-const LIVE_ATTENDANCE_POLL_MS = 10 * 1000;
+const LIVE_ATTENDANCE_TRIGGER_MINUTES = [0, 5, 30];
+const LIVE_ATTENDANCE_FAST_PAGES = new Set(["dashboard", "employee_dashboard", "attendance"]);
 const PORTAL_RUNTIME_COLLECTION = "portal_runtime";
 const PORTAL_GLOBAL_RUNTIME_DOC = "global_live_updates";
 
@@ -229,6 +231,34 @@ const toPreviewText = (value, maxLen = 140) => {
 
 const getTodayAttendanceKey = (resetTime, businessTimeZone) =>
   getBusinessDayKey(Date.now(), resetTime, businessTimeZone);
+
+const getMsUntilNextLiveAttendanceTrigger = (nowMs = Date.now()) => {
+  const now = new Date(nowMs);
+  const candidate = new Date(nowMs);
+  candidate.setSeconds(0, 0);
+
+  const minute = now.getMinutes();
+  const second = now.getSeconds();
+  const millisecond = now.getMilliseconds();
+  const hasSubMinuteRemainder = second > 0 || millisecond > 0;
+
+  let nextMinute = null;
+  for (const triggerMinute of LIVE_ATTENDANCE_TRIGGER_MINUTES) {
+    if (minute < triggerMinute || (minute === triggerMinute && hasSubMinuteRemainder)) {
+      nextMinute = triggerMinute;
+      break;
+    }
+  }
+
+  if (nextMinute == null) {
+    candidate.setHours(candidate.getHours() + 1);
+    nextMinute = LIVE_ATTENDANCE_TRIGGER_MINUTES[0];
+  }
+
+  candidate.setMinutes(nextMinute, 0, 0);
+  const delta = candidate.getTime() - nowMs;
+  return Math.max(1000, delta);
+};
 
 const addDaysYmd = (ymd, deltaDays) => {
   const d = new Date(`${ymd}T12:00:00Z`);
@@ -644,6 +674,98 @@ const formatTimeForDisplay = (ts, timeZone = "UTC") => {
   }).format(d);
 };
 
+const SCHEDULE_DAY_ORDER = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+const SCHEDULE_DAY_ABBR = {
+  monday: "Mon",
+  tuesday: "Tue",
+  wednesday: "Wed",
+  thursday: "Thu",
+  friday: "Fri",
+  saturday: "Sat",
+  sunday: "Sun",
+};
+
+const normalizeScheduleDayKey = (value) => {
+  const s = String(value || "").trim().toLowerCase();
+  if (!s) return "";
+  if (s.startsWith("mon")) return "monday";
+  if (s.startsWith("tue")) return "tuesday";
+  if (s.startsWith("wed")) return "wednesday";
+  if (s.startsWith("thu")) return "thursday";
+  if (s.startsWith("fri")) return "friday";
+  if (s.startsWith("sat")) return "saturday";
+  if (s.startsWith("sun")) return "sunday";
+  return "";
+};
+
+const formatScheduleDayRanges = (scheduleRows = []) => {
+  const rows = Array.isArray(scheduleRows) ? scheduleRows : [];
+  const daySet = new Set();
+
+  for (const row of rows) {
+    const key = normalizeScheduleDayKey(pick(row, ["dayOfWeek", "day", "weekday"], ""));
+    if (key) daySet.add(key);
+  }
+
+  const ordered = SCHEDULE_DAY_ORDER.filter((day) => daySet.has(day));
+  if (!ordered.length) return "";
+
+  const parts = [];
+  let start = ordered[0];
+  let prev = ordered[0];
+
+  const pushRange = (a, b) => {
+    if (!a || !b) return;
+    if (a === b) parts.push(SCHEDULE_DAY_ABBR[a]);
+    else parts.push(`${SCHEDULE_DAY_ABBR[a]}-${SCHEDULE_DAY_ABBR[b]}`);
+  };
+
+  for (let idx = 1; idx < ordered.length; idx++) {
+    const cur = ordered[idx];
+    const prevIdx = SCHEDULE_DAY_ORDER.indexOf(prev);
+    const curIdx = SCHEDULE_DAY_ORDER.indexOf(cur);
+    if (curIdx === prevIdx + 1) {
+      prev = cur;
+      continue;
+    }
+    pushRange(start, prev);
+    start = cur;
+    prev = cur;
+  }
+  pushRange(start, prev);
+
+  return parts.join(", ");
+};
+
+const getScheduleGroupSignature = (scheduleRow = {}) => {
+  const durationRaw = Number(pick(scheduleRow, ["shiftDuration", "hours", "durationHours"], NaN));
+  const duration = Number.isFinite(durationRaw) ? durationRaw : "";
+  return JSON.stringify({
+    timeIn: String(pick(scheduleRow, ["timeIn", "time_in", "startTime", "shiftStart", "start"], "")).trim(),
+    timeOut: String(pick(scheduleRow, ["timeOut", "time_out", "endTime", "shiftEnd", "end"], "")).trim(),
+    duration,
+    utcIn: String(pick(scheduleRow, ["utcTimeIn", "utcStart", "startUtc", "utcTimeStart"], "")).trim(),
+    utcOut: String(pick(scheduleRow, ["utcTimeOut", "utcEnd", "endUtc", "utcTimeEnd"], "")).trim(),
+    tz: String(
+      pick(
+        scheduleRow,
+        ["timeRegion", "timezone", "timeZone", "tz", "scheduleTimezone", "scheduleTimeZone"],
+        ""
+      )
+    )
+      .trim()
+      .toLowerCase(),
+  });
+};
+
 const getEmployeePositionLabel = (employee = {}, profile = {}) =>
   pick(employee, ["position", "role", "jobTitle"], "") ||
   pick(profile, ["position", "role", "jobTitle"], "") ||
@@ -890,6 +1012,18 @@ export default function App() {
   );
   const RANGE_OPTIONS = useMemo(() => [1, 2, 7, 14, 30], []);
   const [rangeDays, setRangeDays] = useState(1);
+  const isFastLiveAttendancePage = useMemo(
+    () => LIVE_ATTENDANCE_FAST_PAGES.has(String(activePage || "").toLowerCase()),
+    [activePage]
+  );
+  const isSingleDayTodayRange = useMemo(() => {
+    const todayBusinessKey = getTodayAttendanceKey(attendanceResetTime, businessTimeZone);
+    return (
+      Number(rangeDays) === 1 &&
+      String(startDate || "") === String(todayBusinessKey || "") &&
+      String(endDate || "") === String(todayBusinessKey || "")
+    );
+  }, [rangeDays, startDate, endDate, attendanceResetTime, businessTimeZone]);
 
   const [usersError, setUsersError] = useState("");
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -984,6 +1118,7 @@ export default function App() {
   const [liveAgentLogStatus, setLiveAgentLogStatus] = useState("ALL");
   const [isRestartingSessions, setIsRestartingSessions] = useState(false);
   const [isPageSwitchLoading, setIsPageSwitchLoading] = useState(false);
+  const [isPageContentVisible, setIsPageContentVisible] = useState(true);
   const [hasCompletedInitialShellLoad, setHasCompletedInitialShellLoad] = useState(false);
   const [showLoginBootSkeleton, setShowLoginBootSkeleton] = useState(false);
   const hasMountedPageSwitchRef = useRef(false);
@@ -1368,25 +1503,33 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showLogoutConfirm]);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!authReady || !isAuthenticated) {
       hasMountedPageSwitchRef.current = false;
       setIsPageSwitchLoading(false);
+      setIsPageContentVisible(true);
       return;
     }
 
     if (!hasMountedPageSwitchRef.current) {
       hasMountedPageSwitchRef.current = true;
+      setIsPageContentVisible(true);
       return;
     }
 
+    setIsPageContentVisible(false);
     setIsPageSwitchLoading(true);
-    const timerId = setTimeout(() => {
+    const spinnerTimerId = setTimeout(() => {
       setIsPageSwitchLoading(false);
     }, 320);
+    const revealTimerId = setTimeout(() => {
+      setIsPageContentVisible(true);
+    }, 420);
 
-    return () => clearTimeout(timerId);
+    return () => {
+      clearTimeout(spinnerTimerId);
+      clearTimeout(revealTimerId);
+    };
   }, [activePage, authReady, isAuthenticated]);
 
   useEffect(() => {
@@ -1443,6 +1586,53 @@ export default function App() {
     return () => {
       document.documentElement.classList.remove(lockClass);
       document.body.classList.remove(lockClass);
+    };
+  }, [showLiveAgentModal]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+
+    const lockClass = "portal-scroll-lock";
+    const drawerSelectors = [
+      ".empNotepadDrawer.open",
+      ".empBreakLogsDrawer.open",
+      ".dashBreakLogsDrawer.open",
+      ".attxDrawer.open",
+      ".assignment-drawer.open",
+      ".control-panel-drawer",
+      ".ma-recycle-drawer",
+      ".special-user-drawer",
+      ".header-profile-drawer",
+    ].join(", ");
+
+    const updatePortalScrollLock = () => {
+      const portalMainEl = document.querySelector(".portal-main");
+      if (!portalMainEl) return;
+      const hasOpenDrawer = !!document.querySelector(drawerSelectors);
+      const shouldLock = showLiveAgentModal || hasOpenDrawer;
+      portalMainEl.classList.toggle(lockClass, shouldLock);
+    };
+
+    updatePortalScrollLock();
+
+    const observer = new MutationObserver(() => {
+      updatePortalScrollLock();
+    });
+
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "open", "aria-hidden"],
+    });
+
+    window.addEventListener("focus", updatePortalScrollLock);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("focus", updatePortalScrollLock);
+      const portalMainEl = document.querySelector(".portal-main");
+      portalMainEl?.classList.remove(lockClass);
     };
   }, [showLiveAgentModal]);
 
@@ -1646,6 +1836,8 @@ export default function App() {
   const isUserLiveNow = useCallback(
     (userId) => {
       const uid = String(userId);
+      if (isUserOnBreak(uid)) return true;
+
       const logsToday = getTodayBusinessLogsForUser(uid);
 
       const lastIn = latestOf(logsToday, isIn);
@@ -1656,7 +1848,7 @@ export default function App() {
 
       return true;
     },
-    [getTodayBusinessLogsForUser]
+    [getTodayBusinessLogsForUser, isUserOnBreak]
   );
 
   const getLiveHoursSinceIn = useCallback(
@@ -4121,6 +4313,41 @@ export default function App() {
       return;
     }
 
+    if (!force && isSingleDayTodayRange) {
+      const todayBusinessKey = getTodayAttendanceKey(attendanceResetTime, businessTimeZone);
+      const todayCacheKey = `${todayBusinessKey}|${attendanceResetTime}|${businessTimeZone}`;
+      const dayCache = appDataCacheRef.current.todayLogsByKey[todayCacheKey] || {};
+      const items = validEmployees.map((emp) => String(getUserId(emp)));
+      const resolved = {};
+      let hasAllUsers = true;
+
+      for (const userId of items) {
+        const cachedLogs = Array.isArray(dayCache?.[userId])
+          ? dayCache[userId]
+          : Array.isArray(todayLogsByUserId?.[userId])
+            ? todayLogsByUserId[userId]
+            : null;
+        if (!Array.isArray(cachedLogs)) {
+          hasAllUsers = false;
+          break;
+        }
+        resolved[userId] = cachedLogs;
+      }
+
+      if (hasAllUsers) {
+        const rangeKey = `${startDate}|${endDate}|${businessTimeZone}`;
+        const rangeCache = appDataCacheRef.current.attendanceByKey[rangeKey] || {};
+        appDataCacheRef.current.attendanceByKey[rangeKey] = rangeCache;
+        for (const userId of items) {
+          rangeCache[userId] = resolved[userId];
+        }
+        setLogsByUserId(resolved);
+        setAttendanceErrorsByUserId({});
+        setAttendanceError("");
+        return;
+      }
+    }
+
     attendanceAbortRef.current?.abort?.();
     const ac = new AbortController();
     attendanceAbortRef.current = ac;
@@ -4150,27 +4377,62 @@ export default function App() {
         return;
       }
 
-      const results = await mapWithConcurrency(missingItems, 6, async (userId) => {
-        const payload = await api.getAttendanceLogs({ userId, startDate, endDate }, ac.signal);
-        return {
-          userId,
-          payload,
-          logs: normalizeAttendanceLogsPayload(payload, userId, businessTimeZone),
-        };
-      });
-
       const nextLogs = {};
       const nextRawPayloads = {};
       const errs = {};
+      let usedBatchEndpoint = false;
 
-      for (let idx = 0; idx < results.length; idx++) {
-        const userId = missingItems[idx];
-        if (results[idx].ok) {
-          nextLogs[userId] = results[idx].value.logs;
-          nextRawPayloads[userId] = results[idx].value.payload;
-          rangeCache[userId] = results[idx].value.logs;
-        } else {
-          errs[userId] = results[idx].error?.message || "Failed to load attendance logs";
+      try {
+        const batchResult = await fetchAttendanceLogsBatch({
+          apiKey,
+          baseUrl: api?.baseUrl,
+          userIds: missingItems,
+          startDate,
+          endDate,
+        });
+        if (ac.signal?.aborted) {
+          throw Object.assign(new Error("Aborted"), { name: "AbortError" });
+        }
+
+        usedBatchEndpoint = true;
+        for (const userId of missingItems) {
+          const payload = batchResult.logsByUserId?.[userId];
+          const batchError = batchResult.errorsByUserId?.[userId];
+          if (batchError) {
+            errs[userId] = String(batchError || "Failed to load attendance logs");
+            continue;
+          }
+          const normalizedLogs = normalizeAttendanceLogsPayload(payload, userId, businessTimeZone);
+          nextLogs[userId] = normalizedLogs;
+          nextRawPayloads[userId] = payload;
+          rangeCache[userId] = normalizedLogs;
+        }
+      } catch (batchError) {
+        if (batchError?.name === "AbortError") {
+          throw batchError;
+        }
+        console.warn("Batch attendance fetch unavailable; falling back to per-user requests.", batchError);
+      }
+
+      if (!usedBatchEndpoint) {
+        const results = await mapWithConcurrency(missingItems, 6, async (userId) => {
+          const payload = await api.getAttendanceLogs({ userId, startDate, endDate }, ac.signal);
+          return {
+            userId,
+            payload,
+            logs: normalizeAttendanceLogsPayload(payload, userId, businessTimeZone),
+          };
+        });
+
+        for (let idx = 0; idx < results.length; idx++) {
+          const userId = missingItems[idx];
+          if (results[idx].ok) {
+            nextLogs[userId] = results[idx].value.logs;
+            nextRawPayloads[userId] = results[idx].value.payload;
+            rangeCache[userId] = results[idx].value.logs;
+          } else {
+            errs[userId] = results[idx].error?.message || "Failed to load attendance logs";
+          }
         }
       }
 
@@ -4197,14 +4459,26 @@ export default function App() {
     } finally {
       setLoadingAttendance(false);
     }
-  }, [api, validEmployees, startDate, endDate, businessTimeZone, loadingUsers]);
+  }, [
+    api,
+    apiKey,
+    validEmployees,
+    startDate,
+    endDate,
+    businessTimeZone,
+    loadingUsers,
+    todayLogsByUserId,
+    attendanceResetTime,
+    isSingleDayTodayRange,
+  ]);
 
   useEffect(() => {
+    if (isSingleDayTodayRange) return;
     reloadAttendance();
-  }, [reloadAttendance]);
+  }, [reloadAttendance, isSingleDayTodayRange]);
 
   const reloadTodayLogs = useCallback(
-    async ({ force = false, silent = false } = {}) => {
+    async ({ force = false, silent = false, refreshUserIds = [] } = {}) => {
       if (!api) {
         // Keep previous data while API/session wiring is not ready.
         return;
@@ -4234,12 +4508,21 @@ export default function App() {
 
       try {
         const items = validEmployees.map((emp) => String(getUserId(emp)));
+        const itemSet = new Set(items);
+        const forcedSet = new Set(
+          (Array.isArray(refreshUserIds) ? refreshUserIds : [])
+            .map((value) => String(value || "").trim())
+            .filter((userId) => itemSet.has(userId))
+        );
         const todayCacheKey = `${todayBusinessKey}|${attendanceResetTime}|${businessTimeZone}`;
         const dayCache = appDataCacheRef.current.todayLogsByKey[todayCacheKey] || {};
         appDataCacheRef.current.todayLogsByKey[todayCacheKey] = dayCache;
         const missingItems = force
-          ? items
-          : items.filter((userId) => !Array.isArray(dayCache?.[userId]));
+          ? (forcedSet.size > 0 ? items.filter((userId) => forcedSet.has(userId)) : items)
+          : items.filter(
+              (userId) =>
+                forcedSet.has(userId) || !Array.isArray(dayCache?.[userId])
+            );
 
         if (!missingItems.length) {
           setTodayLogsByUserId((prev) => {
@@ -4254,31 +4537,71 @@ export default function App() {
           return;
         }
 
-        const results = await mapWithConcurrency(missingItems, 8, async (userId) => {
-          const payload = await api.getAttendanceLogs(
-            { userId, startDate: fetchStart, endDate: fetchEnd },
-            ac.signal
-          );
-
-          const arr = normalizeAttendanceLogsPayload(payload, userId, businessTimeZone);
-          const filtered = getBusinessDayLogsFromList(
-            arr,
-            todayBusinessKey,
-            attendanceResetTime,
-            businessTimeZone
-          );
-
-          return { userId, payload, logs: filtered };
-        });
-
         const next = {};
         const nextRawPayloads = {};
-        for (let idx = 0; idx < results.length; idx++) {
-          const userId = missingItems[idx];
-          if (results[idx].ok) {
-            next[userId] = results[idx].value.logs;
-            nextRawPayloads[userId] = results[idx].value.payload;
-            dayCache[userId] = results[idx].value.logs;
+        let usedBatchEndpoint = false;
+
+        try {
+          const batchResult = await fetchAttendanceLogsBatch({
+            apiKey,
+            baseUrl: api?.baseUrl,
+            userIds: missingItems,
+            startDate: fetchStart,
+            endDate: fetchEnd,
+          });
+          if (ac.signal?.aborted) {
+            throw Object.assign(new Error("Aborted"), { name: "AbortError" });
+          }
+
+          usedBatchEndpoint = true;
+          for (const userId of missingItems) {
+            if (batchResult.errorsByUserId?.[userId]) continue;
+
+            const payload = batchResult.logsByUserId?.[userId];
+            const arr = normalizeAttendanceLogsPayload(payload, userId, businessTimeZone);
+            const filtered = getBusinessDayLogsFromList(
+              arr,
+              todayBusinessKey,
+              attendanceResetTime,
+              businessTimeZone
+            );
+            next[userId] = filtered;
+            nextRawPayloads[userId] = payload;
+            dayCache[userId] = filtered;
+          }
+        } catch (batchError) {
+          if (batchError?.name === "AbortError") {
+            throw batchError;
+          }
+          console.warn(
+            "Batch business-day attendance fetch unavailable; falling back to per-user requests.",
+            batchError
+          );
+        }
+
+        if (!usedBatchEndpoint) {
+          const results = await mapWithConcurrency(missingItems, 8, async (userId) => {
+            const payload = await api.getAttendanceLogs(
+              { userId, startDate: fetchStart, endDate: fetchEnd },
+              ac.signal
+            );
+            const arr = normalizeAttendanceLogsPayload(payload, userId, businessTimeZone);
+            const filtered = getBusinessDayLogsFromList(
+              arr,
+              todayBusinessKey,
+              attendanceResetTime,
+              businessTimeZone
+            );
+            return { userId, payload, logs: filtered };
+          });
+
+          for (let idx = 0; idx < results.length; idx++) {
+            const userId = missingItems[idx];
+            if (results[idx].ok) {
+              next[userId] = results[idx].value.logs;
+              nextRawPayloads[userId] = results[idx].value.payload;
+              dayCache[userId] = results[idx].value.logs;
+            }
           }
         }
 
@@ -4353,6 +4676,18 @@ export default function App() {
           return merged;
         });
 
+        if (isSingleDayTodayRange) {
+          setLogsByUserId(resolvedTodayLogsByUserId);
+          const rangeKey = `${startDate}|${endDate}|${businessTimeZone}`;
+          const rangeCache = appDataCacheRef.current.attendanceByKey[rangeKey] || {};
+          appDataCacheRef.current.attendanceByKey[rangeKey] = rangeCache;
+          for (const userId of items) {
+            rangeCache[userId] = Array.isArray(resolvedTodayLogsByUserId[userId])
+              ? resolvedTodayLogsByUserId[userId]
+              : [];
+          }
+        }
+
         if (
           todayBusinessKey >= startDate &&
           todayBusinessKey <= endDate &&
@@ -4402,16 +4737,20 @@ export default function App() {
     },
     [
       api,
+      apiKey,
       validEmployees,
       attendanceResetTime,
       businessTimeZone,
       loadingUsers,
       startDate,
       endDate,
+      isSingleDayTodayRange,
     ]
   );
 
   useEffect(() => {
+    // Initial hydrate still fetches immediately, but the API wrapper now de-dupes
+    // and caches identical attendance requests for a short live window.
     reloadTodayLogs({ force: true });
   }, [reloadTodayLogs]);
 
@@ -4421,35 +4760,106 @@ export default function App() {
     }
 
     let cancelled = false;
+    let fastPollTick = 0;
+    let timerId = null;
+
     const poll = () => {
       if (cancelled) return;
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      reloadTodayLogs({ force: true, silent: true }).catch((err) => {
+
+      const now = new Date();
+      const currentMinute = now.getMinutes();
+      const shouldForceFullSweep = currentMinute === 0 || currentMinute === 5;
+      const allUserIds = validEmployees.map((emp) => String(getUserId(emp)));
+      let refreshUserIds = allUserIds;
+
+      if (isFastLiveAttendancePage && !shouldForceFullSweep) {
+        fastPollTick += 1;
+        const shouldDoFullSweep = fastPollTick % 5 === 0;
+
+        if (!shouldDoFullSweep) {
+          const hotUserIds = [];
+          for (const userId of allUserIds) {
+            if (activeBreaksByUserId?.[userId]) {
+              hotUserIds.push(userId);
+              continue;
+            }
+
+            const logs = Array.isArray(todayLogsByUserId?.[userId])
+              ? todayLogsByUserId[userId]
+              : [];
+            const lastIn = latestOf(logs, isIn);
+            if (!lastIn) continue;
+            const lastOut = latestOf(logs, isClockedOutLog);
+            if (!lastOut || lastOut.t < lastIn.t) {
+              hotUserIds.push(userId);
+            }
+          }
+
+          if (hotUserIds.length > 0) {
+            refreshUserIds = hotUserIds;
+          }
+        }
+      }
+
+      reloadTodayLogs({ force: true, silent: true, refreshUserIds }).catch((err) => {
         if (!cancelled) {
           console.error("Live attendance listener refresh failed:", err);
         }
       });
     };
 
-    const intervalId = setInterval(poll, LIVE_ATTENDANCE_POLL_MS);
+    const scheduleNextPoll = () => {
+      if (cancelled) return;
+      const delayMs = getMsUntilNextLiveAttendanceTrigger(Date.now());
+      timerId = setTimeout(() => {
+        poll();
+        scheduleNextPoll();
+      }, delayMs);
+    };
+
+    scheduleNextPoll();
+
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
+        if (timerId) clearTimeout(timerId);
         poll();
+        scheduleNextPoll();
       }
+    };
+
+    const onFocus = () => {
+      if (timerId) clearTimeout(timerId);
+      poll();
+      scheduleNextPoll();
     };
 
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", onVisibilityChange);
     }
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", onFocus);
+    }
 
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
+      if (timerId) clearTimeout(timerId);
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVisibilityChange);
       }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", onFocus);
+      }
     };
-  }, [isAuthenticated, user, reloadTodayLogs]);
+  }, [
+    isAuthenticated,
+    user,
+    reloadTodayLogs,
+    isFastLiveAttendancePage,
+    validEmployees,
+    activeBreaksByUserId,
+    todayLogsByUserId,
+  ]);
 
   const liveAgentsForSidebar = useMemo(() => {
     const idToName = new Map();
@@ -4518,6 +4928,43 @@ export default function App() {
 
     const profileImg = String(profileImagesByUserId?.[uid] || "").trim() || getProfileImageUrl(employee);
     const position = getEmployeePositionLabel(employee, profile);
+    const scheduleRows = Array.isArray(schedulesByUserId?.[uid]) ? schedulesByUserId[uid] : [];
+    const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const weekdayNameFromYmd = (yyyyMmDd) => {
+      const d = new Date(`${yyyyMmDd}T12:00:00Z`);
+      if (Number.isNaN(d.getTime())) return "";
+      return WEEKDAYS[d.getUTCDay()];
+    };
+    const targetWeekday = weekdayNameFromYmd(endDate);
+    const todayScheduleItem = targetWeekday
+      ? scheduleRows.find(
+          (row) => String(pick(row, ["dayOfWeek", "day", "weekday"], "")).trim().toLowerCase() === targetWeekday
+        ) || null
+      : null;
+    const scheduleGroupSignature = todayScheduleItem ? getScheduleGroupSignature(todayScheduleItem) : "";
+    const groupedScheduleRows = scheduleGroupSignature
+      ? scheduleRows.filter((row) => getScheduleGroupSignature(row) === scheduleGroupSignature)
+      : scheduleRows;
+    const scheduleDaysLabel = formatScheduleDayRanges(groupedScheduleRows);
+    const scheduleStartUtcMs = getTodayScheduleStartUtcMs(uid);
+    const scheduleEndUtcMs = getTodayScheduleEndUtcMs(uid);
+    const hasScheduleToday =
+      Number.isFinite(scheduleStartUtcMs) &&
+      Number.isFinite(scheduleEndUtcMs) &&
+      scheduleEndUtcMs >= scheduleStartUtcMs;
+    const scheduleDurationMinutes = hasScheduleToday
+      ? Math.max(0, Math.round((scheduleEndUtcMs - scheduleStartUtcMs) / 60000))
+      : 0;
+    const scheduleDurationHours = Math.floor(scheduleDurationMinutes / 60);
+    const scheduleDurationRemainder = scheduleDurationMinutes % 60;
+    const scheduleDurationLabel = hasScheduleToday
+      ? scheduleDurationHours > 0
+        ? `${scheduleDurationHours}h ${String(scheduleDurationRemainder).padStart(2, "0")}m`
+        : `${scheduleDurationRemainder}m`
+      : "";
+    const scheduleTagLabel = hasScheduleToday
+      ? `Schedule: ${formatTimeForDisplay(scheduleStartUtcMs, businessTimeZone)} - ${formatTimeForDisplay(scheduleEndUtcMs, businessTimeZone)} (${scheduleDurationLabel}) • Days: ${scheduleDaysLabel || "-"}`
+      : `Schedule: No Schedule Today • Days: ${scheduleDaysLabel || "-"}`;
 
     const joinedYmd = toDateInputValue(
       profile?.startDate ||
@@ -4607,7 +5054,20 @@ export default function App() {
 
     const breakLimitMinutes = Math.max(1, Number(DAILY_BREAK_LIMIT_MINUTES) || 60);
     const breakUsage = breakUsageByUserId?.[uid] || {};
-    const breakUsedMinutes = Math.max(0, Number(breakUsage?.totalMinutes || 0));
+    const savedTotalMinutes = Math.max(0, Number(breakUsage?.totalMinutes || 0));
+    const savedActiveMinutes = Math.max(0, Number(breakUsage?.activeBreakMinutes || 0));
+    const activeBreak = activeBreaksByUserId?.[uid] || null;
+    const activeBreakStartMs = toMillis(activeBreak?.startedAt);
+    const baseUsedMinutes = Math.max(0, savedTotalMinutes - savedActiveMinutes);
+    const liveActiveMinutes =
+      activeBreak && Number.isFinite(activeBreakStartMs)
+        ? Math.max(0, (nowMs - activeBreakStartMs) / 60000)
+        : savedActiveMinutes;
+    const effectiveUsedMinutes = Math.min(
+      breakLimitMinutes,
+      activeBreak ? baseUsedMinutes + liveActiveMinutes : savedTotalMinutes
+    );
+    const breakUsedMinutes = Math.max(0, effectiveUsedMinutes);
     const breakMinutesLeft = Math.max(0, breakLimitMinutes - breakUsedMinutes);
     const breakRemainingPct = Math.min(
       100,
@@ -4628,6 +5088,7 @@ export default function App() {
         : Number.isFinite(joinedFallbackMs)
           ? formatTsForDisplay(joinedFallbackMs, businessTimeZone)
           : "-",
+      scheduleTagLabel,
       profileImg,
       breakdownCounts,
       breakdownTotal,
@@ -4650,10 +5111,14 @@ export default function App() {
     };
   }, [
     selectedLiveAgentId,
+    nowMs,
     dashboardEmployees,
     employeeProfilesByUserId,
     liveAgentsForSidebar,
     profileImagesByUserId,
+    getTodayScheduleStartUtcMs,
+    getTodayScheduleEndUtcMs,
+    schedulesByUserId,
     logsByUserId,
     historyByUserId,
     liveAgentLogStatus,
@@ -4662,6 +5127,7 @@ export default function App() {
     historyErrorByUserId,
     liveAgentWeeklyWindow,
     isUserOnBreak,
+    activeBreaksByUserId,
     breakUsageByUserId,
   ]);
 
@@ -4975,21 +5441,19 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      {isPageSwitchLoading ? (
-        <div className="portal-page-transition-spinner-wrap" role="status" aria-live="polite" aria-busy="true">
-          <div className="portal-page-transition-spinner" />
-        </div>
-      ) : null}
       {showShellSkeletonOverlay ? renderShellSkeletonOverlay(shellSkeletonLabel) : null}
 
       <Sidebar
         activePage={activePage}
         setActivePage={setActivePage}
-        loadingLive={showLiveAgentsStartupLoading}
+        loadingLive={showLiveAgentsStartupLoading || isLiveAgentsLoadingNow}
         liveAgents={liveAgentsForSidebar}
         userRole={user?.role}
         userAllowedPages={user?.allowedPages || []}
         onSelectLiveAgent={handleOpenLiveAgentModal}
+        onRefreshLiveAgents={() =>
+          reloadTodayLogs({ force: true })
+        }
       />
 
       <div className="secondheader">
@@ -5003,6 +5467,11 @@ export default function App() {
           onOpenNotificationsPage={() => setActivePage("notifications")}
           onChangeOwnPassword={handleChangeOwnPassword}
         />
+        {isPageSwitchLoading ? (
+          <div className="portal-page-transition-spinner-wrap" role="status" aria-live="polite" aria-busy="true">
+            <div className="portal-page-transition-spinner" />
+          </div>
+        ) : null}
 
         <div className="portal-topbar">
           <div className="portal-topbar-left">
@@ -5068,308 +5537,322 @@ export default function App() {
 
         {globalError && <p className="portal-global-error">{globalError}</p>}
 
-        <main ref={portalMainRef} className="portal-main">
+        <main
+          ref={portalMainRef}
+          className={`portal-main ${isPageContentVisible ? "portal-main-visible" : "portal-main-hidden"}`}
+        >
+          
+              {activePage === "control_panel" && (
+                <div className="portal-page-pad">
+                  <ControlPanelPage
+                    viewer={user}
+                    specialUsers={specialUsers}
+                    employees={controlPanelEmployees}
+                    loadingUsersData={loadingSpecialUsers || loadingEmployeePermissions}
+                    usersError={specialUsersError || employeePermissionsError}
+                    attendanceResetTime={attendanceResetTime}
+                    businessTimeZone={businessTimeZone}
+                    attendanceDisplayTimeZoneMode={attendanceDisplayTimeZoneMode}
+                    attendanceDisplayTimeZone={attendanceDisplayTimeZone}
+                    storageTimeZone={storageTimeZone}
+                    onSaveEmployeeAllowedPages={handleUpdateEmployeeAllowedPages}
+                    onSaveSpecialUserAllowedPages={handleUpdatePortalUserAllowedPages}
+                    onTransferEmployeeToPortalRole={handleTransferEmployeeToPortalRole}
+                    onTransferSpecialUserToEmployeeRole={handleTransferSpecialUserToEmployeeRole}
+                    onDeleteAdminUser={handleDeleteAdminPortalUser}
+                    onSetEmployeePassword={handleAdminUpdateEmployeePassword}
+                    employeeProfilesByUserId={employeeProfilesByUserId}
+                    onSaveEmployeeStartDate={handleSaveEmployeeStartDate}
+                    onApplyRoleCorePagesToAll={handleApplyRoleCorePagesToAll}
+                    onReloadUsers={async () => {
+                      await reloadSpecialUsers();
+                      await reloadEmployeePermissions();
+                    }}
+                    userRequests={portalUserRequests}
+                    loadingRequests={loadingPortalUserRequests}
+                    requestsError={portalUserRequestsError}
+                    processingRequestId={processingPortalUserRequest.id}
+                    processingRequestAction={processingPortalUserRequest.action}
+                    onApproveRequest={handleApprovePortalUserRequest}
+                    onRejectRequest={handleRejectPortalUserRequest}
+                    onUpdateUserProfile={handleUpdateSpecialUserProfile}
+                    onChangeUserEmail={handleChangeSpecialUserEmail}
+                    onSendPasswordReset={handleSendSpecialUserPasswordReset}
+                    onReloadRequests={reloadPortalUserRequests}
+                    onAttendanceSettingsChange={(nextSettings) => {
+                      const nextReset = nextSettings?.resetTime || attendanceResetTime;
+                      const nextMode =
+                        nextSettings?.displayTimeZoneMode || DISPLAY_TIME_ZONE_MODE_DEVICE;
+                      const nextDisplay = String(nextSettings?.displayTimeZone || "").trim();
+                      const nextStorage =
+                        String(nextSettings?.storageTimeZone || "").trim() ||
+                        DEFAULT_STORAGE_TIME_ZONE;
+                      const resolvedDisplay =
+                        String(nextSettings?.resolvedBusinessTimeZone || "").trim() ||
+                        resolveAttendanceDisplayTimeZone(nextSettings, getDeviceTimeZone());
 
-          {activePage === "control_panel" && (
-            <div className="portal-page-pad">
-              <ControlPanelPage
-                viewer={user}
-                specialUsers={specialUsers}
-                employees={controlPanelEmployees}
-                loadingUsersData={loadingSpecialUsers || loadingEmployeePermissions}
-                usersError={specialUsersError || employeePermissionsError}
-                attendanceResetTime={attendanceResetTime}
-                businessTimeZone={businessTimeZone}
-                attendanceDisplayTimeZoneMode={attendanceDisplayTimeZoneMode}
-                attendanceDisplayTimeZone={attendanceDisplayTimeZone}
-                storageTimeZone={storageTimeZone}
-                onSaveEmployeeAllowedPages={handleUpdateEmployeeAllowedPages}
-                onSaveSpecialUserAllowedPages={handleUpdatePortalUserAllowedPages}
-                onTransferEmployeeToPortalRole={handleTransferEmployeeToPortalRole}
-                onTransferSpecialUserToEmployeeRole={handleTransferSpecialUserToEmployeeRole}
-                onDeleteAdminUser={handleDeleteAdminPortalUser}
-                onSetEmployeePassword={handleAdminUpdateEmployeePassword}
-                employeeProfilesByUserId={employeeProfilesByUserId}
-                onSaveEmployeeStartDate={handleSaveEmployeeStartDate}
-                onApplyRoleCorePagesToAll={handleApplyRoleCorePagesToAll}
-                onReloadUsers={async () => {
-                  await reloadSpecialUsers();
-                  await reloadEmployeePermissions();
-                }}
-                userRequests={portalUserRequests}
-                loadingRequests={loadingPortalUserRequests}
-                requestsError={portalUserRequestsError}
-                processingRequestId={processingPortalUserRequest.id}
-                processingRequestAction={processingPortalUserRequest.action}
-                onApproveRequest={handleApprovePortalUserRequest}
-                onRejectRequest={handleRejectPortalUserRequest}
-                onUpdateUserProfile={handleUpdateSpecialUserProfile}
-                onChangeUserEmail={handleChangeSpecialUserEmail}
-                onSendPasswordReset={handleSendSpecialUserPasswordReset}
-                onReloadRequests={reloadPortalUserRequests}
-                onAttendanceSettingsChange={(nextSettings) => {
-                  const nextReset = nextSettings?.resetTime || attendanceResetTime;
-                  const nextMode =
-                    nextSettings?.displayTimeZoneMode || DISPLAY_TIME_ZONE_MODE_DEVICE;
-                  const nextDisplay = String(nextSettings?.displayTimeZone || "").trim();
-                  const nextStorage =
-                    String(nextSettings?.storageTimeZone || "").trim() ||
-                    DEFAULT_STORAGE_TIME_ZONE;
-                  const resolvedDisplay =
-                    String(nextSettings?.resolvedBusinessTimeZone || "").trim() ||
-                    resolveAttendanceDisplayTimeZone(nextSettings, getDeviceTimeZone());
+                      setStoredAttendanceResetTime(nextReset);
+                      setAttendanceResetTime(nextReset);
+                      setAttendanceDisplayTimeZoneMode(nextMode);
+                      setAttendanceDisplayTimeZone(nextDisplay);
+                      setStorageTimeZone(nextStorage);
+                      setBusinessTimeZone(resolvedDisplay);
+                    }}
+                    onAttendanceResetTimeChange={(value) => {
+                      setStoredAttendanceResetTime(value);
+                      setAttendanceResetTime(value);
+                    }}
+                    onBusinessTimeZoneChange={(value) => {
+                      setBusinessTimeZone(value);
+                    }}
+                    onToast={pushToast}
+                    pageData={sharedPageData}
+                  />
+                </div>
+              )}
 
-                  setStoredAttendanceResetTime(nextReset);
-                  setAttendanceResetTime(nextReset);
-                  setAttendanceDisplayTimeZoneMode(nextMode);
-                  setAttendanceDisplayTimeZone(nextDisplay);
-                  setStorageTimeZone(nextStorage);
-                  setBusinessTimeZone(resolvedDisplay);
-                }}
-                onAttendanceResetTimeChange={(value) => {
-                  setStoredAttendanceResetTime(value);
-                  setAttendanceResetTime(value);
-                }}
-                onBusinessTimeZoneChange={(value) => {
-                  setBusinessTimeZone(value);
-                }}
-                onToast={pushToast}
-                pageData={sharedPageData}
-              />
-            </div>
-          )}
+              {activePage === "register_portal_user" && (
+                <div className="portal-page-pad">
+                  <RegisterPortalUser onBackToLogin={() => setActivePage("dashboard")} />
+                </div>
+              )}
 
-          {activePage === "register_portal_user" && (
-            <div className="portal-page-pad">
-              <RegisterPortalUser onBackToLogin={() => setActivePage("dashboard")} />
-            </div>
-          )}
+              {activePage === "notifications" && (
+                <div className="portal-page-pad">
+                  <NotificationsPage
+                    notifications={notifications}
+                    archivedNotifications={archivedNotifications}
+                    overBreakNotes={overBreakNotes}
+                    archivedOverBreakNotes={archivedOverBreakNotes}
+                    onMarkNotificationRead={handleNotificationClick}
+                    onMarkAllRead={handleMarkAllNotificationsRead}
+                    onResetAllNotificationData={handleResetAllNotificationsData}
+                    onArchiveNotification={handleArchiveNotification}
+                    onArchiveAllNotifications={handleArchiveAllNotifications}
+                    onArchiveOverBreakNote={handleArchiveOverBreakNote}
+                    onArchiveAllOverBreakNotes={handleArchiveAllOverBreakNotes}
+                    onRestoreArchivedNotification={handleRestoreArchivedNotification}
+                    onDeleteArchivedNotification={handleDeleteArchivedNotification}
+                    onDeleteAllArchivedNotifications={handleDeleteAllArchivedNotifications}
+                    onRestoreArchivedOverBreakNote={handleRestoreArchivedOverBreakNote}
+                    onDeleteArchivedOverBreakNote={handleDeleteArchivedOverBreakNote}
+                    onDeleteAllArchivedOverBreakNotes={handleDeleteAllArchivedOverBreakNotes}
+                    canAccessNotificationArchive={canAccessNotificationArchive}
+                    canManageNotificationArchive={canManageNotificationArchive}
+                    businessTimeZone={businessTimeZone}
+                    pageData={sharedPageData}
+                  />
+                </div>
+              )}
 
-          {activePage === "notifications" && (
-            <div className="portal-page-pad">
-              <NotificationsPage
-                notifications={notifications}
-                archivedNotifications={archivedNotifications}
-                overBreakNotes={overBreakNotes}
-                archivedOverBreakNotes={archivedOverBreakNotes}
-                onMarkNotificationRead={handleNotificationClick}
-                onMarkAllRead={handleMarkAllNotificationsRead}
-                onResetAllNotificationData={handleResetAllNotificationsData}
-                onArchiveNotification={handleArchiveNotification}
-                onArchiveAllNotifications={handleArchiveAllNotifications}
-                onArchiveOverBreakNote={handleArchiveOverBreakNote}
-                onArchiveAllOverBreakNotes={handleArchiveAllOverBreakNotes}
-                onRestoreArchivedNotification={handleRestoreArchivedNotification}
-                onDeleteArchivedNotification={handleDeleteArchivedNotification}
-                onDeleteAllArchivedNotifications={handleDeleteAllArchivedNotifications}
-                onRestoreArchivedOverBreakNote={handleRestoreArchivedOverBreakNote}
-                onDeleteArchivedOverBreakNote={handleDeleteArchivedOverBreakNote}
-                onDeleteAllArchivedOverBreakNotes={handleDeleteAllArchivedOverBreakNotes}
-                canAccessNotificationArchive={canAccessNotificationArchive}
-                canManageNotificationArchive={canManageNotificationArchive}
-                businessTimeZone={businessTimeZone}
-                pageData={sharedPageData}
-              />
-            </div>
-          )}
+              {activePage === "manage_announcements" && (
+                <div className="portal-page-pad">
+                  <ManageAnnouncementsPage
+                    announcements={announcements}
+                    loading={loadingAnnouncements}
+                    error={announcementsError}
+                    onReloadAnnouncements={reloadAnnouncements}
+                    onUpdateAnnouncement={handleUpdateAnnouncement}
+                    onDeleteAnnouncement={handleDeleteAnnouncement}
+                    onRestoreAnnouncement={handleRestoreAnnouncement}
+                    onPermanentDeleteAnnouncement={handlePermanentDeleteAnnouncement}
+                    onToast={pushToast}
+                    businessTimeZone={businessTimeZone}
+                    pageData={sharedPageData}
+                  />
+                </div>
+              )}
 
-          {activePage === "manage_announcements" && (
-            <div className="portal-page-pad">
-              <ManageAnnouncementsPage
-                announcements={announcements}
-                loading={loadingAnnouncements}
-                error={announcementsError}
-                onReloadAnnouncements={reloadAnnouncements}
-                onUpdateAnnouncement={handleUpdateAnnouncement}
-                onDeleteAnnouncement={handleDeleteAnnouncement}
-                onRestoreAnnouncement={handleRestoreAnnouncement}
-                onPermanentDeleteAnnouncement={handlePermanentDeleteAnnouncement}
-                onToast={pushToast}
-                businessTimeZone={businessTimeZone}
-                pageData={sharedPageData}
-              />
-            </div>
-          )}
+              {activePage === "dashboard" && (
+                <div className="portal-page-pad">
+                  <Dashboard
+                    employees={allEmployeesForSharedPages}
+                    liveAgents={liveAgentsForSidebar}
+                    loadingLiveAgents={showLiveAgentsStartupLoading}
+                    loading={
+                      loadingUsers ||
+                      loadingSchedules ||
+                      loadingTodayLogs ||
+                      loadingAttendance ||
+                      loadingBreaks ||
+                      loadingBreakUsage ||
+                      loadingEmployeeProfiles
+                    }
+                    error={globalError}
+                    startDate={startDate}
+                    endDate={endDate}
+                    rangeDays={rangeDays}
+                    logsByUserId={logsByUserId}
+                    schedulesByUserId={schedulesByUserId}
+                    nowMs={nowMs}
+                    onFetchFullHistory={fetchFullHistoryForUser}
+                    historyByUserId={historyByUserId}
+                    loadingHistoryByUserId={loadingHistoryByUserId}
+                    historyErrorByUserId={historyErrorByUserId}
+                    breakLogsByUserId={breakLogsByUserId}
+                    announcements={announcements}
+                    loadingAnnouncements={loadingAnnouncements}
+                    announcementsError={announcementsError}
+                    viewerRole={user?.role || ""}
+                    employeeProfilesByUserId={employeeProfilesByUserId}
+                    attendanceResetTime={attendanceResetTime}
+                    businessTimeZone={businessTimeZone}
+                    pageData={sharedPageData}
+                  />
+                </div>
+              )}
 
-          {activePage === "dashboard" && (
-            <div className="portal-page-pad">
-              <Dashboard
-                employees={allEmployeesForSharedPages}
-                liveAgents={liveAgentsForSidebar}
-                loadingLiveAgents={showLiveAgentsStartupLoading}
-                loading={
-                  loadingUsers ||
-                  loadingSchedules ||
-                  loadingTodayLogs ||
-                  loadingAttendance ||
-                  loadingBreaks ||
-                  loadingBreakUsage ||
-                  loadingEmployeeProfiles
-                }
-                error={globalError}
-                startDate={startDate}
-                endDate={endDate}
-                rangeDays={rangeDays}
-                logsByUserId={logsByUserId}
-                schedulesByUserId={schedulesByUserId}
-                nowMs={nowMs}
-                onFetchFullHistory={fetchFullHistoryForUser}
-                historyByUserId={historyByUserId}
-                loadingHistoryByUserId={loadingHistoryByUserId}
-                historyErrorByUserId={historyErrorByUserId}
-                breakLogsByUserId={breakLogsByUserId}
-                announcements={announcements}
-                loadingAnnouncements={loadingAnnouncements}
-                announcementsError={announcementsError}
-                viewerRole={user?.role || ""}
-                employeeProfilesByUserId={employeeProfilesByUserId}
-                attendanceResetTime={attendanceResetTime}
-                businessTimeZone={businessTimeZone}
-                pageData={sharedPageData}
-              />
-            </div>
-          )}
+              {activePage === "employee_dashboard" && (
+                <div className="portal-page-pad">
+                  <EmployeeDashboard
+                    employees={employeeDashboardEmployees}
+                    announcements={announcements}
+                    assignments={assignments}
+                    schedulesByUserId={schedulesByUserId}
+                    logsByUserId={todayLogsByUserId}
+                    loadingAssignments={loadingAssignments}
+                    assignmentsError={assignmentsError}
+                    nowMs={nowMs}
+                    endDate={endDate}
+                    businessTimeZone={businessTimeZone}
+                    onFetchFullHistory={fetchFullHistoryForUser}
+                    historyByUserId={historyByUserId}
+                    loadingHistoryByUserId={loadingHistoryByUserId}
+                    historyErrorByUserId={historyErrorByUserId}
+                    selectedEmployeeId={selectedEmployeeId}
+                    onSelectEmployeeId={setSelectedEmployeeId}
+                    activeBreaksByUserId={activeBreaksByUserId}
+                    breakUsageByUserId={breakUsageByUserId}
+                    onBreakStatusChanged={async (payload = {}) => {
+                      const targetUserId = String(payload?.userId || "").trim();
+                      if (targetUserId) {
+                        await reloadBreakStatusForUser(targetUserId);
+                        await reloadTodayLogs({ force: true, silent: true, refreshUserIds: [targetUserId] });
+                      } else {
+                        await reloadActiveBreaks();
+                        await reloadBreakUsage();
+                        await reloadTodayLogs({ force: true, silent: true });
+                      }
+                      await reloadNotifications();
+                      await reloadOverBreakNotes();
+                    }}
+                    onRefreshBreakForUser={reloadBreakStatusForUser}
+                    onOpenTaskDetails={handleOpenAssignmentTask}
+                    pageData={sharedPageData}
+                  />
+                </div>
+              )}
 
-          {activePage === "employee_dashboard" && (
-            <div className="portal-page-pad">
-              <EmployeeDashboard
-                employees={employeeDashboardEmployees}
-                announcements={announcements}
-                assignments={assignments}
-                schedulesByUserId={schedulesByUserId}
-                logsByUserId={todayLogsByUserId}
-                loadingAssignments={loadingAssignments}
-                assignmentsError={assignmentsError}
-                nowMs={nowMs}
-                endDate={endDate}
-                businessTimeZone={businessTimeZone}
-                onFetchFullHistory={fetchFullHistoryForUser}
-                historyByUserId={historyByUserId}
-                loadingHistoryByUserId={loadingHistoryByUserId}
-                historyErrorByUserId={historyErrorByUserId}
-                selectedEmployeeId={selectedEmployeeId}
-                onSelectEmployeeId={setSelectedEmployeeId}
-                activeBreaksByUserId={activeBreaksByUserId}
-                breakUsageByUserId={breakUsageByUserId}
-                onBreakStatusChanged={async () => {
-                  await reloadActiveBreaks();
-                  await reloadBreakUsage();
-                  await reloadNotifications();
-                  await reloadOverBreakNotes();
-                }}
-                onRefreshBreakForUser={reloadBreakStatusForUser}
-                onOpenTaskDetails={handleOpenAssignmentTask}
-                pageData={sharedPageData}
-              />
-            </div>
-          )}
+              {activePage === "attendance" && (
+                <AttendancePage
+                  employees={attendanceAndScheduleEmployees}
+                  rangeDays={rangeDays}
+                  setRangeDays={setRangeDays}
+                  startDate={startDate}
+                  endDate={endDate}
+                  rangeOptions={RANGE_OPTIONS}
+                  logsByUserId={logsByUserId}
+                  errorsByUserId={attendanceErrorsByUserId}
+                  schedulesByUserId={schedulesByUserId}
+                  loading={loadingAttendance}
+                  error={attendanceError}
+                  onReload={() =>
+                    isSingleDayTodayRange
+                      ? reloadTodayLogs({ force: true })
+                      : reloadAttendance({ force: true })
+                  }
+                  onFetchFullHistory={fetchFullHistoryForUser}
+                  historyByUserId={historyByUserId}
+                  loadingHistoryByUserId={loadingHistoryByUserId}
+                  historyErrorByUserId={historyErrorByUserId}
+                  activeBreaksByUserId={activeBreaksByUserId}
+                  attendanceResetTime={attendanceResetTime}
+                  businessTimeZone={businessTimeZone}
+                  openEmployeeDrawerRequest={attendanceOpenRequest}
+                  onConsumeOpenEmployeeDrawerRequest={handleConsumeAttendanceOpenRequest}
+                  pageData={sharedPageData}
+                />
+              )}
 
-          {activePage === "attendance" && (
-            <AttendancePage
-              employees={attendanceAndScheduleEmployees}
-              rangeDays={rangeDays}
-              setRangeDays={setRangeDays}
-              startDate={startDate}
-              endDate={endDate}
-              rangeOptions={RANGE_OPTIONS}
-              logsByUserId={logsByUserId}
-              errorsByUserId={attendanceErrorsByUserId}
-              schedulesByUserId={schedulesByUserId}
-              loading={loadingAttendance}
-              error={attendanceError}
-              onReload={reloadAttendance}
-              onFetchFullHistory={fetchFullHistoryForUser}
-              historyByUserId={historyByUserId}
-              loadingHistoryByUserId={loadingHistoryByUserId}
-              historyErrorByUserId={historyErrorByUserId}
-              activeBreaksByUserId={activeBreaksByUserId}
-              attendanceResetTime={attendanceResetTime}
-              businessTimeZone={businessTimeZone}
-              openEmployeeDrawerRequest={attendanceOpenRequest}
-              onConsumeOpenEmployeeDrawerRequest={handleConsumeAttendanceOpenRequest}
-              pageData={sharedPageData}
-            />
-          )}
+              {activePage === "schedule" && (
+                <SchedulePage
+                  employees={attendanceAndScheduleEmployees}
+                  schedulesByUserId={schedulesByUserId}
+                  errorsByUserId={scheduleErrorsByUserId}
+                  businessTimeZone={businessTimeZone}
+                  loading={loadingSchedules}
+                  error={schedulesError}
+                  onReload={reloadSchedules}
+                  pageData={sharedPageData}
+                />
+              )}
 
-          {activePage === "schedule" && (
-            <SchedulePage
-              employees={attendanceAndScheduleEmployees}
-              schedulesByUserId={schedulesByUserId}
-              errorsByUserId={scheduleErrorsByUserId}
-              businessTimeZone={businessTimeZone}
-              loading={loadingSchedules}
-              error={schedulesError}
-              onReload={reloadSchedules}
-              pageData={sharedPageData}
-            />
-          )}
+              {activePage === "assignment" && (
+                <div className="portal-page-pad">
+                  <AssignmentPage
+                    employees={allEmployeesForSharedPages}
+                    viewer={user}
+                    assignments={assignments}
+                    archivedAssignments={archivedAssignments}
+                    loadingAssignments={loadingAssignments}
+                    assignmentsError={assignmentsError}
+                    employeeProfilesByUserId={employeeProfilesByUserId}
+                    onReloadAssignments={reloadAssignments}
+                    onCreateAssignment={handleCreateAssignment}
+                    onUpdateAssignment={handleUpdateAssignment}
+                    onDeleteAssignment={handleDeleteAssignment}
+                    onArchiveAssignment={handleArchiveAssignment}
+                    onRepostAssignment={handleRepostAssignment}
+                    onMarkAssignmentCompleted={handleMarkAssignmentCompleted}
+                    onReviewAssignmentCompletion={handleReviewAssignmentCompletion}
+                    onRequestAssignmentAccess={handleRequestAssignmentAccess}
+                    onApproveAssignmentAccess={handleApproveAssignmentAccess}
+                    onToast={pushToast}
+                    openTaskRequest={assignmentOpenRequest}
+                    onConsumeOpenTaskRequest={handleConsumeAssignmentOpenRequest}
+                    openCreateRequest={assignmentCreateRequest}
+                    onConsumeOpenCreateRequest={handleConsumeAssignmentCreateRequest}
+                    pageData={sharedPageData}
+                  />
+                </div>
+              )}
 
-          {activePage === "assignment" && (
-            <div className="portal-page-pad">
-              <AssignmentPage
-                employees={allEmployeesForSharedPages}
-                viewer={user}
-                assignments={assignments}
-                archivedAssignments={archivedAssignments}
-                loadingAssignments={loadingAssignments}
-                assignmentsError={assignmentsError}
-                employeeProfilesByUserId={employeeProfilesByUserId}
-                onReloadAssignments={reloadAssignments}
-                onCreateAssignment={handleCreateAssignment}
-                onUpdateAssignment={handleUpdateAssignment}
-                onDeleteAssignment={handleDeleteAssignment}
-                onArchiveAssignment={handleArchiveAssignment}
-                onRepostAssignment={handleRepostAssignment}
-                onMarkAssignmentCompleted={handleMarkAssignmentCompleted}
-                onReviewAssignmentCompletion={handleReviewAssignmentCompletion}
-                onRequestAssignmentAccess={handleRequestAssignmentAccess}
-                onApproveAssignmentAccess={handleApproveAssignmentAccess}
-                onToast={pushToast}
-                openTaskRequest={assignmentOpenRequest}
-                onConsumeOpenTaskRequest={handleConsumeAssignmentOpenRequest}
-                openCreateRequest={assignmentCreateRequest}
-                onConsumeOpenCreateRequest={handleConsumeAssignmentCreateRequest}
-                pageData={sharedPageData}
-              />
-            </div>
-          )}
+              {activePage === "hours" && (
+                <div className="portal-page-pad">
+                  <h1>hours</h1>
+                  <p>Page not implemented yet.</p>
+                </div>
+              )}
 
-          {activePage === "hours" && (
-            <div className="portal-page-pad">
-              <h1>hours</h1>
-              <p>Page not implemented yet.</p>
-            </div>
-          )}
+              {["perf_daily", "perf_weekly", "perf_monthly"].includes(activePage) && (
+                <div className="portal-page-pad">
+                  <PerformanceReportPage
+                    mode={
+                      activePage === "perf_daily"
+                        ? "daily"
+                        : activePage === "perf_weekly"
+                          ? "weekly"
+                          : "monthly"
+                    }
+                    employees={allEmployeesForSharedPages}
+                    logsByUserId={logsByUserId}
+                    historyByUserId={historyByUserId}
+                    loadingHistoryByUserId={loadingHistoryByUserId}
+                    historyErrorByUserId={historyErrorByUserId}
+                    onFetchFullHistory={fetchFullHistoryForUser}
+                    loading={loadingUsers || loadingAttendance}
+                    error={attendanceError || usersError || ""}
+                    endDate={endDate}
+                    rangeDays={rangeDays}
+                    businessTimeZone={businessTimeZone}
+                    pageData={sharedPageData}
+                  />
+                </div>
+              )}
 
-          {["perf_daily", "perf_weekly", "perf_monthly"].includes(activePage) && (
-            <div className="portal-page-pad">
-              <PerformanceReportPage
-                mode={
-                  activePage === "perf_daily"
-                    ? "daily"
-                    : activePage === "perf_weekly"
-                      ? "weekly"
-                      : "monthly"
-                }
-                employees={allEmployeesForSharedPages}
-                logsByUserId={logsByUserId}
-                historyByUserId={historyByUserId}
-                loadingHistoryByUserId={loadingHistoryByUserId}
-                historyErrorByUserId={historyErrorByUserId}
-                onFetchFullHistory={fetchFullHistoryForUser}
-                loading={loadingUsers || loadingAttendance}
-                error={attendanceError || usersError || ""}
-                endDate={endDate}
-                rangeDays={rangeDays}
-                businessTimeZone={businessTimeZone}
-                pageData={sharedPageData}
-              />
-            </div>
-          )}
-
-          {activePage === "invoices" && (
-            <InvoicesPage invoiceUrl={invoiceEmbedUrl} pageData={sharedPageData} />
-          )}
+              {activePage === "invoices" && (
+                <InvoicesPage invoiceUrl={invoiceEmbedUrl} pageData={sharedPageData} />
+              )}
         </main>
       </div>
 
@@ -5670,9 +6153,15 @@ export default function App() {
                   </h2>
                   <div className="portal-live-agent-sub">{selectedLiveAgent.email}</div>
                   <div className="portal-live-agent-top-tags">
-                    <span className="portal-live-agent-tag">{selectedLiveAgent.position}</span>
-                    <span className="portal-live-agent-tag">Joined: {selectedLiveAgent.joinedText}</span>
-                    <span className="portal-live-agent-tag status">{selectedLiveAgent.status}</span>
+                    <div>
+                      <span className="portal-live-agent-tag">{selectedLiveAgent.position}</span>
+                      <span className="portal-live-agent-tag">Joined: {selectedLiveAgent.joinedText}</span>
+                    </div>
+                    <div>
+                      <span className="portal-live-agent-tag">{selectedLiveAgent.scheduleTagLabel}</span>
+                      <span className="portal-live-agent-tag status">{selectedLiveAgent.status}</span>
+                    </div>
+                    
                   </div>
                 </div>
               </div>
@@ -5902,4 +6391,7 @@ export default function App() {
     </div>
   );
 }
+
+
+
 

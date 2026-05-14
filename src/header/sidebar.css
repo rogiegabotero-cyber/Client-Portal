@@ -23,8 +23,7 @@
   position: sticky;   /* ✅ sticks within the sidebar scroll container */
   top: 0;             /* ✅ stays at the top */
   z-index: 100;
-  background: linear-gradient(180deg, #83000b, #630008); /* ✅ prevents content showing under */
-  padding-bottom: 8px; /* optional spacing */
+  background: linear-gradient(180deg, #83000b, #630008); 
   border-bottom: 1px solid rgba(231, 231, 231, 0.671);
 }
 
@@ -99,14 +98,17 @@
   padding: 5px;
   margin: 5px 0px 7px 10px;
   position: sticky;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   max-height: 175px;
+  overscroll-behavior: contain;
 }
 
 .sb-card-title {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-content: space-between;
   font-weight: 900;
   letter-spacing: 0.6px;
   font-size: 12px;
@@ -114,12 +116,79 @@
   text-transform: uppercase;
   width: 100%;
   padding-left: 8px;
+  padding-right: 8px;
+}
+
+.sb-live-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sb-refresh-btn {
+  border: none;
+  background: transparent;
+  color: #ffffff;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.16s ease, transform 0.12s ease, opacity 0.16s ease;
+}
+
+.sb-refresh-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.sb-refresh-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.sb-refresh-icon {
+  transition: transform 0.16s ease;
+}
+
+.sb-refresh-btn.isLoading .sb-refresh-icon {
+  animation: sbRefreshSpin 0.8s linear infinite;
 }
 
 /* Live agents */
 .sb-live-list {
   display: grid;
   gap: 6px;
+}
+
+.sb-card-resize-handle {
+  height: 12px;
+  margin: 3px 3px 5px;
+  border-radius: 999px;
+  cursor: ns-resize;
+  position: relative;
+  touch-action: none;
+  z-index: 2;
+}
+
+.sb-card-resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.sb-card-resize-handle:hover::before,
+.sb-card-resize-handle.isActive::before,
+.sb-card.isResizing .sb-card-resize-handle::before {
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .sb-live-item {
@@ -165,7 +234,42 @@
 
 /* Groups */
 .sb-group {
-  padding:0 1rem;
+  padding:5px 1rem;
+}
+
+.nav-title {
+  position: sticky;
+  z-index: 95;
+  padding: 10px;
+  font-weight: 600;
+  background: linear-gradient(180deg, #6e0009, #580007);
+}
+
+.sb-group-toggle {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: start;
+  gap: 5px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.16s ease, transform 0.12s ease;
+  margin-bottom: 5px;
+  border-radius: none;
+  padding-left: 5px;
+}
+
+.sb-group-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.sb-group-toggle:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.65);
+  outline-offset: 2px;
 }
 
 .sb-group-title {
@@ -173,14 +277,33 @@
   text-transform: uppercase;
   font-size: 12px;
   letter-spacing: 0.8px;
-  margin: 10px 6px;
+  margin: 5px 3px;
   opacity: 0.85;
+  text-align: left;
+}
+
+.sb-group-chevron {
+  margin-right: 6px;
+  opacity: 0.8;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.sb-group-toggle:hover .sb-group-title {
+  opacity: 1;
+}
+
+.sb-group-toggle:hover .sb-group-chevron {
+  opacity: 1;
+}
+
+.sb-group-toggle.open .sb-group-chevron {
+  transform: rotate(180deg);
 }
 
 /* Nav */
 .sb-nav {
   display: grid;
-  gap: 8px;
+  gap: 2px;
 }
 
 .sb-item {
@@ -190,7 +313,7 @@
   color: #ffffff;
   cursor: pointer;
   border-radius: 14px;
-  padding:0 10px;
+  padding:5px 10px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -302,6 +425,12 @@
 }
 
 @keyframes sbSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sbRefreshSpin {
   to {
     transform: rotate(360deg);
   }

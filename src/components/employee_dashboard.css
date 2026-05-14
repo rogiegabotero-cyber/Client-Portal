@@ -319,8 +319,8 @@
 /* ---------- Grid ---------- */
 
 .empGrid2{
-  display:grid;
-  grid-template-columns: 1fr 320px;
+  display: flex;
+  width: 100%;
   gap:16px;
   align-content:start;
   align-items:stretch;
@@ -339,6 +339,8 @@
   height:100%;
   grid-template-rows:auto minmax(0, 1fr) minmax(0, 1fr);
   overflow:visible;
+  width: 100%;
+  max-width: 30%;
 }
 
 
@@ -353,6 +355,7 @@
   height:100%;
   min-height:0;
   overflow:auto;
+  width: 100%;
 }
 
 .scheduleTopRow{
@@ -893,7 +896,7 @@
   background:#ffffff;
   box-shadow:var(--shadow2);
   overflow:visible;
-  min-height:0;
+  max-height: 140px;
   display:flex;
   flex-direction:column;
 }
@@ -1057,8 +1060,8 @@
   color:#ffffff;
 }
 
-.taskListBody{
-  max-height:none;
+.taskListBody, .announcementBody{
+  max-height: 100px;
   overflow:auto;
   padding:10px;
   gap:8px;
@@ -1279,16 +1282,6 @@
   font-weight:700;
 }
 
-.announcementBody{
-  max-height:none;
-  overflow:hidden;
-  padding:10px;
-  display:grid;
-  gap:8px;
-  width: 100%;
-  flex:1;
-  min-height:0;
-}
 
 .announcementItem{
   border:1px solid var(--border);
@@ -1354,8 +1347,10 @@
   position:fixed;
   top:0;
   right:0;
+  bottom:0;
   width:min(500px, 96vw);
-  height:100vh;
+  height:100%;
+  max-height:100%;
   background:#ffffff;
   border-left:1px solid var(--border);
   box-shadow:-14px 0 34px rgba(15,23,42,.16);
@@ -1364,6 +1359,7 @@
   z-index:1145;
   display:flex;
   flex-direction:column;
+  overflow:hidden;
 }
 
 .empBreakLogsDrawer.open{
@@ -1416,6 +1412,7 @@
   padding:14px 16px;
   overflow:auto;
   flex:1;
+  min-height:0;
   display:flex;
   flex-direction:column;
   gap:10px;
@@ -1548,16 +1545,18 @@
   position:fixed;
   top:0;
   right:0;
+  bottom:0;
   width:min(980px, 100vw);
-  height:100vh;
+  height:100%;
+  max-height:100%;
   background:#ffffff;
   border-left:1px solid var(--border);
-  box-shadow:-14px 0 34px rgba(15,23,42,.16);
   transform:translateX(100%);
   transition:transform .24s ease;
   z-index:1155;
   display:flex;
   flex-direction:column;
+  overflow:hidden;
 }
 
 .empNotepadDrawer.open{
@@ -1611,6 +1610,7 @@
   min-height:0;
   display:grid;
   grid-template-columns:280px minmax(0,1fr);
+  overflow:hidden;
 }
 
 .empNotepadListPane{
@@ -1619,6 +1619,7 @@
   display:flex;
   flex-direction:column;
   min-height:0;
+  overflow:hidden;
 }
 
 .empNotepadListPaneTop{
@@ -2207,6 +2208,7 @@
   flex-direction:column;
   gap:8px;
   min-height:0;
+  overflow:hidden;
 }
 
 .empNotepadEditorTop{
@@ -2358,7 +2360,7 @@
 
 .empNotepadEditor{
   flex:1;
-  min-height:220px;
+  min-height:0;
   border:1px solid rgba(15,23,42,.12);
   border-radius:12px;
   background:#ffffff;
@@ -2870,4 +2872,236 @@
     justify-content:space-between;
     margin-left:0;
   }
+}
+
+/* Compact spacing pass for employee dashboard */
+.empDashTop {
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.employee-select {
+  padding: 4px 8px;
+}
+
+.empPanelHead {
+  padding: 4px 10px;
+  gap: 8px;
+}
+
+.empPanelHeadLeft {
+  gap: 6px;
+  padding: 8px;
+}
+
+.empPanelBody {
+  padding: 12px;
+}
+
+.empGrid2 {
+  gap: 10px;
+}
+
+.empSideColumn {
+  gap: 9px;
+}
+
+.scheduleCard,
+.clockedCard {
+  padding: 11px;
+}
+
+.progressCard {
+  margin-top: 9px;
+}
+
+.progressBarWrap {
+  margin-top: 6px;
+}
+
+.progressMeta {
+  margin-top: 8px;
+}
+
+.progressMetaRow {
+  margin-top: 4px;
+}
+
+.scheduleBreakActions {
+  margin-top: 9px;
+}
+
+.clockedDivider {
+  margin: 8px 0;
+}
+
+.clockedTimeZoneRef {
+  margin-top: 2px;
+}
+
+.infoPillRow {
+  margin-top: 8px;
+}
+
+.infoPill {
+  padding: 7px 9px;
+  gap: 8px;
+}
+
+.breakBtn {
+  margin-top: 8px;
+  height: 38px;
+}
+
+.breakHint {
+  margin-top: 6px;
+}
+
+.greetingPanel {
+  margin-top: 18px;
+  padding: 12px;
+}
+
+.statsRow {
+  margin-top: 10px;
+  gap: 8px;
+}
+
+.statCard {
+  padding: 10px;
+}
+
+.taskListHead {
+  padding: 4px 5px;
+}
+
+.taskFilterDrawer {
+  height: 30px;
+  padding: 0 7px 0 10px;
+}
+
+.taskListBody {
+  padding: 8px;
+  gap: 6px;
+}
+
+.taskListItem {
+  padding: 8px;
+}
+
+.announcementHead {
+  padding: 9px 10px;
+}
+
+.announcementBody {
+  padding: 8px;
+  gap: 7px;
+}
+
+.announcementItem {
+  padding: 8px;
+}
+
+.empBreakLogsDrawerHead,
+.empNotepadDrawerHead {
+  padding: 10px 12px;
+}
+
+.empBreakLogsDrawerBody {
+  padding: 10px 12px;
+  gap: 8px;
+}
+
+.empBreakLogsToolbar {
+  gap: 8px;
+}
+
+.empBreakLogsList {
+  gap: 8px;
+}
+
+.empBreakLogsItem {
+  padding: 8px;
+}
+
+.empNotepadDrawerBody {
+  gap: 0;
+}
+
+.empNotepadListPaneTop,
+.empNotepadList,
+.empNotepadEditorPane {
+  padding: 8px;
+}
+
+.empNotepadNewBtnRow,
+.empNotepadViewControls,
+.empNotepadEditorTop,
+.empNotepadEditorActions {
+  gap: 6px;
+}
+
+.empNotepadGroupCreatePane {
+  margin: 6px 8px 0;
+  padding: 8px;
+  gap: 6px;
+}
+
+.empNotepadGroupCreateList {
+  gap: 5px;
+}
+
+.empNotepadListItem {
+  padding: 7px 7px 7px 9px;
+  gap: 5px;
+}
+
+.empNotepadCardActions {
+  gap: 6px;
+}
+
+.empNotepadToolbar {
+  padding: 5px;
+  gap: 5px;
+}
+
+.empNotepadEditor {
+  min-height: 180px;
+  padding: 10px;
+}
+
+.announcementModalOverlay {
+  padding: 10px;
+}
+
+.announcementModalHead {
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.announcementModalMeta {
+  margin-top: 4px;
+  gap: 8px;
+}
+
+.announcementModalBody {
+  padding: 12px;
+}
+
+.agentAttendancePanel {
+  margin: 8px 0;
+  padding: 8px 10px 10px;
+}
+
+.agentAttendancePanelTop {
+  margin-bottom: 8px;
+}
+
+.agentAttendanceLegend {
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.agentAttendanceStrip {
+  padding: 4px 7px;
 }

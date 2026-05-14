@@ -263,7 +263,7 @@
   transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
   white-space: nowrap;
   flex: 0 0 auto;
-  margin:0 5px;
+  margin: 5px;
   box-shadow:0 1px 2px rgba(15,23,42,.03);
 }
 
@@ -688,7 +688,9 @@ display: flex;
   position: fixed;
   top: 0;
   right: 0;
-  height: 100vh;
+  bottom: 0;
+  height: 100%;
+  max-height: 100%;
   width: min(60%, 92vw);
   background: #ffffff;
   border-left: 1px solid var(--border);
@@ -698,6 +700,7 @@ display: flex;
   display: flex;
   flex-direction: column;
   box-shadow: -8px 0 30px rgba(15,23,42,.08);
+  overflow: hidden;
 }
 
 .attxDrawer.open{
@@ -760,9 +763,9 @@ display: flex;
 }
 
 .attxDrawerBody{
-  padding: 16px 18px;
   overflow: auto;
   flex: 1;
+  min-height: 0;
   background:#ffffff;
 }
 
@@ -926,11 +929,13 @@ display: flex;
 }
 
 .attxHistoryTableWrap {
+  position: relative;
   overflow: auto;
   border-radius: 14px;
   border: 1px solid var(--border);
   height: min(95%, 92vw);
   background: #ffffff;
+  padding-bottom: 56px;
 }
 
 .attxHistoryTable {
@@ -971,9 +976,19 @@ display: flex;
 }
 
 .attxHistoryMore {
-  display: flex;
-  justify-content: center;
-  margin-top: 12px;
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 6;
+  pointer-events: none;
+}
+
+.attxHistoryMore .attxBtn {
+  pointer-events: auto;
+  box-shadow: 0 10px 24px rgba(15,23,42,.18);
+  border-color: rgba(91,0,8,.28);
+  background: #ffffff;
 }
 
 .attxHistTime {
@@ -1039,4 +1054,109 @@ display: flex;
   background: rgba(148,163,184,0.12);
   border-color: rgba(148,163,184,0.16);
   color: #64748b;
+}
+
+/* Compact spacing pass */
+.attx {
+  padding: 6px;
+}
+
+.attxTop {
+  gap: 10px;
+}
+
+.attxTitleWrap {
+  gap: 4px;
+}
+
+.attxControls {
+  gap: 8px;
+}
+
+.attxField {
+  margin-bottom: 8px;
+  gap: 8px;
+}
+
+.attxInput,
+.attxBtn,
+#badeng {
+  height: 36px;
+}
+
+.attxBtn,
+#badeng {
+  padding: 0 10px;
+}
+
+.attxPill {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.attxAlert {
+  margin-top: 8px;
+  padding: 9px 11px;
+}
+
+.attxKpis {
+  gap: 10px;
+}
+
+.attxTile {
+  padding: 12px;
+}
+
+.attxTile::before {
+  left: 12px;
+  right: 12px;
+}
+
+.attxCard {
+  border-radius: 16px;
+}
+
+.attxCardHead {
+  padding: 6px 7px;
+}
+
+.attxTable th,
+.attxTable td {
+  padding: 9px 10px;
+}
+
+.attxAvatar {
+  width: 34px;
+  height: 34px;
+}
+
+.attxDrawerHead {
+  padding: 12px 14px;
+}
+
+.attxDrawerBody {
+  padding: 1px 12px;
+}
+
+.attxDetailGrid {
+  gap: 8px;
+}
+
+.attxDetailCard {
+  padding: 10px;
+}
+
+.attxRawDetails {
+  margin-top: 10px;
+  padding: 8px 10px;
+}
+
+.attxHistoryTop {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.attxHistoryTable thead th,
+.attxHistoryTable tbody td {
+  padding: 9px 8px;
 }

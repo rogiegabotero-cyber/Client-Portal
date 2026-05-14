@@ -844,3 +844,81 @@
     width: calc(100vw - 16px);
   }
 }
+
+/* Compact spacing pass */
+.top-header {
+  padding: 0 14px;
+  gap: 1rem;
+}
+
+.search-box {
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 10px;
+}
+
+.notif-wrapper {
+  gap: 8px;
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.profile-box {
+  gap: 0.6rem;
+  margin-left: 10px;
+}
+
+.notif-header {
+  padding: 10px 12px;
+}
+
+.notif-item {
+  padding: 10px 12px;
+}
+
+.notif-item.is-unread {
+  padding-left: 24px;
+}
+
+.notif-item.is-unread::before {
+  left: 10px;
+  top: 16px;
+}
+
+.notif-footer {
+  padding: 10px 12px;
+}
+
+.header-profile-drawer-head {
+  padding: 14px 14px 10px;
+}
+
+.header-profile-drawer-body {
+  padding: 12px 14px 16px;
+  gap: 10px;
+}
+
+.header-profile-hero {
+  padding: 12px 42px 12px 12px;
+  gap: 10px;
+}
+
+.header-profile-section {
+  padding: 8px;
+}
+
+.header-profile-edit-card {
+  margin-top: 8px;
+  padding: 10px;
+}
+
+.header-profile-security-modal-head {
+  padding: 10px 12px 8px;
+}
+
+.header-profile-security-modal-body {
+  padding: 10px 12px 12px;
+}

@@ -109,6 +109,8 @@ const BREAK_LIMIT_MINUTES = 60;
 const BREAK_WARNING_MINUTES = 55;
 const OVERBREAK_GRACE_MINUTES = 5;
 const OVERBREAK_TRIGGER_MINUTES = BREAK_LIMIT_MINUTES + OVERBREAK_GRACE_MINUTES;
+const BREAK_SCAN_LIMIT = 100;
+
 const BREAK_BROADCAST_ROLES = [
   ROLES.SUPER_ADMIN,
   ROLES.ADMIN,
@@ -292,6 +294,7 @@ const broadcastBreakNotification = async ({
 
   const recipients = new Map();
   const portalUsers = await getBroadcastUsers();
+
   for (const user of portalUsers) {
     if (!toText(user?.userId)) continue;
     recipients.set(toText(user.userId), {
@@ -1051,6 +1054,96 @@ exports.adminResetEmployeePassword = onCall(callableRuntimeOptions, async (reque
   };
 });
 
+exports.fetchAttendanceLogsBatch = onCall(callableRuntimeOptions, async (request) => {
+  const data = request?.data || {};
+  const apiKey = toText(data?.apiKey);
+  const baseUrl = toText(data?.baseUrl || "https://us-central1-hyacinthattendance.cloudfunctions.net");
+  const startDate = toText(data?.startDate);
+  const endDate = toText(data?.endDate);
+  const userIds = Array.isArray(data?.userIds)
+    ? data.userIds.map((value) => toText(value)).filter(Boolean)
+    : [];
+
+  if (!apiKey) {
+    throw new HttpsError("invalid-argument", "apiKey is required.");
+  }
+  if (!baseUrl) {
+    throw new HttpsError("invalid-argument", "baseUrl is required.");
+  }
+  if (userIds.length === 0) {
+    return {
+      success: true,
+      logsByUserId: {},
+      errorsByUserId: {},
+    };
+  }
+
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  const endpoint = `${normalizedBase}/getAttendanceLogs`;
+  const headers = {
+    "content-type": "application/json",
+    "x-api-key": apiKey,
+  };
+
+  const logsByUserId = {};
+  const errorsByUserId = {};
+
+  const fetchOneUser = async (userId) => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        apiKey,
+        userId,
+        startDate,
+        endDate,
+      }),
+    });
+
+    let parsed = null;
+    try {
+      parsed = await response.json();
+    } catch {
+      parsed = null;
+    }
+
+    if (!response.ok || parsed?.success === false) {
+      throw new Error(parsed?.message || `Failed to load attendance for ${userId}`);
+    }
+
+    const payload = parsed && Object.prototype.hasOwnProperty.call(parsed, "data")
+      ? parsed.data
+      : parsed;
+    logsByUserId[userId] = Array.isArray(payload) ? payload : [];
+  };
+
+  const MAX_CONCURRENCY = 8;
+  let index = 0;
+
+  const runners = new Array(Math.min(MAX_CONCURRENCY, userIds.length))
+    .fill(0)
+    .map(async () => {
+      while (index < userIds.length) {
+        const idx = index++;
+        const userId = userIds[idx];
+        try {
+          await fetchOneUser(userId);
+        } catch (error) {
+          errorsByUserId[userId] = toText(error?.message || "Failed to load attendance logs");
+          logsByUserId[userId] = [];
+        }
+      }
+    });
+
+  await Promise.all(runners);
+
+  return {
+    success: true,
+    logsByUserId,
+    errorsByUserId,
+  };
+});
+
 exports.processBreakLogWrite = onDocumentWritten(
   {
     region: "us-central1",
@@ -1122,17 +1215,34 @@ exports.processBreakLogWrite = onDocumentWritten(
 exports.processActiveBreakThresholds = onSchedule(
   {
     region: "us-central1",
-    schedule: "every 1 minutes",
+    schedule: "every 5 minutes",
     timeZone: "America/Chicago",
     retryCount: 0,
+    maxInstances: 1,
+    memory: "256MiB",
+    timeoutSeconds: 60,
   },
   async () => {
+    const nowMs = Date.now();
+
+    const warningThreshold = admin.firestore.Timestamp.fromMillis(
+      nowMs - BREAK_WARNING_MINUTES * 60 * 1000
+    );
+
     const activeBreakSnap = await db
       .collection(BREAK_LOGS_COLLECTION)
       .where("isActive", "==", true)
+      .where("startedAt", "<=", warningThreshold)
+      .limit(BREAK_SCAN_LIMIT)
       .get();
 
-    const nowMs = Date.now();
+    if (activeBreakSnap.empty) {
+      logger.info("No active breaks at or past warning threshold.");
+      return;
+    }
+
+    logger.info(`Processing ${activeBreakSnap.size} active break threshold checks.`);
+
     for (const docSnap of activeBreakSnap.docs) {
       const breakLogId = toText(docSnap.id);
       const row = docSnap.data() || {};

@@ -18,8 +18,9 @@
 
 .app-shell {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
   min-width: 0;
+  overflow: hidden;
 }
 
 .main-content {
@@ -33,6 +34,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
 }
 
 .portal-topbar {
@@ -80,7 +82,23 @@
   flex: 1;
   color: black;
   min-width: 0;
-  height: 100vh;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+
+.portal-main-hidden {
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+}
+
+.portal-main-visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .portal-btn {
@@ -110,6 +128,29 @@
 
 .portal-btn-secondary {
   background: #0f172a;
+}
+
+.portal-topbar-actions .portal-btn {
+  transition:
+    opacity 0.18s ease;
+}
+
+.portal-topbar-actions .portal-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.portal-topbar-actions .portal-btn:active:not(:disabled) {
+  opacity: 0.82;
+}
+
+.portal-topbar-actions .portal-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.portal-topbar-actions .portal-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 .chartWrap {
@@ -338,6 +379,7 @@
 .portal-live-agent-top-tags {
   margin-top: 10px;
   display: flex;
+  flex-direction: column;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -696,13 +738,18 @@
 }
 
 .portal-page-transition-spinner-wrap {
-  position: fixed;
-  inset: 0;
-  z-index: 10020;
+  position: absolute;
+  top: 64px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 120;
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none;
+  pointer-events: auto;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(1.5px);
 }
 
 .portal-page-transition-spinner {
@@ -713,21 +760,16 @@
   border-top-color: #991b1b;
   border-right-color: #dc2626;
   animation: portalLogoutSpin 0.82s linear infinite;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
-  background: rgba(255, 255, 255, 0.78);
+  box-shadow: none;
+  background: transparent;
 }
 
 .portal-skeleton-overlay {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: linear-gradient(
-    160deg,
-    rgba(248, 251, 255, 0.92) 0%,
-    rgba(233, 246, 255, 0.9) 48%,
-    rgba(238, 253, 247, 0.86) 100%
-  );
-  backdrop-filter: blur(4px);
+  background: transparent;
+  backdrop-filter: none;
   overflow: hidden;
 }
 
@@ -853,10 +895,10 @@
 
 .portal-skeleton-center .portal-logout-text {
   color: #0f172a;
-  background: rgba(255, 255, 255, 0.72);
+  background: transparent;
   padding: 10px 14px;
   border-radius: 12px;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+  box-shadow: none;
 }
 
 .portal-skeleton-overlay-login {
@@ -1248,4 +1290,116 @@
     max-width: 100%;
     width: 78%;
   }
+}
+
+/* Compact spacing pass: trims whitespace while preserving layout and behavior */
+.main-content {
+  margin: 0.85rem;
+}
+
+.portal-page-pad {
+  padding: 6px;
+}
+
+.portal-topbar {
+  padding: 8px 12px;
+  gap: 8px;
+}
+
+.portal-topbar-actions {
+  gap: 8px;
+}
+
+.portal-btn {
+  padding: 8px 11px;
+  gap: 6px;
+}
+
+.portal-dialog {
+  padding: 18px;
+  border-radius: 14px;
+}
+
+.portal-dialog-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.portal-dialog-title-tight {
+  margin-bottom: 7px;
+}
+
+.portal-dialog-text-spaced {
+  margin-bottom: 14px;
+}
+
+.portal-dialog-subtext {
+  margin: 0 0 10px;
+}
+
+.portal-dialog-actions {
+  gap: 8px;
+}
+
+.portal-dialog-actions-spaced {
+  margin-top: 12px;
+}
+
+.portal-dialog-btn {
+  padding: 8px 13px;
+}
+
+.portal-live-agent-head {
+  gap: 10px;
+  padding: 14px 16px 12px;
+}
+
+.portal-live-agent-profile {
+  gap: 20px;
+}
+
+.portal-live-agent-body {
+  padding-top: 8px;
+  gap: 12px;
+}
+
+.portal-live-agent-grid {
+  gap: 10px;
+}
+
+.portal-live-agent-card {
+  padding: 10px;
+  border-radius: 12px;
+}
+
+.portal-live-agent-card-title {
+  margin-bottom: 8px;
+}
+
+.portal-live-agent-table th,
+.portal-live-agent-table td {
+  padding: 8px 10px;
+}
+
+.portal-announce-grid,
+.portal-user-request-grid {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.portal-user-request-field {
+  margin-bottom: 8px;
+}
+
+.portal-notification-head {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.portal-notification-body {
+  padding-top: 10px;
+}
+
+.portal-notification-actions {
+  margin-top: 12px;
 }

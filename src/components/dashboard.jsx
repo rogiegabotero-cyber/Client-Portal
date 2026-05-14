@@ -3052,9 +3052,6 @@ export default function Dashboard({
   return (
     <div className="dashX">
       <div className="dashHeader">
-        <div className="title-div">
-          <h3 className="kpiValue"><strong>Total count: </strong> {attendanceBreakdown.total}</h3>
-        </div>
 
         <div className="dashHeaderRight">
           {loading ? <div className="dashLoading" /> : null}
@@ -3424,7 +3421,7 @@ export default function Dashboard({
                       <div className="dashBreakLogsItemTop">
                         <div className="dashBreakLogsItemEmployee">{row.name}</div>
                         <span className={`dashBreakLogsItemState ${row.isActive ? "active" : ""}`}>
-                          {row.isActive ? "Active" : "Completed"}
+                          {row.isActive ? "On Break" : "Completed"}
                         </span>
                       </div>
 

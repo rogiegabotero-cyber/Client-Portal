@@ -1379,3 +1379,135 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Compact spacing pass */
+.control-panel-header {
+  margin-bottom: 14px;
+}
+
+.control-panel-layout {
+  gap: 8px;
+}
+
+.control-panel-users,
+.control-panel-permissions,
+.control-panel-data-browser {
+  padding: 12px;
+  border-radius: 14px;
+}
+
+.control-panel-users h2,
+.control-panel-permissions h2 {
+  margin: 10px 0;
+}
+
+.control-panel-user-list {
+  gap: 9px;
+}
+
+.control-panel-user-filter-bar {
+  margin-bottom: 8px;
+}
+
+.control-panel-user-card {
+  padding: 10px;
+}
+
+.control-panel-selected-user {
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.control-panel-checkbox-grid {
+  gap: 9px;
+}
+
+.control-panel-permission-group + .control-panel-permission-group {
+  margin-top: 10px;
+}
+
+.control-panel-checkbox-card {
+  padding: 10px;
+}
+
+.control-panel-actions {
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.control-panel-btn {
+  padding: 8px 12px;
+}
+
+.control-panel-state,
+.control-panel-error,
+.control-panel-success {
+  padding: 10px 12px;
+}
+
+.control-panel-attendance-grid {
+  gap: 9px;
+  margin-bottom: 10px;
+}
+
+.control-panel-attendance-card,
+.control-panel-transfer-card,
+.control-panel-role-bulk-card,
+.control-panel-special-actions-card,
+.control-panel-requests-card,
+.control-panel-request-card {
+  padding: 10px;
+}
+
+.control-panel-transfer-row,
+.control-panel-role-bulk-top,
+.control-panel-tabbar {
+  gap: 8px;
+}
+
+.control-panel-tab {
+  padding: 8px 11px;
+}
+
+.control-panel-drawer-head,
+.control-panel-drawer-body {
+  padding: 12px;
+}
+
+.control-panel-data-toolbar {
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.control-panel-data-toolbar-left,
+.control-panel-data-toolbar-right {
+  gap: 8px;
+}
+
+.control-panel-data-meta {
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+.control-panel-data-layout {
+  gap: 12px;
+}
+
+.control-panel-data-table th,
+.control-panel-data-table td {
+  padding: 9px 10px;
+}
+
+.control-panel-json-editor {
+  width: calc(100% - 24px);
+  margin: 12px;
+  min-height: 360px;
+  padding: 10px;
+}
+
+.control-panel-editor-help {
+  gap: 8px;
+  margin: 0 12px 12px;
+  padding: 10px;
+}

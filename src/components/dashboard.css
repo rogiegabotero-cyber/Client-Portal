@@ -1978,3 +1978,101 @@
   gap: 8px;
   max-width: 520px;
 }
+
+/* Compact spacing pass */
+.dashHeader {
+  gap: 8px;
+}
+
+.dashHeaderRight {
+  gap: 8px;
+}
+
+.dashLayout {
+  gap: 8px;
+}
+
+.topBar {
+  gap: 6px;
+}
+
+.kpi,
+#kpi {
+  padding: 7px;
+}
+
+.panel {
+  margin-top: 0.7rem;
+}
+
+.panelHead {
+  padding: 8px 7px;
+}
+
+.attSummaryTableWrap {
+  padding: 8px 10px 0;
+}
+
+.attWrap {
+  gap: 20px;
+  padding: 0.75rem;
+}
+
+.dashTooltipCard {
+  padding: 10px;
+}
+
+.agentAttendancePanel {
+  margin: 8px 0;
+  padding: 8px 10px 10px;
+}
+
+.perfBody {
+  padding: 9px;
+  gap: 8px;
+}
+
+.perfTop {
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.updateBody,
+.updateBox {
+  gap: 8px;
+}
+
+#updateBox1 {
+  padding: 10px 11px;
+}
+
+.windowBtns {
+  margin-bottom: 8px;
+}
+
+.payTable thead th,
+.payTdName,
+.payTdHours {
+  padding: 8px 10px;
+}
+
+.payEmpty {
+  padding: 10px;
+}
+
+.grid {
+  gap: 12px;
+}
+
+.clockin-controls {
+  padding: 12px;
+  gap: 10px;
+}
+
+.clockin-summary {
+  padding: 10px;
+}
+
+.clockin-actions {
+  gap: 8px;
+}
