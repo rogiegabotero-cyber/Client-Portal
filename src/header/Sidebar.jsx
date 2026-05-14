@@ -15,6 +15,8 @@ import {
   Megaphone,
   RefreshCcw,
   ChevronDown,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { canAccessPage } from "../auth/roleUtils";
 import HHIUHAI from "../assets/hhi-uhai.png";
@@ -30,6 +32,7 @@ export default function Sidebar({
   onRefreshLiveAgents,
 }) {
   const SIDEBAR_GROUP_SESSION_KEY = "portal_sidebar_group_open_state_v1";
+  const SIDEBAR_COLLAPSE_SESSION_KEY = "portal_sidebar_collapsed_state_v1";
 
   const LIVE_PANEL_DEFAULT_HEIGHT = 175;
   const LIVE_PANEL_MIN_HEIGHT = 120;
@@ -47,6 +50,7 @@ export default function Sidebar({
   const liveCardRef = useRef(null);
   const liveListRef = useRef(null);
   const [navbarStickyHeight, setNavbarStickyHeight] = useState(0);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const getLivePanelMaxAllowedHeight = useCallback(() => {
     const sidebarEl = sidebarRef.current;
@@ -134,33 +138,37 @@ export default function Sidebar({
   const navItems = [
     {
       section: "AGENT PROFILE",
+      sectionIcon: <Users size={14} />,
       items: [
-        { key: "dashboard", label: "DASHBOARD", icon: <LayoutDashboard size={20} /> },
-        { key: "employee_dashboard", label: "MY DASHBOARD", icon: <LayoutDashboard size={20} /> },
-        { key: "attendance", label: "ATTENDANCE", icon: <CalendarCheck size={20} /> },
-        { key: "assignment", label: "ASSIGNMENT", icon: <ClipboardList size={20} /> },
-        { key: "schedule", label: "SCHEDULE", icon: <CalendarDays size={20} /> },
-        { key: "notifications", label: "NOTIFICATIONS", icon: <Bell size={20} /> },
+        { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={20} /> },
+        { key: "employee_dashboard", label: "My Dashboard", icon: <LayoutDashboard size={20} /> },
+        { key: "attendance", label: "Attendance", icon: <CalendarCheck size={20} /> },
+        { key: "assignment", label: "Assignment", icon: <ClipboardList size={20} /> },
+        { key: "schedule", label: "Schedule", icon: <CalendarDays size={20} /> },
+        { key: "notifications", label: "Notifications", icon: <Bell size={20} /> },
       ],
     },
     {
       section: "PERFORMANCE REPORT",
+      sectionIcon: <BarChart3 size={14} />,
       items: [
-        { key: "perf_daily", label: "DAILY", icon: <BarChart3 size={20} /> },
-        { key: "perf_weekly", label: "WEEKLY", icon: <CalendarRange size={20} /> },
-        { key: "perf_monthly", label: "MONTHLY", icon: <Calendar size={20} /> },
+        { key: "perf_daily", label: "Daily", icon: <BarChart3 size={20} /> },
+        { key: "perf_weekly", label: "Weekly", icon: <CalendarRange size={20} /> },
+        { key: "perf_monthly", label: "Monthly", icon: <Calendar size={20} /> },
       ],
     },
     {
       section: "ADMINISTRATION",
+      sectionIcon: <SlidersHorizontal size={14} />,
       items: [
-        { key: "manage_announcements", label: "ANNOUNCEMENTS", icon: <Megaphone size={20} /> },
-        { key: "control_panel", label: "CONTROL PANEL", icon: <SlidersHorizontal size={20} /> },
+        { key: "manage_announcements", label: "Announcements", icon: <Megaphone size={20} /> },
+        { key: "control_panel", label: "Control Panel", icon: <SlidersHorizontal size={20} /> },
       ],
     },
     {
       section: "BILLING",
-      items: [{ key: "invoices", label: "INVOICES", icon: <Receipt size={20} /> }],
+      sectionIcon: <Receipt size={14} />,
+      items: [{ key: "invoices", label: "Invoices", icon: <Receipt size={20} /> }],
     },
   ];
 
@@ -208,6 +216,30 @@ export default function Sidebar({
   }, [groupOpenState]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const raw = window.sessionStorage.getItem(SIDEBAR_COLLAPSE_SESSION_KEY);
+      if (raw === null) return;
+      setIsSidebarCollapsed(raw === "1");
+    } catch {
+      // Ignore storage read failures.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(
+        SIDEBAR_COLLAPSE_SESSION_KEY,
+        isSidebarCollapsed ? "1" : "0"
+      );
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [isSidebarCollapsed]);
+
+  useEffect(() => {
     const updateNavbarHeight = () => {
       const h = Number(navbarRef.current?.getBoundingClientRect?.().height || 0);
       setNavbarStickyHeight(Math.max(0, Math.round(h)));
@@ -246,126 +278,192 @@ export default function Sidebar({
       aria-label={label}
     >
       <span className="sb-icon">{iconEl}</span>
-      <span className="sb-text">{label}</span>
+      {!isSidebarCollapsed ? <span className="sb-text">{label}</span> : null}
     </button>
   );
 
+  const getAgentInitials = (name) => {
+    return (
+      String(name || "?")
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0])
+        .join("")
+        .toUpperCase() || "?"
+    );
+  };
+
   return (
-    <aside className="sidebar" ref={sidebarRef}>
-      <div className="anchore" />
+    <aside className={`sidebar ${isSidebarCollapsed ? "is-collapsed" : ""}`} ref={sidebarRef}>
+      <div className="sb-scroll-area">
+        <div className="anchore" />
 
-      <div className="navbar" ref={navbarRef}>
-        <div className="sb-brand">
-          <div className="sb-brand-badge">
-            <img src={HHIUHAI} alt="" />
-          </div>
-          <div className="sb-brand-meta">
-            <div className="sb-brand-title-wrap">
-              <div className="sb-brand-title">UNICORN HAIR</div>
-              <span className="sb-brand-beta">BETA</span>
+        <div className="navbar" ref={navbarRef}>
+          <div className="sb-brand">
+            <div className="sb-brand-badge">
+              <img src={HHIUHAI} alt="" />
             </div>
-          </div>
-        </div>
-
-        <div className="sb-card-title">
-          <div className="sb-live-title-wrap">
-            <Users size={16} />
-            <span>LIVE AGENTS ({Array.isArray(liveAgents) ? liveAgents.length : 0})</span>
-            {loadingLive && <span className="sb-live-dot" />}
-          </div>
-          <button
-            type="button"
-            className={`sb-refresh-btn ${loadingLive ? "isLoading" : ""}`}
-            onClick={() => onRefreshLiveAgents?.()}
-            title="Refresh live agents"
-            disabled={loadingLive}
-            aria-busy={loadingLive}
-          >
-            <RefreshCcw size={15} className="sb-refresh-icon" />
-          </button>
-        </div>
-
-        <div
-          className={`sb-card ${isResizingLivePanel ? "isResizing" : ""}`}
-          ref={liveCardRef}
-          style={{ maxHeight: `${Math.round(livePanelMaxHeight)}px` }}
-        >
-          <div className="sb-live-list" ref={liveListRef}>
-            {loadingLive ? (
-              <div className="sb-live-loading" role="status" aria-live="polite">
-                <span className="sb-live-loading-spinner" />
-                <span>Loading live agents...</span>
-              </div>
-            ) : liveAgents.length === 0 ? (
-              <div className="sb-live-empty">No present agents today</div>
-            ) : (
-              liveAgents.map((a) => {
-                const isBreak = String(a.status || "").toLowerCase().includes("break");
-
-                return (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className="sb-live-item"
-                    onClick={() => onSelectLiveAgent?.(a)}
-                    title={`View ${a.name} details`}
-                  >
-                    <span className={`sb-live-dot ${isBreak ? "break" : ""}`} />
-                    <span className="sb-live-name">{a.name}</span>
-                    <span className={`sb-live-status ${isBreak ? "break" : ""}`}>
-                      {a.status || "Live"}
-                    </span>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-        <div
-          className={`sb-card-resize-handle ${isResizingLivePanel ? "isActive" : ""}`}
-          onPointerDown={handleLivePanelResizeStart}
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize live agents panel"
-          title="Drag to resize live agents list"
-        />
-      </div>
-      <div className="nav-title" style={{ top: `${Math.max(0, navbarStickyHeight)}px` }}>
-        Navigation
-      </div>
-
-      {navItems.map((group) => {
-        const visibleItems = group.items.filter((item) =>
-          canAccessPage(userRole, item.key, userAllowedPages)
-        );
-
-        if (visibleItems.length === 0) return null;
-        const isOpen = groupOpenState?.[group.section] !== false;
-
-        return (
-          <div className="sb-group" key={group.section}>
-            <button
-              type="button"
-              className={`sb-group-toggle ${isOpen ? "open" : ""}`}
-              onClick={() => toggleGroupOpen(group.section)}
-              aria-expanded={isOpen}
-              aria-controls={`sb-group-panel-${group.section.replace(/\s+/g, "-").toLowerCase()}`}
-            >
-              <ChevronDown size={14} className="sb-group-chevron" />
-              <span className="sb-group-title">{group.section}</span>
-              
-            </button>
-            {isOpen ? (
-              <div
-                id={`sb-group-panel-${group.section.replace(/\s+/g, "-").toLowerCase()}`}
-                className="sb-nav"
-              >
-                {visibleItems.map((item) => navBtn(item.key, item.label, item.icon))}
+            {!isSidebarCollapsed ? (
+              <div className="sb-brand-meta">
+                <div className="sb-brand-title-wrap">
+                  <div className="sb-brand-title">UNICORN HAIR</div>
+                  <span className="sb-brand-beta">BETA</span>
+                </div>
               </div>
             ) : null}
           </div>
-        );
-      })}
+
+          <div className="sb-live-panel">
+            <div className="sb-card-title">
+              <div className="sb-live-title-wrap">
+                <Users size={16} />
+                {!isSidebarCollapsed ? (
+                  <span>LIVE AGENTS ({Array.isArray(liveAgents) ? liveAgents.length : 0})</span>
+                ) : null}
+                {loadingLive && !isSidebarCollapsed ? <span className="sb-live-dot" /> : null}
+              </div>
+              <button
+                type="button"
+                className={`sb-refresh-btn ${loadingLive ? "isLoading" : ""}`}
+                onClick={() => onRefreshLiveAgents?.()}
+                title="Refresh live agents"
+                disabled={loadingLive}
+                aria-busy={loadingLive}
+              >
+                <RefreshCcw size={15} className="sb-refresh-icon" />
+              </button>
+            </div>
+
+            <div
+              className={`sb-card ${isResizingLivePanel ? "isResizing" : ""}`}
+              ref={liveCardRef}
+              style={
+                isSidebarCollapsed
+                  ? undefined
+                  : { maxHeight: `${Math.round(livePanelMaxHeight)}px` }
+              }
+            >
+              <div className="sb-live-list" ref={liveListRef}>
+                {loadingLive ? (
+                  <div className="sb-live-loading" role="status" aria-live="polite">
+                    <span className="sb-live-loading-spinner" />
+                    {!isSidebarCollapsed ? <span>Loading live agents...</span> : null}
+                  </div>
+                ) : liveAgents.length === 0 ? (
+                  <div className="sb-live-empty">No present agents today</div>
+                ) : (
+                  liveAgents.map((a) => {
+                    const isBreak = String(a.status || "").toLowerCase().includes("break");
+
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        className={`sb-live-item ${isSidebarCollapsed ? "avatar-only" : ""}`}
+                        onClick={() => onSelectLiveAgent?.(a)}
+                        title={`View ${a.name} details`}
+                        aria-label={`View ${a.name} details`}
+                      >
+                        {isSidebarCollapsed ? (
+                          <span className="sb-live-avatar" aria-hidden="true">
+                            {a.profileImg ? (
+                              <img
+                                src={a.profileImg}
+                                alt=""
+                                className="sb-live-avatar-img"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <span className="sb-live-avatar-fallback">
+                                {getAgentInitials(a.name)}
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <>
+                            <span className={`sb-live-dot ${isBreak ? "break" : ""}`} />
+                            <span className="sb-live-name">{a.name}</span>
+                            <span className={`sb-live-status ${isBreak ? "break" : ""}`}>
+                              {a.status || "Live"}
+                            </span>
+                          </>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            {!isSidebarCollapsed ? (
+              <div
+                className={`sb-card-resize-handle ${isResizingLivePanel ? "isActive" : ""}`}
+                onPointerDown={handleLivePanelResizeStart}
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize live agents panel"
+                title="Drag to resize live agents list"
+              />
+            ) : null}
+          </div>
+        </div>
+        {!isSidebarCollapsed ? (
+          <div className="nav-title" style={{ top: `${Math.max(0, navbarStickyHeight)}px` }}>
+            Navigation
+          </div>
+        ) : null}
+
+        <div className="sb-nav-groups">
+          {navItems.map((group) => {
+            const visibleItems = group.items.filter((item) =>
+              canAccessPage(userRole, item.key, userAllowedPages)
+            );
+
+            if (visibleItems.length === 0) return null;
+            const isOpen = groupOpenState?.[group.section] !== false;
+
+            return (
+              <div className="sb-group" key={group.section}>
+                <button
+                  type="button"
+                  className={`sb-group-toggle ${isOpen ? "open" : ""}`}
+                  onClick={() => toggleGroupOpen(group.section)}
+                  aria-expanded={isOpen}
+                  aria-controls={`sb-group-panel-${group.section.replace(/\s+/g, "-").toLowerCase()}`}
+                  aria-label={`${isOpen ? "Collapse" : "Expand"} ${group.section}`}
+                  title={isSidebarCollapsed ? group.section : undefined}
+                >
+                  <ChevronDown size={14} className="sb-group-chevron" />
+                  <span className="sb-group-icon" aria-hidden="true">{group.sectionIcon}</span>
+                  {!isSidebarCollapsed ? (
+                    <span className="sb-group-title">{group.section}</span>
+                  ) : null}
+                </button>
+                {isOpen ? (
+                  <div
+                    id={`sb-group-panel-${group.section.replace(/\s+/g, "-").toLowerCase()}`}
+                    className="sb-nav"
+                  >
+                    {visibleItems.map((item) => navBtn(item.key, item.label, item.icon))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="sb-collapse-section">
+        <button
+          type="button"
+          className="sb-collapse-toggle"
+          onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+          aria-label={isSidebarCollapsed ? "Expand sidebar" : "Minimize sidebar"}
+          title={isSidebarCollapsed ? "Expand sidebar" : "Minimize sidebar"}
+        >
+          {isSidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+        </button>
+      </div>
     </aside>
   );
 }

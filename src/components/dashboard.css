@@ -169,11 +169,11 @@
   border: 1px solid rgba(255,255,255,.16);
   background: rgba(15, 23, 42, 0.24);
   color: #101825;
-  padding: 9px 12px;
   min-Width: 180px;
   font-Weight: 700;
   outline: none;
   height: 2rem;
+  font-size: 12px;
 }
 
 .select-divv{

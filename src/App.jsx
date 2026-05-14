@@ -4874,16 +4874,20 @@ export default function App() {
     for (const emp of validEmployees) {
       const userId = String(getUserId(emp));
       if (!isUserLiveNow(userId)) continue;
+      const profileImg =
+        String(profileImagesByUserId?.[userId] || "").trim() ||
+        String(getProfileImageUrl(emp) || "").trim();
 
       live.push({
         id: userId,
         name: idToName.get(userId) || `User ${userId}`,
         status: isUserOnBreak(userId) ? "On Break" : "Live",
+        profileImg,
       });
     }
 
     return live.sort((a, b) => a.name.localeCompare(b.name));
-  }, [employees, validEmployees, isUserLiveNow, isUserOnBreak]);
+  }, [employees, validEmployees, isUserLiveNow, isUserOnBreak, profileImagesByUserId]);
 
   const canUseAssignTaskShortcut = useMemo(() => {
     if (!user) return false;
