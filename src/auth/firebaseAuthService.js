@@ -938,12 +938,13 @@ export async function deleteAdminPortalUser(userId) {
 
   const profile = userSnap.data() || {};
   const role = normalizePortalRole(profile?.role || "");
+  const deletablePortalRoles = [ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
 
   if (role === ROLES.SUPER_ADMIN) {
     throw new Error("Super Admin cannot be deleted from this action.");
   }
-  if (role !== ROLES.ADMIN) {
-    throw new Error("Only admin users can be deleted from this action.");
+  if (!deletablePortalRoles.includes(role)) {
+    throw new Error("Only special portal users can be deleted from this action.");
   }
 
   await Promise.all([

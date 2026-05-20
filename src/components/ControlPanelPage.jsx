@@ -57,6 +57,7 @@ const PAGE_LABELS = {
   hours: "Hours",
   notifications: "Notifications",
   manage_announcements: "Manage Announcements",
+  manage_breaks: "Manage Breaks",
   perf_daily: "Daily",
   perf_weekly: "Weekly",
   perf_monthly: "Monthly",
@@ -95,6 +96,7 @@ const PERMISSION_PAGE_ORDER = [
   "hours",
   "notifications",
   "manage_announcements",
+  "manage_breaks",
   "perf_daily",
   "perf_weekly",
   "perf_monthly",
@@ -529,7 +531,7 @@ export default function ControlPanelPage({
   const [transferRoleDraft, setTransferRoleDraft] = useState(ROLES.ADMIN);
   const [transferringEmployee, setTransferringEmployee] = useState(false);
   const [transferringToEmployee, setTransferringToEmployee] = useState(false);
-  const [deletingAdmin, setDeletingAdmin] = useState(false);
+  const [deletingSpecialUser, setDeletingSpecialUser] = useState(false);
   const [employeePasswordDraft, setEmployeePasswordDraft] = useState("");
   const [employeePasswordConfirmDraft, setEmployeePasswordConfirmDraft] = useState("");
   const [employeePasswordDropdownOpen, setEmployeePasswordDropdownOpen] = useState(false);
@@ -1341,14 +1343,14 @@ export default function ControlPanelPage({
     }
   }
 
-  async function handleDeleteSelectedAdmin() {
+  async function handleDeleteSelectedSpecialUser() {
     if (!selectedUser || selectedType !== "special") return;
-    if (normalizeRole(selectedUser?.role) !== ROLES.ADMIN) return;
+    if (normalizeRole(selectedUser?.role) === ROLES.SUPER_ADMIN) return;
     if (!onDeleteAdminUser) return;
 
     const targetUserId = String(selectedUser.uid || selectedUser.id || "").trim();
     if (!targetUserId) {
-      setLocalError("Selected admin is missing user id.");
+      setLocalError("Selected user is missing user id.");
       return;
     }
 
@@ -1362,11 +1364,11 @@ export default function ControlPanelPage({
       typeof window === "undefined"
         ? true
         : window.confirm(
-            `Delete admin user "${targetLabel}"? This removes their portal profile access.`
+            `Delete special user "${targetLabel}"? This removes their portal profile access.`
           );
     if (!confirmed) return;
 
-    setDeletingAdmin(true);
+    setDeletingSpecialUser(true);
     setLocalError("");
 
     try {
@@ -1375,11 +1377,11 @@ export default function ControlPanelPage({
 
       onToast?.({
         type: "success",
-        title: "Admin Deleted",
+        title: "User Deleted",
         message: `${targetLabel} was removed.`,
       });
     } catch (err) {
-      const msg = err?.message || "Failed to delete admin user";
+      const msg = err?.message || "Failed to delete special user";
       setLocalError(msg);
       onToast?.({
         type: "error",
@@ -1387,7 +1389,7 @@ export default function ControlPanelPage({
         message: msg,
       });
     } finally {
-      setDeletingAdmin(false);
+      setDeletingSpecialUser(false);
     }
   }
 
@@ -3313,7 +3315,7 @@ export default function ControlPanelPage({
 
                     <h3 className="control-panel-permission-title">Special User Actions</h3>
                     <p className="control-panel-special-actions-help">
-                      Transfer special users back to employee and delete admin users.
+                      Transfer special users back to employee and delete special users.
                     </p>
                     {selectedType !== "special" ? (
                       <div className="control-panel-state">
@@ -3336,14 +3338,14 @@ export default function ControlPanelPage({
                           </button>
                         ) : null}
 
-                        {onDeleteAdminUser && normalizeRole(selectedUser?.role) === ROLES.ADMIN ? (
+                        {onDeleteAdminUser && normalizeRole(selectedUser?.role) !== ROLES.SUPER_ADMIN ? (
                           <button
                             type="button"
                             className="control-panel-btn danger"
-                            onClick={handleDeleteSelectedAdmin}
-                            disabled={deletingAdmin}
+                            onClick={handleDeleteSelectedSpecialUser}
+                            disabled={deletingSpecialUser}
                           >
-                            {deletingAdmin ? "Deleting..." : "Delete Admin"}
+                            {deletingSpecialUser ? "Deleting..." : "Delete User"}
                           </button>
                         ) : null}
                       </div>

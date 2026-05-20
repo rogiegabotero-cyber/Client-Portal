@@ -45,6 +45,8 @@ import {
 import { getStoredSession } from "./auth/authService";
 import {
   DAILY_BREAK_LIMIT_MINUTES,
+  createBreakLogEntry,
+  deleteBreakLogEntry,
   getActiveBreakForUser,
   getActiveBreaks,
   archiveAllNotifications,
@@ -66,6 +68,7 @@ import {
   subscribeActiveBreakUpdates,
   subscribeBreakNotificationUpdates,
   getOverBreakNotes,
+  updateBreakLogEntry,
 } from "./services/breakService";
 import {
   getBusinessDayKey,
@@ -137,6 +140,7 @@ import InvoicesPage from "./components/InvoicesPage";
 import AssignmentPage from "./components/AssignmentPage";
 import PerformanceReportPage from "./components/PerformanceReportPage";
 import ManageAnnouncementsPage from "./components/ManageAnnouncementsPage";
+import ManageBreaksPage from "./components/ManageBreaksPage";
 import { db } from "./firebase";
 import {
   doc as fsDoc,
@@ -912,6 +916,7 @@ const PAGE_HEADER_TITLES = {
   register_portal_user: "Register Portal User",
   notifications: "Notifications",
   manage_announcements: "Manage Announcements",
+  manage_breaks: "Manage Breaks",
   perf_daily: "Performance Report (Daily)",
   perf_weekly: "Performance Report (Weekly)",
   perf_monthly: "Performance Report (Monthly)",
@@ -4754,6 +4759,48 @@ export default function App() {
     reloadTodayLogs({ force: true });
   }, [reloadTodayLogs]);
 
+  const handleCreateBreakLogEntry = useCallback(
+    async (payload = {}) => {
+      const created = await createBreakLogEntry(payload);
+      await Promise.allSettled([
+        reloadActiveBreaks(),
+        reloadBreakUsage(),
+        reloadTodayLogs({ force: true, silent: true }),
+      ]);
+      return created;
+    },
+    [reloadActiveBreaks, reloadBreakUsage, reloadTodayLogs]
+  );
+
+  const handleUpdateBreakLogEntry = useCallback(
+    async (breakLogId, payload = {}) => {
+      await updateBreakLogEntry(breakLogId, payload);
+      await Promise.allSettled([
+        reloadActiveBreaks(),
+        reloadBreakUsage(),
+        reloadTodayLogs({ force: true, silent: true }),
+      ]);
+      return {
+        id: String(breakLogId || "").trim(),
+        ...payload,
+      };
+    },
+    [reloadActiveBreaks, reloadBreakUsage, reloadTodayLogs]
+  );
+
+  const handleDeleteBreakLogEntry = useCallback(
+    async (breakLogId) => {
+      await deleteBreakLogEntry(breakLogId);
+      await Promise.allSettled([
+        reloadActiveBreaks(),
+        reloadBreakUsage(),
+        reloadTodayLogs({ force: true, silent: true }),
+      ]);
+      return true;
+    },
+    [reloadActiveBreaks, reloadBreakUsage, reloadTodayLogs]
+  );
+
   useEffect(() => {
     if (!isAuthenticated || !user) {
       return undefined;
@@ -5251,6 +5298,9 @@ export default function App() {
         deleteAnnouncement: handleDeleteAnnouncement,
         restoreAnnouncement: handleRestoreAnnouncement,
         permanentlyDeleteAnnouncement: handlePermanentDeleteAnnouncement,
+        createBreakLogEntry: handleCreateBreakLogEntry,
+        updateBreakLogEntry: handleUpdateBreakLogEntry,
+        deleteBreakLogEntry: handleDeleteBreakLogEntry,
       },
       viewer: user,
       invoiceEmbedUrl,
@@ -5334,6 +5384,9 @@ export default function App() {
       handleDeleteAnnouncement,
       handleRestoreAnnouncement,
       handlePermanentDeleteAnnouncement,
+      handleCreateBreakLogEntry,
+      handleUpdateBreakLogEntry,
+      handleDeleteBreakLogEntry,
       user,
       invoiceEmbedUrl,
     ]
@@ -5662,6 +5715,21 @@ export default function App() {
                     onPermanentDeleteAnnouncement={handlePermanentDeleteAnnouncement}
                     onToast={pushToast}
                     businessTimeZone={businessTimeZone}
+                    pageData={sharedPageData}
+                  />
+                </div>
+              )}
+
+              {activePage === "manage_breaks" && (
+                <div className="portal-page-pad portal-page-pad-breaks">
+                  <ManageBreaksPage
+                    employees={allEmployeesForSharedPages}
+                    attendanceResetTime={attendanceResetTime}
+                    businessTimeZone={businessTimeZone}
+                    onCreateBreakLog={handleCreateBreakLogEntry}
+                    onUpdateBreakLog={handleUpdateBreakLogEntry}
+                    onDeleteBreakLog={handleDeleteBreakLogEntry}
+                    onToast={pushToast}
                     pageData={sharedPageData}
                   />
                 </div>

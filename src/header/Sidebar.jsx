@@ -13,6 +13,7 @@ import {
   SlidersHorizontal,
   Bell,
   Megaphone,
+  Coffee,
   RefreshCcw,
   ChevronDown,
   PanelLeftClose,
@@ -162,6 +163,7 @@ export default function Sidebar({
       sectionIcon: <SlidersHorizontal size={14} />,
       items: [
         { key: "manage_announcements", label: "Announcements", icon: <Megaphone size={20} /> },
+        { key: "manage_breaks", label: "Breaks", icon: <Coffee size={20} /> },
         { key: "control_panel", label: "Control Panel", icon: <SlidersHorizontal size={20} /> },
       ],
     },

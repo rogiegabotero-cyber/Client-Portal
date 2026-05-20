@@ -1,4 +1,4 @@
-/* src/components/employee_dashboard.css */
+﻿/* src/components/employee_dashboard.css */
 
 /* ---------- Premium SaaS Theme ---------- */
 
@@ -354,7 +354,7 @@
   box-shadow:var(--shadow2);
   height:100%;
   min-height:0;
-  overflow:auto;
+  overflow:hidden;
   width: 100%;
 }
 

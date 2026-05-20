@@ -793,6 +793,184 @@ export async function endBreak(userId) {
   };
 }
 
+export async function createBreakLogEntry({
+  userId,
+  name = "",
+  email = "",
+  startedAt,
+  endedAt = null,
+  isActive,
+  note = "",
+} = {}) {
+  const uid = String(userId || "").trim();
+  if (!uid) throw new Error("userId is required");
+
+  const startedAtDate = toDate(startedAt);
+  if (!startedAtDate) throw new Error("Valid startedAt value is required");
+
+  const endedAtDate =
+    endedAt === null || endedAt === undefined || endedAt === "" ? null : toDate(endedAt);
+  if (endedAtDate && endedAtDate.getTime() < startedAtDate.getTime()) {
+    throw new Error("endedAt must be later than startedAt");
+  }
+
+  const resolvedIsActive =
+    typeof isActive === "boolean" ? isActive : !endedAtDate;
+
+  if (resolvedIsActive) {
+    const activeBreak = await getActiveBreakForUser(uid);
+    if (activeBreak) {
+      throw new Error("User already has an active break");
+    }
+  }
+
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+  const payload = {
+    userId: uid,
+    name: String(name || "").trim(),
+    email: String(email || "").trim(),
+    note: String(note || "").trim(),
+    startedAt: Timestamp.fromDate(startedAtDate),
+    endedAt: resolvedIsActive ? null : endedAtDate ? Timestamp.fromDate(endedAtDate) : null,
+    isActive: resolvedIsActive,
+    totalBreakMinutes:
+      !resolvedIsActive && endedAtDate
+        ? minutesBetween(startedAtDate, endedAtDate)
+        : 0,
+
+    reminderSent: false,
+    reminderSentAt: null,
+
+    limitReachedAlertSent: false,
+    limitReachedAlertSentAt: null,
+
+    overBreakSaved: false,
+    overBreakSavedAt: null,
+
+    overBreakAlertSent: false,
+    overBreakAlertSentAt: null,
+
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("startedAtClient", startedAtDate, storageTimeZone),
+    ...(endedAtDate && !resolvedIsActive
+      ? buildTimeZoneMeta("endedAtClient", endedAtDate, storageTimeZone)
+      : {}),
+    ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+  };
+
+  const ref = await addDoc(collection(db, BREAK_LOGS_COLLECTION), payload);
+  invalidateBreakRangeCache();
+
+  return {
+    id: ref.id,
+    ...payload,
+  };
+}
+
+export async function updateBreakLogEntry(breakLogId, updates = {}) {
+  const id = String(breakLogId || "").trim();
+  if (!id) throw new Error("breakLogId is required");
+
+  const userId =
+    updates && Object.prototype.hasOwnProperty.call(updates, "userId")
+      ? String(updates.userId || "").trim()
+      : "";
+  if (
+    updates &&
+    Object.prototype.hasOwnProperty.call(updates, "userId") &&
+    !userId
+  ) {
+    throw new Error("userId cannot be empty");
+  }
+
+  const startedAtProvided =
+    updates && Object.prototype.hasOwnProperty.call(updates, "startedAt");
+  const endedAtProvided =
+    updates && Object.prototype.hasOwnProperty.call(updates, "endedAt");
+  const isActiveProvided =
+    updates && Object.prototype.hasOwnProperty.call(updates, "isActive");
+
+  const startedAtDate = startedAtProvided ? toDate(updates.startedAt) : null;
+  if (startedAtProvided && !startedAtDate) {
+    throw new Error("startedAt must be a valid date");
+  }
+
+  const endedAtRaw = endedAtProvided ? updates.endedAt : undefined;
+  const endedAtDate =
+    endedAtProvided && endedAtRaw !== null && endedAtRaw !== ""
+      ? toDate(endedAtRaw)
+      : null;
+  if (endedAtProvided && endedAtRaw !== null && endedAtRaw !== "" && !endedAtDate) {
+    throw new Error("endedAt must be a valid date");
+  }
+
+  if (startedAtDate && endedAtDate && endedAtDate.getTime() < startedAtDate.getTime()) {
+    throw new Error("endedAt must be later than startedAt");
+  }
+
+  const resolvedIsActive =
+    typeof updates?.isActive === "boolean"
+      ? updates.isActive
+      : endedAtProvided
+        ? !(endedAtDate instanceof Date)
+        : undefined;
+
+  const storageTimeZone = resolveStorageTimeZone();
+  const now = new Date();
+  const payload = {
+    updatedAt: serverTimestamp(),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+  };
+
+  if (startedAtProvided && startedAtDate) {
+    payload.startedAt = Timestamp.fromDate(startedAtDate);
+    Object.assign(payload, buildTimeZoneMeta("startedAtClient", startedAtDate, storageTimeZone));
+  }
+
+  if (endedAtProvided) {
+    if (endedAtDate) {
+      payload.endedAt = Timestamp.fromDate(endedAtDate);
+      Object.assign(payload, buildTimeZoneMeta("endedAtClient", endedAtDate, storageTimeZone));
+    } else {
+      payload.endedAt = null;
+    }
+  }
+
+  if (userId) payload.userId = userId;
+  if (updates && Object.prototype.hasOwnProperty.call(updates, "name")) {
+    payload.name = String(updates.name || "").trim();
+  }
+  if (updates && Object.prototype.hasOwnProperty.call(updates, "email")) {
+    payload.email = String(updates.email || "").trim();
+  }
+  if (updates && Object.prototype.hasOwnProperty.call(updates, "note")) {
+    payload.note = String(updates.note || "").trim();
+  }
+
+  if (isActiveProvided || endedAtProvided) {
+    payload.isActive = !!resolvedIsActive;
+  }
+
+  if (startedAtDate && endedAtDate) {
+    payload.totalBreakMinutes = minutesBetween(startedAtDate, endedAtDate);
+  } else if (isActiveProvided && resolvedIsActive) {
+    payload.totalBreakMinutes = 0;
+  }
+
+  await updateDoc(doc(db, BREAK_LOGS_COLLECTION, id), payload);
+  invalidateBreakRangeCache();
+}
+
+export async function deleteBreakLogEntry(breakLogId) {
+  const id = String(breakLogId || "").trim();
+  if (!id) throw new Error("breakLogId is required");
+  await deleteDoc(doc(db, BREAK_LOGS_COLLECTION, id));
+  invalidateBreakRangeCache();
+}
+
 export async function getActiveBreakForUser(userId) {
   const uid = String(userId || "").trim();
   if (!uid) return null;
