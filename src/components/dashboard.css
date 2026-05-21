@@ -665,14 +665,30 @@
 .payableChartWrap {
   width: 100%;
   min-width: 0;
-  height: 260px;
-  min-height: 260px;
+  height: 236px;
+  min-height: 236px;
   margin-top: 0;
 }
 
 .payablePrintBtn {
   min-width: 90px;
   white-space: nowrap;
+}
+
+.payableActionIconBtn {
+  min-width: 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.payableActionIconBtn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
 }
 
 .printOnly {
@@ -930,20 +946,20 @@
 .updateBody {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
 }
 
 .updateBox {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
 }
 
 #updateBox1{
-  padding: 12px 14px;
-  gap: 6px;
+  padding: 9px 10px;
+  gap: 4px;
 }
 
 #updateBox1 .updateItem {
@@ -952,13 +968,15 @@
 }
 
 #updateBox1 .windowBtn {
-  padding: 4px 8px;
+  padding: 3px 8px;
+  height: 28px;
   font-size: 10px;
 }
 
+
 #updateBox1 .select-emp {
   min-width: 150px;
-  padding: 7px 10px;
+  padding: 5px 9px;
 }
 
 #updateBox1 .windowLine {
@@ -980,34 +998,65 @@
 
 #updateBox1 .payableWindowBtns {
   display: flex;
-  flex-direction: row;
-  gap: 6px;
-  margin-bottom: 8px;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
 }
 
 .buttons-div {
-  display: flex;
+  display: inline-flex;
   flex-direction: row;
-  width: 100%;
-  align-items: center;
+  width: auto;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
-#updateBox1 .payableAgentSelectWrap {
-  margin-bottom: 8px;
-  display: flex;
-  flex-direction: row;
-  width: 100%;
-  justify-content: end;
-  align-items: center;
-  gap: 1rem;
+
+.payablePresetSelectWrap {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  order: 2;
+  flex: 0 0 auto;
+}
+
+.payablePresetSelectWrap span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.payablePresetSelect {
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: #ffffff;
+  color: #0f172a;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 132px;
+  outline: none;
 }
 
 #updateBox1 .payableManualFilters {
   display: flex;
   flex-direction: row;
-  gap: 8px;
-  margin-bottom: 8px;
-  width: 100%;
+  gap: 6px;
+  margin-right: 8px;
+  margin-bottom: 0;
+  width: auto;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  order: 1;
+  flex: 0 0 auto;
 }
 
 #updateBox1 .payableDateField,
@@ -1028,30 +1077,31 @@
   color: #475569;
 }
 
+
 #updateBox1 .payableDateInput,
 #updateBox1 .payableMonthSelect {
   border-radius: 10px;
   border: 1px solid rgba(15, 23, 42, 0.18);
   background: #ffffff;
   color: #0f172a;
-  padding: 7px 10px;
+  padding: 6px 9px;
   font-size: 12px;
   font-weight: 600;
   outline: none;
 }
 
 #updateBox1 .payableDateInput {
-  min-width: 144px;
+  min-width: 130px;
 }
 
 #updateBox1 .payableYearField {
-  min-width: 104px;
-  flex: 0 1 104px;
+  min-width: 94px;
+  flex: 0 1 94px;
 }
 
 #updateBox1 .payableMonthField {
-  min-width: 178px;
-  flex: 1 1 178px;
+  min-width: 160px;
+  flex: 1 1 160px;
 }
 
 #updateBox1 .payableMonthSelect option {
@@ -1064,10 +1114,11 @@
 }
 
 #updateBox1 .payableSummaryPanels {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 2px 0 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 6px;
+  margin: 1px 0 4px;
 }
 
 #updateBox1 .payableSummaryPanel {
@@ -1075,24 +1126,29 @@
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.92));
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
-  padding: 10px 11px;
+  padding: 8px 9px;
   min-width: 0;
+  flex: 1 1 calc(50% - 3px);
 }
 
 #updateBox1 .payableSummaryPanel.range {
-  grid-column: 1 / -1;
+  flex-basis: 100%;
   background: linear-gradient(145deg, rgba(15, 23, 42, 0.94), rgba(30, 41, 59, 0.9));
   border-color: rgba(148, 163, 184, 0.35);
 }
 
-#updateBox1 .payableSummaryPanel.total {
-  background: linear-gradient(145deg, rgba(22, 163, 74, 0.12), rgba(74, 222, 128, 0.08));
-  border-color: rgba(34, 197, 94, 0.28);
+#updateBox1 .payableSummaryRangeHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-#updateBox1 .payableSummaryPanel.duties {
-  background: linear-gradient(145deg, rgba(37, 99, 235, 0.1), rgba(96, 165, 250, 0.08));
-  border-color: rgba(59, 130, 246, 0.26);
+#updateBox1 .payableSummaryInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 #updateBox1 .payableSummaryLabel {
@@ -1107,19 +1163,6 @@
   color: rgba(226, 232, 240, 0.85);
 }
 
-#updateBox1 .payableSummaryMain {
-  margin-top: 5px;
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1.15;
-  color: #0f172a;
-  letter-spacing: -0.01em;
-}
-
-#updateBox1 .payableSummaryPanel.range .payableSummaryMain {
-  color: #f8fafc;
-}
-
 #updateBox1 .payableSummarySub {
   margin-top: 4px;
   font-size: 11px;
@@ -1132,11 +1175,35 @@
   color: rgba(226, 232, 240, 0.82);
 }
 
+#updateBox1 .payableSummaryPanel.range .payableWindowBtns {
+  margin-bottom: 0;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+#updateBox1 .payableViewRow {
+  margin-top: 6px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+#updateBox1 .payableViewEmployeeField {
+  flex: 0 1 260px;
+  margin-left: auto;
+}
+
+#updateBox1 .payableSummaryPanel.range .payableViewEmployeeField span {
+  color: rgba(226, 232, 240, 0.9);
+}
+
 #updateBox1 .payableViewToggle {
-  margin-top: 8px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-left: 0;
 }
 
 #updateBox1 .payableViewBtn {
@@ -1183,6 +1250,18 @@
   gap: 8px;
   margin-bottom: 10px;
   flex-wrap: wrap;
+}
+
+.panelHeadActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.panelHeadWindowBtns {
+  margin-bottom: 0;
 }
 
 .windowBtn {
@@ -1376,6 +1455,103 @@
 
 .p-payable {
   flex-basis: 100%;
+}
+
+#updateBox1 .select-emp {
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: #ffffff;
+  color: #0f172a;
+  min-width: 190px;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.payablePanelHead {
+  align-items: center;
+}
+
+.payablePanelHeadIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.payablePanelHeadStats {
+  display: inline-flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.payableHeadStat {
+  border: 1px solid rgba(17, 24, 39, 0.09);
+  border-radius: 10px;
+  padding: 5px 8px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.payableHeadStat span {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.payableHeadStat strong {
+  font-size: 13px;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.payableWorkbench {
+  background: linear-gradient(180deg, #ffffff, #fbfdff);
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 14px;
+}
+
+.payableControlRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.payableControlRowSingleLine {
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  min-width: max-content;
+  gap: 8px;
+  width: max-content;
+}
+
+.payableToolbarActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.payableActivePill {
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
 .p-heat {
@@ -1588,22 +1764,23 @@
   }
 
   #updateBox1 .payableSummaryPanels {
-    grid-template-columns: minmax(0, 1fr);
+    flex-direction: column;
   }
 
   #updateBox1 .payableSummaryPanel.range {
-    grid-column: auto;
+    flex-basis: auto;
   }
 
   #updateBox1 .payableManualFilters {
-    align-items: stretch;
+    align-items: flex-end;
+    flex-wrap: nowrap;
   }
 
   #updateBox1 .payableDateField,
   #updateBox1 .payableYearField,
   #updateBox1 .payableMonthField {
-    flex: 1 1 100%;
-    min-width: 0;
+    flex: 0 0 auto;
+    min-width: max-content;
   }
 
   .perfChartWrap {
@@ -1816,7 +1993,8 @@
 }
 
 .dashBreakLogsList {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
@@ -1825,7 +2003,8 @@
   border-radius: 12px;
   background: #f8fafc;
   padding: 10px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
 
@@ -1934,12 +2113,14 @@
 
 .clockin-controls {
   padding: 18px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
 }
 
 .clockin-field {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
@@ -1953,7 +2134,8 @@
   border: 1px solid #e2e8f0;
   border-radius: 14px;
   padding: 14px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
 
@@ -1974,7 +2156,8 @@
 }
 
 .clockin-absent-wrap {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   max-width: 520px;
 }

@@ -4921,6 +4921,18 @@ export default function App() {
     for (const emp of validEmployees) {
       const userId = String(getUserId(emp));
       if (!isUserLiveNow(userId)) continue;
+      const onBreak = isUserOnBreak(userId);
+
+      // UI-only safeguard:
+      // if an employee is still marked on break after scheduled shift end,
+      // hide them from live list even if break wasn't manually ended.
+      if (onBreak) {
+        const scheduleEndUtcMs = getTodayScheduleEndUtcMs(userId);
+        if (Number.isFinite(scheduleEndUtcMs) && nowMs >= scheduleEndUtcMs) {
+          continue;
+        }
+      }
+
       const profileImg =
         String(profileImagesByUserId?.[userId] || "").trim() ||
         String(getProfileImageUrl(emp) || "").trim();
@@ -4928,13 +4940,21 @@ export default function App() {
       live.push({
         id: userId,
         name: idToName.get(userId) || `User ${userId}`,
-        status: isUserOnBreak(userId) ? "On Break" : "Live",
+        status: onBreak ? "On Break" : "Live",
         profileImg,
       });
     }
 
     return live.sort((a, b) => a.name.localeCompare(b.name));
-  }, [employees, validEmployees, isUserLiveNow, isUserOnBreak, profileImagesByUserId]);
+  }, [
+    employees,
+    validEmployees,
+    isUserLiveNow,
+    isUserOnBreak,
+    getTodayScheduleEndUtcMs,
+    profileImagesByUserId,
+    nowMs,
+  ]);
 
   const canUseAssignTaskShortcut = useMemo(() => {
     if (!user) return false;

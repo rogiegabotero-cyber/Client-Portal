@@ -1952,6 +1952,58 @@
   min-height:0;
 }
 
+.empNotepadCompletedDropdown{
+  background:transparent;
+  overflow:visible;
+}
+
+.empNotepadCompletedTrigger{
+  width:100%;
+  appearance:none;
+  border:none;
+  background:transparent;
+  color:#334155;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  gap:6px;
+  text-align:left;
+  padding:2px 0;
+  font-size:12px;
+  font-weight:700;
+  text-transform:none;
+  letter-spacing:0;
+  cursor:pointer;
+  position:relative;
+}
+
+.empNotepadCompletedTrigger::after{
+  content:"";
+  width:5px;
+  height:5px;
+  border-right:1.6px solid #334155;
+  border-bottom:1.6px solid #334155;
+  transform:rotate(45deg);
+  opacity:.85;
+  margin-left:2px;
+  transition:transform .15s ease;
+}
+
+.empNotepadCompletedTrigger.open::after{
+  transform:rotate(-135deg) translate(-1px, 0);
+}
+
+.empNotepadCompletedLabel{
+  line-height:1.2;
+  padding-left: 5px;
+}
+
+.empNotepadCompletedList{
+  padding:6px 0 0;
+  display:grid;
+  gap:8px;
+}
+
 .empNotepadListItem{
   border:1px solid var(--border);
   border-left:4px solid #3b82f6;
@@ -2358,6 +2410,12 @@
   border-color:rgba(91,0,8,.25);
 }
 
+.empNotepadToolBtn.active{
+  border-color:rgba(91,0,8,.45);
+  background:#5b0008;
+  color:#ffffff;
+}
+
 .empNotepadEditor{
   flex:1;
   min-height:0;
@@ -2377,16 +2435,37 @@
   box-shadow:0 0 0 2px rgba(91,0,8,.12);
 }
 
+.empNotepadEditor ol,
+.empNotepadEditor ul{
+  margin:0.35em 0 0.35em 1.2em;
+  padding-left:1.1em;
+}
+
+.empNotepadEditor ol{
+  list-style:decimal;
+}
+
+.empNotepadEditor ul{
+  list-style:disc;
+}
+
+.empNotepadEditor li{
+  margin:0.12em 0;
+}
+
 .empNotepadEditor .notepad-check-item{
-  display:flex;
-  align-items:center;
-  gap:8px;
+  position:relative;
+  padding-left:22px;
+  min-height:20px;
 }
 
 .empNotepadEditor input[type="checkbox"]{
   width:14px;
   height:14px;
   accent-color:#5b0008;
+  position:absolute;
+  left:0;
+  top:2px;
 }
 
 .announcementModalOverlay{

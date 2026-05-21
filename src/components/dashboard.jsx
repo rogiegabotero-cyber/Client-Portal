@@ -828,6 +828,13 @@ const DASH_BREAK_LOG_FILTER_OPTIONS = [
   { key: "all", label: "All" },
 ];
 
+const PAYABLE_WINDOW_FILTER_OPTIONS = [
+  { key: "week", label: "This Week" },
+  { key: "15", label: "15D" },
+  { key: "month", label: "Monthly" },
+  { key: "all", label: "All" },
+];
+
 /* ------------------------ monthly attendance chart helpers ------------------------ */
 const ATTENDANCE_BUCKETS = [
   { key: "early", label: "Early", color: "#4b9fea" },
@@ -1047,7 +1054,6 @@ export default function Dashboard({
   historyErrorByUserId = {},
   breakLogsByUserId = {},
   announcements = [],
-  loadingAnnouncements = false,
   announcementsError = "",
   viewerRole = "",
   employeeProfilesByUserId = {},
@@ -3049,54 +3055,98 @@ export default function Dashboard({
     });
   };
 
-  return (
-    <div className="dashX">
-      <div className="dashHeader">
+  const payableWindowFilterValue = useMemo(() => {
+    const validKeys = new Set([...PAYABLE_WINDOW_FILTER_OPTIONS.map((option) => option.key), "custom"]);
+    return validKeys.has(payableGraphWindow) ? payableGraphWindow : "week";
+  }, [payableGraphWindow]);
 
-        <div className="dashHeaderRight">
-          {loading ? <div className="dashLoading" /> : null}
-          {!loading && error ? <div className="dashError">{error}</div> : null}
+  const payableWindowControls = (
+    <div className="payableWindowBtns noPrint">
+      <div className="payableControlRow payableControlRowSingleLine">
+        <div className="buttons-div">
+          <label className="payablePresetSelectWrap" htmlFor="payable-window-filter">
+            <span>Filter</span>
+            <select
+              id="payable-window-filter"
+              className="payablePresetSelect"
+              value={payableWindowFilterValue}
+              onChange={(e) => setPayableGraphWindow(e.target.value)}
+            >
+              {PAYABLE_WINDOW_FILTER_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          {payableWindowFilterValue === "custom" ? (
+            <div className="payableManualFilters">
+                <label className="payableDateField" htmlFor="payable-range-from">
+                  <span>From</span>
+                  <input
+                    id="payable-range-from"
+                    className="payableDateInput"
+                    type="date"
+                    value={effectivePayableCustomStartDate}
+                    onChange={(e) => {
+                      setPayableCustomStartDate(e.target.value);
+                      setPayableGraphWindow("custom");
+                    }}
+                  />
+                </label>
+                <label className="payableDateField" htmlFor="payable-range-to">
+                  <span>To</span>
+                  <input
+                    id="payable-range-to"
+                    className="payableDateInput"
+                    type="date"
+                    value={effectivePayableCustomEndDate}
+                    onChange={(e) => {
+                      setPayableCustomEndDate(e.target.value);
+                      setPayableGraphWindow("custom");
+                    }}
+                  />
+                </label>
+                <label className="payableYearField" htmlFor="payable-year-select">
+                  <span>Year</span>
+                  <select
+                    id="payable-year-select"
+                    className="payableMonthSelect"
+                    value={effectiveSelectedPayableYear}
+                    onChange={(e) => handlePayableYearSelect(e.target.value)}
+                  >
+                    <option value={PAYABLE_MONTH_SELECT_NONE}>Select year</option>
+                    {payableYearOptions.map((yearValue) => (
+                      <option key={`payable-year-${yearValue}`} value={yearValue}>
+                        {yearValue}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+            </div>
+          ) : null}
         </div>
 
-        <div className="windowBtns">
+        <div className="payableToolbarActions">
           <button
             type="button"
-            className={`windowBtn ${hoursWindow === "today" ? "isActive" : ""}`}
-            onClick={() => setHoursWindowAndCollapseLists("today")}
+            className="windowBtn payablePrintBtn payableActionIconBtn"
+            onClick={handlePrintPayableWindow}
+            aria-label="Print payable report"
+            title="Print payable report"
           >
-            TODAY
-          </button>
-          <button
-            type="button"
-            className={`windowBtn ${hoursWindow === "yesterday" ? "isActive" : ""}`}
-            onClick={() => setHoursWindowAndCollapseLists("yesterday")}
-          >
-            YESTERDAY
-          </button>
-          <button
-            type="button"
-            className={`windowBtn ${hoursWindow === "15" ? "isActive" : ""}`}
-            onClick={() => setHoursWindowAndCollapseLists("15")}
-          >
-            15D
-          </button>
-          <button
-            type="button"
-            className={`windowBtn ${hoursWindow === "30" ? "isActive" : ""}`}
-            onClick={() => setHoursWindowAndCollapseLists("30")}
-          >
-            30D
-          </button>
-          <button
-            type="button"
-            className={`windowBtn ${hoursWindow === "all" ? "isActive" : ""}`}
-            onClick={() => setHoursWindowAndCollapseLists("all")}
-          >
-            ALL
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 3h10v4H7V3zm11 6H6a3 3 0 0 0-3 3v4h4v5h10v-5h4v-4a3 3 0 0 0-3-3zm-3 10H9v-5h6v5zm3-7a1 1 0 1 1 .001 2.001A1 1 0 0 1 18 12z" />
+            </svg>
           </button>
         </div>
       </div>
+    </div>
+  );
 
+  return (
+    <div className="dashX">
       <div className="dashLayout">
         <div className="dashMain">
           <div className="topBar">
@@ -3142,7 +3192,50 @@ export default function Dashboard({
 
           <div className="grid">
             <div className="panel p-att">
-              <div className="panelHead">Attendance Breakdown</div>
+              <div className="panelHead">
+                <span>Attendance Breakdown</span>
+                <div className="panelHeadActions">
+                  {loading ? <div className="dashLoading" /> : null}
+                  {!loading && error ? <div className="dashError">{error}</div> : null}
+                  <div className="windowBtns panelHeadWindowBtns">
+                    <button
+                      type="button"
+                      className={`windowBtn ${hoursWindow === "today" ? "isActive" : ""}`}
+                      onClick={() => setHoursWindowAndCollapseLists("today")}
+                    >
+                      TODAY
+                    </button>
+                    <button
+                      type="button"
+                      className={`windowBtn ${hoursWindow === "yesterday" ? "isActive" : ""}`}
+                      onClick={() => setHoursWindowAndCollapseLists("yesterday")}
+                    >
+                      YESTERDAY
+                    </button>
+                    <button
+                      type="button"
+                      className={`windowBtn ${hoursWindow === "15" ? "isActive" : ""}`}
+                      onClick={() => setHoursWindowAndCollapseLists("15")}
+                    >
+                      15D
+                    </button>
+                    <button
+                      type="button"
+                      className={`windowBtn ${hoursWindow === "30" ? "isActive" : ""}`}
+                      onClick={() => setHoursWindowAndCollapseLists("30")}
+                    >
+                      30D
+                    </button>
+                    <button
+                      type="button"
+                      className={`windowBtn ${hoursWindow === "all" ? "isActive" : ""}`}
+                      onClick={() => setHoursWindowAndCollapseLists("all")}
+                    >
+                      ALL
+                    </button>
+                  </div>
+                </div>
+              </div>
 
               <div className="panelBody">
                 <div className="attWrap">
@@ -3526,166 +3619,83 @@ export default function Dashboard({
 
       {canViewPayablePanel ? (
       <div className="panel p-payable">
-        <div className="panelHead center">Accounting Window</div>
+        <div className="panelHead dash-table-header-centered payablePanelHead">
+          <div className="payablePanelHeadIdentity">
+            <div className="panelHeadTitle">Accounting Window</div>
+            <div className="panelHeadSub">
+              Payable hours, completion volume, and printable range summaries.
+            </div>
+          </div>
+          <div className="payablePanelHeadStats noPrint">
+            <div className="payableHeadStat">
+              <span>Total Hours</span>
+              <strong>{formatHoursValue(payableHoursChart.totalHours)} hrs</strong>
+            </div>
+            <div className="payableHeadStat">
+              <span>Completed Duties</span>
+              <strong>{payableHoursChart.totalCompleted}</strong>
+            </div>
+          </div>
+        </div>
 
         <div className="panelBody">
           <div className="updateBody">
-            <div className="updateBox" id="updateBox1">
+            <div className="updateBox payableWorkbench" id="updateBox1">
               <div className="updateItem">Daily Payable Hours Graph</div>
-
-              <div className="payableWindowBtns noPrint">
-                <div className="buttons-div">
-                  <button
-                    type="button"
-                    className={`windowBtn ${payableGraphWindow === "week" ? "isActive" : ""}`}
-                    onClick={() => setPayableGraphWindow("week")}
-                  >
-                    This Week
-                  </button>
-                  <button
-                    type="button"
-                    className={`windowBtn ${payableGraphWindow === "15" ? "isActive" : ""}`}
-                    onClick={() => setPayableGraphWindow("15")}
-                  >
-                    15D
-                  </button>
-                  <button
-                    type="button"
-                    className={`windowBtn ${payableGraphWindow === "month" ? "isActive" : ""}`}
-                    onClick={() => setPayableGraphWindow("month")}
-                  >
-                    Monthly
-                  </button>
-                  <button
-                    type="button"
-                    className={`windowBtn ${payableGraphWindow === "custom" ? "isActive" : ""}`}
-                    onClick={() => setPayableGraphWindow("custom")}
-                  >
-                    Custom
-                  </button>
-                  <button
-                    type="button"
-                    className={`windowBtn ${payableGraphWindow === "all" ? "isActive" : ""}`}
-                    onClick={() => setPayableGraphWindow("all")}
-                  >
-                    All
-                  </button>
-                </div>
-                
-
-                <div className="payableAgentSelectWrap">
-                  <select
-                    className="select-emp"
-                    value={payableGraphUserId}
-                    onChange={(e) => setPayableGraphUserId(e.target.value)}
-                  >
-                    <option value="ALL">Whole Team</option>
-                    {validEmployees.map((emp) => {
-                      const uid = String(getUserId(emp));
-                      return (
-                        <option key={uid} value={uid}>
-                          {getDisplayName(emp)}
-                        </option>
-                      );
-                    })}
-                  </select>
-
-                  <div className="payableManualFilters">
-                    <label className="payableDateField" htmlFor="payable-range-from">
-                      <span>From</span>
-                      <input
-                        id="payable-range-from"
-                        className="payableDateInput"
-                        type="date"
-                        value={effectivePayableCustomStartDate}
-                        onChange={(e) => {
-                          setPayableCustomStartDate(e.target.value);
-                          setPayableGraphWindow("custom");
-                        }}
-                      />
-                    </label>
-                    <label className="payableDateField" htmlFor="payable-range-to">
-                      <span>To</span>
-                      <input
-                        id="payable-range-to"
-                        className="payableDateInput"
-                        type="date"
-                        value={effectivePayableCustomEndDate}
-                        onChange={(e) => {
-                          setPayableCustomEndDate(e.target.value);
-                          setPayableGraphWindow("custom");
-                        }}
-                      />
-                    </label>
-                    <label className="payableYearField" htmlFor="payable-year-select">
-                      <span>Year</span>
-                      <select
-                        id="payable-year-select"
-                        className="payableMonthSelect"
-                        value={effectiveSelectedPayableYear}
-                        onChange={(e) => handlePayableYearSelect(e.target.value)}
-                      >
-                        <option value={PAYABLE_MONTH_SELECT_NONE}>Select year</option>
-                        {payableYearOptions.map((yearValue) => (
-                          <option key={`payable-year-${yearValue}`} value={yearValue}>
-                            {yearValue}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <button
-                    type="button"
-                    className="windowBtn payablePrintBtn"
-                    onClick={handlePrintPayableWindow}
-                  >
-                    Print
-                  </button>
-                </div>
-              </div>
-
-              
-
-              
 
               <div className="payableSummaryPanels">
                 <div className="payableSummaryPanel range">
-                  <div className="payableSummaryLabel">Range</div>
-                  <div className="payableSummaryMain">{payableHoursChart.label}</div>
-                  <div className="payableSummarySub">
-                    {payableHoursChart.start} -&gt; {payableHoursChart.end}
+                  <div className="payableSummaryRangeHead">
+                    <div className="payableSummaryInfo">
+                      <div className="payableSummaryLabel">Range</div>
+                      <div className="payableSummarySub">
+                        {payableHoursChart.label}: {payableHoursChart.start} -&gt; {payableHoursChart.end}
+                      </div>
+                    </div>
+                    {payableWindowControls}
                   </div>
-                  <div className="payableViewToggle noPrint" role="group" aria-label="Payable display mode">
-                    <button
-                      type="button"
-                      className={`payableViewBtn ${payableDisplayMode === "graph" ? "isActive" : ""}`}
-                      onClick={() => setPayableDisplayMode("graph")}
-                    >
-                      Graph
-                    </button>
-                    <button
-                      type="button"
-                      className={`payableViewBtn ${payableDisplayMode === "table" ? "isActive" : ""}`}
-                      onClick={() => setPayableDisplayMode("table")}
-                    >
-                      Table
-                    </button>
+                  <div className="payableViewRow noPrint">
+                    <div className="payableViewToggle" role="group" aria-label="Payable display mode">
+                      <button
+                        type="button"
+                        className={`payableViewBtn ${payableDisplayMode === "graph" ? "isActive" : ""}`}
+                        onClick={() => setPayableDisplayMode("graph")}
+                      >
+                        Graph
+                      </button>
+                      <button
+                        type="button"
+                        className={`payableViewBtn ${payableDisplayMode === "table" ? "isActive" : ""}`}
+                        onClick={() => setPayableDisplayMode("table")}
+                      >
+                        Table
+                      </button>
+                    </div>
+                    <label className="payableDateField payableViewEmployeeField" htmlFor="payable-employee-select">
+                      <span>Employee</span>
+                      <select
+                        id="payable-employee-select"
+                        className="select-emp"
+                        value={payableGraphUserId}
+                        onChange={(e) => setPayableGraphUserId(e.target.value)}
+                      >
+                        <option value="ALL">Whole Team</option>
+                        {validEmployees.map((emp) => {
+                          const uid = String(getUserId(emp));
+                          return (
+                            <option key={uid} value={uid}>
+                              {getDisplayName(emp)}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </label>
                   </div>
                   {payableGraphWindow === "15" ? (
                     <div className="payableSummaryMeta">
                       Cutoff: {cutoffLabelForYmd(endDate)}
                     </div>
                   ) : null}
-                </div>
-
-                <div className="payableSummaryPanel total">
-                  <div className="payableSummaryLabel">Total Payable Hours</div>
-                  <div className="payableSummaryMain">{formatHoursValue(payableHoursChart.totalHours)} hrs</div>
-                </div>
-
-                <div className="payableSummaryPanel duties">
-                  <div className="payableSummaryLabel">Completed Duties Count</div>
-                  <div className="payableSummaryMain">{payableHoursChart.totalCompleted}</div>
                 </div>
               </div>
 
@@ -3822,7 +3832,7 @@ export default function Dashboard({
                           />
                           <Tooltip content={<PayableHoursTooltip />} />
                           <Line
-                            type="monotone"
+                            type="linear"
                             dataKey="hours"
                             stroke="#66bb6a"
                             strokeWidth={3}

@@ -358,6 +358,17 @@ const EMPTY_NOTEPAD_HTML = '<p><br></p>';
 const NOTEPAD_VIEW_MY = "my";
 const NOTEPAD_VIEW_GROUP = "group";
 const NOTEPAD_VIEW_BIN = "bin";
+const NOTEPAD_TOOLBAR_DEFAULT = Object.freeze({
+  bold: false,
+  italic: false,
+  underline: false,
+  alignLeft: false,
+  alignCenter: false,
+  alignRight: false,
+  unorderedList: false,
+  orderedList: false,
+  checklist: false,
+});
 const NOTEPAD_DOCS_CACHE_BY_EMPLOYEE = new Map();
 const NOTEPAD_NOTIFICATION_EVENT_CACHE = new Set();
 
@@ -508,7 +519,7 @@ const buildChecklistHtmlFromText = (value = "") => {
     .filter(Boolean);
 
   if (!lines.length) {
-    return '<p class="notepad-check-item"><input type="checkbox" contenteditable="false" /> Checklist item</p>';
+    return '<p class="notepad-check-item"><input type="checkbox" contenteditable="false" /> &nbsp;</p>';
   }
 
   return lines
@@ -694,6 +705,7 @@ export default function EmployeeDashboard({
   const [selectedAnnouncement, setSelectedAnnouncement] = useState(null);
   const [isNotepadDrawerOpen, setIsNotepadDrawerOpen] = useState(false);
   const [notepadViewMode, setNotepadViewMode] = useState(NOTEPAD_VIEW_MY);
+  const [isNotepadCompletedOpen, setIsNotepadCompletedOpen] = useState(false);
   const [notepadNotes, setNotepadNotes] = useState([]);
   const [notepadTrashedNotes, setNotepadTrashedNotes] = useState([]);
   const [notepadIconCount, setNotepadIconCount] = useState(0);
@@ -708,6 +720,8 @@ export default function EmployeeDashboard({
   const [notepadDirty, setNotepadDirty] = useState(false);
   const [savingNotepadNote, setSavingNotepadNote] = useState(false);
   const [notepadStatusText, setNotepadStatusText] = useState("");
+  const [isNotepadTyping, setIsNotepadTyping] = useState(false);
+  const [notepadToolbarState, setNotepadToolbarState] = useState(() => ({ ...NOTEPAD_TOOLBAR_DEFAULT }));
   const [notepadTrashingNoteId, setNotepadTrashingNoteId] = useState("");
   const [notepadBinActionNoteId, setNotepadBinActionNoteId] = useState("");
   const [isNotepadGroupCreatorOpen, setIsNotepadGroupCreatorOpen] = useState(false);
@@ -1645,9 +1659,135 @@ export default function EmployeeDashboard({
 
   const syncNotepadDraftFromEditor = useCallback(() => {
     if (!notepadEditorRef.current) return;
+    setIsNotepadTyping(true);
     setNotepadStatusText("");
     setNotepadDirty(true);
     setNotepadContentDraft(notepadEditorRef.current.innerHTML || EMPTY_NOTEPAD_HTML);
+  }, []);
+
+  const refreshNotepadToolbarState = useCallback(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const editorEl = notepadEditorRef.current;
+    if (!editorEl) {
+      setNotepadToolbarState((prev) => {
+        if (
+          !prev.bold &&
+          !prev.italic &&
+          !prev.underline &&
+          !prev.alignLeft &&
+          !prev.alignCenter &&
+          !prev.alignRight &&
+          !prev.unorderedList &&
+          !prev.orderedList &&
+          !prev.checklist
+        ) {
+          return prev;
+        }
+        return { ...NOTEPAD_TOOLBAR_DEFAULT };
+      });
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      setNotepadToolbarState((prev) => {
+        if (
+          !prev.bold &&
+          !prev.italic &&
+          !prev.underline &&
+          !prev.alignLeft &&
+          !prev.alignCenter &&
+          !prev.alignRight &&
+          !prev.unorderedList &&
+          !prev.orderedList &&
+          !prev.checklist
+        ) {
+          return prev;
+        }
+        return { ...NOTEPAD_TOOLBAR_DEFAULT };
+      });
+      return;
+    }
+
+    const anchorNode = selection.anchorNode;
+    const focusNode = selection.focusNode;
+    const anchorEl = anchorNode?.nodeType === Node.TEXT_NODE ? anchorNode.parentNode : anchorNode;
+    const focusEl = focusNode?.nodeType === Node.TEXT_NODE ? focusNode.parentNode : focusNode;
+    const isInEditor = (!!anchorEl && editorEl.contains(anchorEl)) || (!!focusEl && editorEl.contains(focusEl));
+    if (!isInEditor) {
+      setNotepadToolbarState((prev) => {
+        if (
+          !prev.bold &&
+          !prev.italic &&
+          !prev.underline &&
+          !prev.alignLeft &&
+          !prev.alignCenter &&
+          !prev.alignRight &&
+          !prev.unorderedList &&
+          !prev.orderedList &&
+          !prev.checklist
+        ) {
+          return prev;
+        }
+        return { ...NOTEPAD_TOOLBAR_DEFAULT };
+      });
+      return;
+    }
+
+    const safeQueryState = (commandName) => {
+      try {
+        return !!document.queryCommandState(commandName);
+      } catch (_err) {
+        return false;
+      }
+    };
+
+    const focusElement = focusNode?.nodeType === Node.TEXT_NODE ? focusNode.parentElement : focusNode;
+    const scopedElement = focusElement && editorEl.contains(focusElement) ? focusElement : editorEl;
+    const closestChecklistRow = scopedElement?.closest?.(".notepad-check-item");
+    const blockElement =
+      scopedElement?.closest?.("p,div,li,ol,ul,h1,h2,h3,h4,h5,h6,blockquote") || scopedElement || editorEl;
+
+    let alignment = "left";
+    const inlineAlign = String(blockElement?.style?.textAlign || "").trim().toLowerCase();
+    if (inlineAlign === "left" || inlineAlign === "center" || inlineAlign === "right") {
+      alignment = inlineAlign;
+    } else {
+      const computedAlign = String(window.getComputedStyle(blockElement).textAlign || "")
+        .trim()
+        .toLowerCase();
+      if (computedAlign.includes("center")) alignment = "center";
+      else if (computedAlign.includes("right") || computedAlign.includes("end")) alignment = "right";
+    }
+
+    const nextState = {
+      bold: safeQueryState("bold"),
+      italic: safeQueryState("italic"),
+      underline: safeQueryState("underline"),
+      alignLeft: alignment === "left",
+      alignCenter: alignment === "center",
+      alignRight: alignment === "right",
+      unorderedList: safeQueryState("insertUnorderedList"),
+      orderedList: safeQueryState("insertOrderedList"),
+      checklist: !!closestChecklistRow,
+    };
+
+    setNotepadToolbarState((prev) => {
+      if (
+        prev.bold === nextState.bold &&
+        prev.italic === nextState.italic &&
+        prev.underline === nextState.underline &&
+        prev.alignLeft === nextState.alignLeft &&
+        prev.alignCenter === nextState.alignCenter &&
+        prev.alignRight === nextState.alignRight &&
+        prev.unorderedList === nextState.unorderedList &&
+        prev.orderedList === nextState.orderedList &&
+        prev.checklist === nextState.checklist
+      ) {
+        return prev;
+      }
+      return nextState;
+    });
   }, []);
 
   const runNotepadCommand = useCallback(
@@ -1661,7 +1801,7 @@ export default function EmployeeDashboard({
           document.execCommand(
             "insertHTML",
             false,
-            '<p class="notepad-check-item"><input type="checkbox" contenteditable="false" /> Checklist item</p>'
+            '<p class="notepad-check-item"><input type="checkbox" contenteditable="false" /> &nbsp;</p>'
           );
         }
       } else if (command === "justifyLeft" || command === "justifyCenter" || command === "justifyRight") {
@@ -1673,8 +1813,11 @@ export default function EmployeeDashboard({
       }
 
       syncNotepadDraftFromEditor();
+      window.requestAnimationFrame(() => {
+        refreshNotepadToolbarState();
+      });
     },
-    [syncNotepadDraftFromEditor]
+    [refreshNotepadToolbarState, syncNotepadDraftFromEditor]
   );
 
   const getNotepadDocsForEmployee = useCallback(
@@ -1906,13 +2049,13 @@ export default function EmployeeDashboard({
         );
         setSelectedNotepadNoteId((current) => {
           if (String(notepadViewMode || "") === NOTEPAD_VIEW_BIN) return "";
-          const requested = String(preferredNoteId || current || "");
+          const requested = String(preferredNoteId || current || "").trim();
           const selectableRows =
             String(notepadViewMode || "") === NOTEPAD_VIEW_GROUP
               ? activeRows.filter((row) => normalizeNotepadScope(row?.noteScope) === "group")
               : activeRows.filter((row) => normalizeNotepadScope(row?.noteScope) !== "group");
           if (requested && selectableRows.some((row) => row.id === requested)) return requested;
-          return selectableRows[0]?.id || "";
+          return "";
         });
       } catch (err) {
         setNotepadError(err?.message || "Failed to load notes.");
@@ -2816,6 +2959,9 @@ export default function EmployeeDashboard({
   const isNotepadRecycleBinView = String(notepadViewMode || "") === NOTEPAD_VIEW_BIN;
   const isNotepadGroupView = String(notepadViewMode || "") === NOTEPAD_VIEW_GROUP;
   const visibleNotepadActiveNotes = isNotepadGroupView ? notepadGroupNotes : notepadPersonalNotes;
+  const visibleNotepadCompletedNotes = visibleNotepadActiveNotes.filter((note) => !!note?.isCompleted);
+  const visibleNotepadOpenNotes = visibleNotepadActiveNotes.filter((note) => !note?.isCompleted);
+  const visibleNotepadCompletedCount = visibleNotepadCompletedNotes.length;
   const notepadNoteCount = notepadPersonalNotes.length;
   const notepadGroupNoteCount = notepadGroupNotes.length;
   const notepadTrashedNoteCount = Array.isArray(notepadTrashedNotes) ? notepadTrashedNotes.length : 0;
@@ -2843,20 +2989,190 @@ export default function EmployeeDashboard({
   const notepadDraftDeadlineMs = parseLocalDateTimeInputMs(notepadDeadlineDraft);
   const notepadDraftDeadlineTone = getNotepadDeadlineTone(notepadDraftDeadlineMs, nowMsForNotepad);
 
+  useEffect(() => {
+    if (!isNotepadRecycleBinView) return;
+    setIsNotepadCompletedOpen(false);
+  }, [isNotepadRecycleBinView]);
+
   const handleNotepadToolMouseDown = (event) => {
     event.preventDefault();
   };
-  const handleNotepadEditorInput = () => {
-    syncNotepadDraftFromEditor();
-  };
-  const handleNotepadEditorClick = (event) => {
-    if (event?.target?.tagName !== "INPUT") return;
-    const input = event.target;
-    if (String(input?.type || "").toLowerCase() !== "checkbox") return;
+  const placeCaretAfterChecklistCheckbox = useCallback((checkboxEl) => {
+    if (!checkboxEl || typeof window === "undefined" || typeof document === "undefined") return;
+    const editorEl = notepadEditorRef.current;
+    if (!editorEl) return;
+    const checklistItemEl = checkboxEl.closest(".notepad-check-item");
+    if (!checklistItemEl || !editorEl.contains(checklistItemEl)) return;
+
+    editorEl.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+
+    const walker = document.createTreeWalker(checklistItemEl, NodeFilter.SHOW_TEXT);
+    let textNode = null;
+    while (walker.nextNode()) {
+      const candidate = walker.currentNode;
+      if (String(candidate?.nodeValue || "").length > 0) {
+        textNode = candidate;
+        break;
+      }
+    }
+
+    if (!textNode) {
+      textNode = document.createTextNode(" ");
+      checklistItemEl.appendChild(textNode);
+    }
+
+    const rawText = String(textNode.nodeValue || "");
+    const firstTextOffset = rawText.search(/\S/);
+    const safeOffset = firstTextOffset >= 0 ? firstTextOffset : rawText.length;
+
+    const range = document.createRange();
+    range.setStart(textNode, Math.min(safeOffset, rawText.length));
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, []);
+  const handleNotepadEditorFocus = () => {
+    setIsNotepadTyping(true);
     window.requestAnimationFrame(() => {
-      syncNotepadDraftFromEditor();
+      refreshNotepadToolbarState();
     });
   };
+  const handleNotepadEditorBlur = () => {
+    setIsNotepadTyping(false);
+    setNotepadToolbarState({ ...NOTEPAD_TOOLBAR_DEFAULT });
+  };
+  const handleNotepadEditorInput = () => {
+    syncNotepadDraftFromEditor();
+    window.requestAnimationFrame(() => {
+      refreshNotepadToolbarState();
+    });
+  };
+  const handleNotepadEditorClick = (event) => {
+    if (event?.target?.tagName === "INPUT") {
+      const input = event.target;
+      if (String(input?.type || "").toLowerCase() === "checkbox") {
+        window.requestAnimationFrame(() => {
+          placeCaretAfterChecklistCheckbox(input);
+          syncNotepadDraftFromEditor();
+          refreshNotepadToolbarState();
+        });
+        return;
+      }
+    }
+
+    window.requestAnimationFrame(() => {
+      refreshNotepadToolbarState();
+    });
+  };
+  const handleNotepadEditorKeyUp = () => {
+    window.requestAnimationFrame(() => {
+      refreshNotepadToolbarState();
+    });
+  };
+  const handleNotepadEditorKeyDown = (event) => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const editorEl = notepadEditorRef.current;
+    if (!editorEl) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (!range.collapsed) return;
+
+    const startNode = range.startContainer;
+    const startElement = startNode?.nodeType === Node.ELEMENT_NODE ? startNode : startNode?.parentElement;
+    const checklistItemEl = startElement?.closest?.(".notepad-check-item");
+    if (!checklistItemEl || !editorEl.contains(checklistItemEl)) return;
+
+    if (event?.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+
+      const nextChecklistItemEl = document.createElement("p");
+      nextChecklistItemEl.className = "notepad-check-item";
+      const nextCheckboxEl = document.createElement("input");
+      nextCheckboxEl.type = "checkbox";
+      nextCheckboxEl.setAttribute("contenteditable", "false");
+      const nextTextNode = document.createTextNode("\u00A0");
+      nextChecklistItemEl.appendChild(nextCheckboxEl);
+      nextChecklistItemEl.appendChild(nextTextNode);
+
+      if (checklistItemEl.parentNode) {
+        checklistItemEl.parentNode.insertBefore(nextChecklistItemEl, checklistItemEl.nextSibling);
+      } else {
+        editorEl.appendChild(nextChecklistItemEl);
+      }
+
+      placeCaretAfterChecklistCheckbox(nextCheckboxEl);
+      syncNotepadDraftFromEditor();
+      refreshNotepadToolbarState();
+      return;
+    }
+
+    if (event?.key !== "Backspace") return;
+
+    const checkboxEl = checklistItemEl.querySelector('input[type="checkbox"]');
+    if (!checkboxEl) return;
+
+    const beforeRange = document.createRange();
+    beforeRange.selectNodeContents(checklistItemEl);
+    beforeRange.setEnd(range.startContainer, range.startOffset);
+    const beforeText = String(beforeRange.toString() || "").replace(/\u200B/g, "");
+    if (beforeText.trim().length > 0) return;
+
+    event.preventDefault();
+
+    checkboxEl.remove();
+    checklistItemEl.classList.remove("notepad-check-item");
+    if (!String(checklistItemEl.textContent || "").trim()) {
+      checklistItemEl.innerHTML = "<br>";
+    }
+
+    editorEl.focus();
+    const nextSelection = window.getSelection();
+    if (!nextSelection) {
+      syncNotepadDraftFromEditor();
+      return;
+    }
+
+    const walker = document.createTreeWalker(checklistItemEl, NodeFilter.SHOW_TEXT);
+    let textNode = null;
+    while (walker.nextNode()) {
+      const candidate = walker.currentNode;
+      if (String(candidate?.nodeValue || "").length > 0) {
+        textNode = candidate;
+        break;
+      }
+    }
+
+    const nextRange = document.createRange();
+    if (textNode) {
+      const rawText = String(textNode.nodeValue || "");
+      const firstNonSpace = rawText.search(/\S/);
+      const offset = firstNonSpace >= 0 ? firstNonSpace : rawText.length;
+      nextRange.setStart(textNode, Math.min(offset, rawText.length));
+    } else {
+      nextRange.setStart(checklistItemEl, 0);
+    }
+    nextRange.collapse(true);
+    nextSelection.removeAllRanges();
+    nextSelection.addRange(nextRange);
+
+    syncNotepadDraftFromEditor();
+    refreshNotepadToolbarState();
+  };
+
+  useEffect(() => {
+    if (!isNotepadDrawerOpen || typeof document === "undefined") return;
+    const handleSelectionChange = () => {
+      refreshNotepadToolbarState();
+    };
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+    };
+  }, [isNotepadDrawerOpen, refreshNotepadToolbarState]);
 
   useEffect(() => {
     if (!isBreakLogsDrawerOpen && !isNotepadDrawerOpen) return;
@@ -2877,6 +3193,151 @@ export default function EmployeeDashboard({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isBreakLogsDrawerOpen, isNotepadDrawerOpen]);
+
+  const renderTaskListItem = (task, index, keyPrefix = "task") => {
+    const meta = getTaskStatusMeta(task);
+    const taskForLabel = getTaskAssigneeLabel(task);
+    const taskAssignees = getTaskAssignees(task);
+    const taskId = toText(task?.id);
+    const canOpenTaskDetails = !!taskId && typeof onOpenTaskDetails === "function";
+
+    return (
+      <button
+        type="button"
+        key={String(task?.id || `${keyPrefix}-${effectiveSelectedId}-task-${index}`)}
+        className={`taskListItem taskListItemButton ${canOpenTaskDetails ? "clickable" : ""}`}
+        onClick={() => {
+          if (!canOpenTaskDetails) return;
+          onOpenTaskDetails(taskId);
+        }}
+        disabled={!canOpenTaskDetails}
+      >
+        <div className="taskListItemTop">
+          <div className="taskListTitle">{toText(task?.title) || "Untitled task"}</div>
+          <span className={`taskListStatus ${meta.tone}`}>{meta.label}</span>
+        </div>
+
+        <div className="taskListFor">
+          <span className="taskListForLabel">For:</span>
+          <div className="taskAssigneeGroup" aria-label={`Task assignees: ${taskForLabel}`}>
+            {taskAssignees.map((assignee, assigneeIndex) => (
+              <div
+                key={`${toText(task?.id) || index}-${assignee.userId || assignee.name}-${assigneeIndex}`}
+                className="taskAssigneeAvatar"
+                title={assignee.name}
+                aria-label={assignee.name}
+              >
+                {assignee.profileImg ? (
+                  <img
+                    src={assignee.profileImg}
+                    alt={`${assignee.name} profile`}
+                    className="taskAssigneeAvatarImg"
+                    loading="lazy"
+                  />
+                ) : (
+                  initialsFromName(assignee.name)
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="taskListMeta">
+          <span>Due: {formatTaskDeadlineLabel(task, businessTimeZone)}</span>
+          <span>
+            Priority:{" "}
+            {toText(task?.priority)
+              ? toText(task.priority).charAt(0).toUpperCase() + toText(task.priority).slice(1)
+              : "Medium"}
+          </span>
+        </div>
+
+        {toText(task?.instructions) ? (
+          <div className="taskListNotes">{truncateText(task.instructions, 120)}</div>
+        ) : null}
+      </button>
+    );
+  };
+
+  const renderNotepadActiveListItem = (note, index, keyPrefix = "active") => {
+    const noteId = String(note?.id || "");
+    const noteTitle = toText(note?.title) || "Untitled note";
+    const preview = stripHtmlForPreview(note?.contentHtml) || "No content yet.";
+    const isActive = noteId === String(selectedNotepadNoteId || "");
+    const isCompleted = !!note?.isCompleted;
+    const deadlineTone = isCompleted ? "completed" : getNotepadDeadlineTone(note?.deadlineAtMs, nowMsForNotepad);
+    const deadlineLabel = isCompleted
+      ? `Completed: ${formatNotepadDateLabel(note?.completedAt || note?.updatedAt || note?.createdAt)}`
+      : formatNotepadDeadlineLabel(note?.deadlineAtMs, deadlineTone);
+    const updatedAtValue = note?.updatedAt || note?.createdAt || null;
+    const isTogglingComplete = noteId === String(notepadCompletingNoteId || "");
+    const isTrashing = noteId === String(notepadTrashingNoteId || "");
+    const groupMembers = getNotepadGroupMembers(note);
+
+    return (
+      <div
+        key={`${keyPrefix}-${noteId || index}`}
+        className={`empNotepadListItem deadline-${deadlineTone} ${isCompleted ? "completed" : ""} ${isActive ? "active" : ""}`}
+      >
+        <button
+          type="button"
+          className="empNotepadListItemMain"
+          onClick={() => setSelectedNotepadNoteId(noteId)}
+          disabled={savingNotepadNote}
+        >
+          <div className="empNotepadListItemTitle">{noteTitle}</div>
+          <div className="empNotepadListItemPreview">{preview}</div>
+          <div className={`empNotepadListItemDeadline deadline-${deadlineTone}`}>{deadlineLabel}</div>
+          <div className="empNotepadListItemDate">Updated: {formatNotepadDateLabel(updatedAtValue)}</div>
+        </button>
+        <div className="empNotepadCardActions">
+          {groupMembers.length > 0 ? (
+            <div className="empNotepadGroupMembers" aria-label="Group note members">
+              {groupMembers.slice(0, 4).map((member) => (
+                <span
+                  key={`${noteId}-group-member-${member.userId || member.name}`}
+                  className="empNotepadGroupMemberAvatar"
+                  title={member.name}
+                  aria-label={member.name}
+                >
+                  {member.profileImg ? (
+                    <img src={member.profileImg} alt={`${member.name} profile`} />
+                  ) : (
+                    initialsFromName(member.name)
+                  )}
+                </span>
+              ))}
+              {groupMembers.length > 4 ? (
+                <span className="empNotepadGroupMemberMore" aria-hidden="true">
+                  +{groupMembers.length - 4}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className="empNotepadTrashBtn"
+            onClick={() => openNotepadConfirm("trash", note)}
+            disabled={savingNotepadNote || isTogglingComplete || isTrashing || !!notepadBinActionNoteId}
+            title="Move to recycle bin"
+            aria-label="Move note to recycle bin"
+          >
+            {isTrashing ? "..." : <Trash2 size={13} aria-hidden="true" />}
+          </button>
+          <button
+            type="button"
+            className={`empNotepadCompleteBtn ${isCompleted ? "done" : ""}`}
+            onClick={() => toggleNotepadNoteCompleted(note)}
+            disabled={savingNotepadNote || isTogglingComplete || isTrashing || !!notepadBinActionNoteId}
+            title={isCompleted ? "Mark as active" : "Mark as complete"}
+            aria-label={isCompleted ? "Mark note as active" : "Mark note as complete"}
+          >
+            {isTogglingComplete ? "..." : isCompleted ? <RotateCcw size={13} aria-hidden="true" /> : <CheckSquare size={13} aria-hidden="true" />}
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="empDash">
@@ -3173,76 +3634,9 @@ export default function EmployeeDashboard({
                             : "No tasks match this filter."}
                         </div>
                       ) : (
-                        filteredEmployeeTasks.map((task, index) => {
-                          const meta = getTaskStatusMeta(task);
-                          const taskForLabel = getTaskAssigneeLabel(task);
-                          const taskAssignees = getTaskAssignees(task);
-                          const taskId = toText(task?.id);
-                          const canOpenTaskDetails =
-                            !!taskId && typeof onOpenTaskDetails === "function";
-
-                          return (
-                            <button
-                              type="button"
-                              key={String(task?.id || `${effectiveSelectedId}-task-${index}`)}
-                              className={`taskListItem taskListItemButton ${
-                                canOpenTaskDetails ? "clickable" : ""
-                              }`}
-                              onClick={() => {
-                                if (!canOpenTaskDetails) return;
-                                onOpenTaskDetails(taskId);
-                              }}
-                              disabled={!canOpenTaskDetails}
-                            >
-                              <div className="taskListItemTop">
-                                <div className="taskListTitle">{toText(task?.title) || "Untitled task"}</div>
-                                <span className={`taskListStatus ${meta.tone}`}>{meta.label}</span>
-                              </div>
-
-                              <div className="taskListFor">
-                                <span className="taskListForLabel">For:</span>
-                                <div className="taskAssigneeGroup" aria-label={`Task assignees: ${taskForLabel}`}>
-                                  {taskAssignees.map((assignee, assigneeIndex) => (
-                                    <div
-                                      key={`${toText(task?.id) || index}-${assignee.userId || assignee.name}-${assigneeIndex}`}
-                                      className="taskAssigneeAvatar"
-                                      title={assignee.name}
-                                      aria-label={assignee.name}
-                                    >
-                                      {assignee.profileImg ? (
-                                        <img
-                                          src={assignee.profileImg}
-                                          alt={`${assignee.name} profile`}
-                                          className="taskAssigneeAvatarImg"
-                                          loading="lazy"
-                                        />
-                                      ) : (
-                                        initialsFromName(assignee.name)
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-
-                              <div className="taskListMeta">
-                                <span>Due: {formatTaskDeadlineLabel(task, businessTimeZone)}</span>
-                                <span>
-                                  Priority:{" "}
-                                  {toText(task?.priority)
-                                    ? toText(task.priority).charAt(0).toUpperCase() +
-                                      toText(task.priority).slice(1)
-                                    : "Medium"}
-                                </span>
-                              </div>
-
-                              {toText(task?.instructions) ? (
-                                <div className="taskListNotes">
-                                  {truncateText(task.instructions, 120)}
-                                </div>
-                              ) : null}
-                            </button>
-                          );
-                        })
+                        filteredEmployeeTasks.map((task, index) =>
+                          renderTaskListItem(task, index, "filtered")
+                        )
                       )}
                     </div>
                   </div>
@@ -3678,8 +4072,37 @@ export default function EmployeeDashboard({
                 {notepadError ? <div className="empNotepadError">{notepadError}</div> : null}
 
                 <div className="empNotepadList">
+                  {!notepadLoading && !isNotepadRecycleBinView ? (
+                    <div className={`empNotepadCompletedDropdown ${isNotepadCompletedOpen ? "open" : ""}`}>
+                      <button
+                        type="button"
+                        className={`empNotepadCompletedTrigger ${isNotepadCompletedOpen ? "open" : ""}`}
+                        aria-expanded={isNotepadCompletedOpen}
+                        onClick={() => setIsNotepadCompletedOpen((prev) => !prev)}
+                      >
+                        <span className="empNotepadCompletedLabel">
+                          {visibleNotepadCompletedCount} completed task
+                          {visibleNotepadCompletedCount === 1 ? "" : "s"}
+                        </span>
+                      </button>
+                      {isNotepadCompletedOpen ? (
+                        <div className="empNotepadCompletedList">
+                          {visibleNotepadCompletedCount === 0 ? (
+                            <div className="empNotepadEmptyList">No completed tasks yet.</div>
+                          ) : (
+                            visibleNotepadCompletedNotes.map((note, index) =>
+                              renderNotepadActiveListItem(note, index, "completed-note")
+                            )
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   {!notepadLoading &&
-                  (isNotepadRecycleBinView ? notepadTrashedNotes.length === 0 : visibleNotepadActiveNotes.length === 0) ? (
+                  (isNotepadRecycleBinView
+                    ? notepadTrashedNotes.length === 0
+                    : visibleNotepadOpenNotes.length === 0 && visibleNotepadCompletedCount === 0) ? (
                     <div className="empNotepadEmptyList">
                       {isNotepadRecycleBinView
                         ? "Recycle bin is empty."
@@ -3757,110 +4180,9 @@ export default function EmployeeDashboard({
                       );
                     })
                   ) : (
-                    visibleNotepadActiveNotes.map((note) => {
-                      const noteId = String(note?.id || "");
-                      const noteTitle = toText(note?.title) || "Untitled note";
-                      const preview =
-                        stripHtmlForPreview(note?.contentHtml) || "No content yet.";
-                      const isActive = noteId === String(selectedNotepadNoteId || "");
-                      const isCompleted = !!note?.isCompleted;
-                      const deadlineTone = isCompleted
-                        ? "completed"
-                        : getNotepadDeadlineTone(note?.deadlineAtMs, nowMsForNotepad);
-                      const deadlineLabel = isCompleted
-                        ? `Completed: ${formatNotepadDateLabel(
-                            note?.completedAt || note?.updatedAt || note?.createdAt
-                          )}`
-                        : formatNotepadDeadlineLabel(note?.deadlineAtMs, deadlineTone);
-                      const updatedAtValue = note?.updatedAt || note?.createdAt || null;
-                      const isTogglingComplete = noteId === String(notepadCompletingNoteId || "");
-                      const isTrashing = noteId === String(notepadTrashingNoteId || "");
-                      const groupMembers = getNotepadGroupMembers(note);
-
-                      return (
-                        <div
-                          key={noteId}
-                          className={`empNotepadListItem deadline-${deadlineTone} ${isCompleted ? "completed" : ""} ${isActive ? "active" : ""}`}
-                        >
-                          <button
-                            type="button"
-                            className="empNotepadListItemMain"
-                            onClick={() => setSelectedNotepadNoteId(noteId)}
-                            disabled={savingNotepadNote}
-                          >
-                            <div className="empNotepadListItemTitle">{noteTitle}</div>
-                            <div className="empNotepadListItemPreview">{preview}</div>
-                            <div className={`empNotepadListItemDeadline deadline-${deadlineTone}`}>
-                              {deadlineLabel}
-                            </div>
-                            <div className="empNotepadListItemDate">
-                              Updated: {formatNotepadDateLabel(updatedAtValue)}
-                            </div>
-                          </button>
-                          <div className="empNotepadCardActions">
-                            {groupMembers.length > 0 ? (
-                              <div className="empNotepadGroupMembers" aria-label="Group note members">
-                                {groupMembers.slice(0, 4).map((member) => (
-                                  <span
-                                    key={`${noteId}-group-member-${member.userId || member.name}`}
-                                    className="empNotepadGroupMemberAvatar"
-                                    title={member.name}
-                                    aria-label={member.name}
-                                  >
-                                    {member.profileImg ? (
-                                      <img src={member.profileImg} alt={`${member.name} profile`} />
-                                    ) : (
-                                      initialsFromName(member.name)
-                                    )}
-                                  </span>
-                                ))}
-                                {groupMembers.length > 4 ? (
-                                  <span className="empNotepadGroupMemberMore" aria-hidden="true">
-                                    +{groupMembers.length - 4}
-                                  </span>
-                                ) : null}
-                              </div>
-                            ) : null}
-                            <button
-                              type="button"
-                              className="empNotepadTrashBtn"
-                              onClick={() => openNotepadConfirm("trash", note)}
-                              disabled={
-                                savingNotepadNote ||
-                                isTogglingComplete ||
-                                isTrashing ||
-                                !!notepadBinActionNoteId
-                              }
-                              title="Move to recycle bin"
-                              aria-label="Move note to recycle bin"
-                            >
-                              {isTrashing ? "..." : <Trash2 size={13} aria-hidden="true" />}
-                            </button>
-                            <button
-                              type="button"
-                              className={`empNotepadCompleteBtn ${isCompleted ? "done" : ""}`}
-                              onClick={() => toggleNotepadNoteCompleted(note)}
-                              disabled={
-                                savingNotepadNote ||
-                                isTogglingComplete ||
-                                isTrashing ||
-                                !!notepadBinActionNoteId
-                              }
-                              title={isCompleted ? "Mark as active" : "Mark as complete"}
-                              aria-label={isCompleted ? "Mark note as active" : "Mark note as complete"}
-                            >
-                              {isTogglingComplete ? (
-                                "..."
-                              ) : isCompleted ? (
-                                <RotateCcw size={13} aria-hidden="true" />
-                              ) : (
-                                <CheckSquare size={13} aria-hidden="true" />
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })
+                    visibleNotepadOpenNotes.map((note, index) =>
+                      renderNotepadActiveListItem(note, index, "open-note")
+                    )
                   )}
                 </div>
               </aside>
@@ -3907,7 +4229,8 @@ export default function EmployeeDashboard({
                     <span className={`empNotepadSaveState ${notepadDirty ? "dirty" : ""}`}>
                       {savingNotepadNote
                         ? "Saving..."
-                        : notepadStatusText || (notepadDirty ? "Unsaved changes" : "Saved")}
+                        : notepadStatusText ||
+                          (isNotepadTyping ? "Typing..." : notepadDirty ? "Unsaved changes" : "Saved")}
                     </span>
                     <button
                       type="button"
@@ -3923,7 +4246,7 @@ export default function EmployeeDashboard({
                 <div className="empNotepadToolbar" role="toolbar" aria-label="Notepad formatting toolbar">
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.bold ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("bold")}
                     aria-label="Bold"
@@ -3933,7 +4256,7 @@ export default function EmployeeDashboard({
                   </button>
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.italic ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("italic")}
                     aria-label="Italic"
@@ -3943,7 +4266,7 @@ export default function EmployeeDashboard({
                   </button>
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.underline ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("underline")}
                     aria-label="Underline"
@@ -3953,7 +4276,7 @@ export default function EmployeeDashboard({
                   </button>
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.alignLeft ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("justifyLeft")}
                     aria-label="Align left"
@@ -3963,7 +4286,7 @@ export default function EmployeeDashboard({
                   </button>
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.alignCenter ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("justifyCenter")}
                     aria-label="Align center"
@@ -3973,7 +4296,7 @@ export default function EmployeeDashboard({
                   </button>
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.alignRight ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("justifyRight")}
                     aria-label="Align right"
@@ -3983,7 +4306,7 @@ export default function EmployeeDashboard({
                   </button>
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.unorderedList ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("insertUnorderedList")}
                     aria-label="Bulleted list"
@@ -3993,7 +4316,7 @@ export default function EmployeeDashboard({
                   </button>
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.orderedList ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("insertOrderedList")}
                     aria-label="Numbered list"
@@ -4003,7 +4326,7 @@ export default function EmployeeDashboard({
                   </button>
                   <button
                     type="button"
-                    className="empNotepadToolBtn"
+                    className={`empNotepadToolBtn ${notepadToolbarState.checklist ? "active" : ""}`}
                     onMouseDown={handleNotepadToolMouseDown}
                     onClick={() => runNotepadCommand("insertChecklistItem")}
                     aria-label="Checklist item"
@@ -4029,6 +4352,10 @@ export default function EmployeeDashboard({
                   contentEditable
                   suppressContentEditableWarning
                   spellCheck
+                  onFocus={handleNotepadEditorFocus}
+                  onBlur={handleNotepadEditorBlur}
+                  onKeyDown={handleNotepadEditorKeyDown}
+                  onKeyUp={handleNotepadEditorKeyUp}
                   onInput={handleNotepadEditorInput}
                   onClick={handleNotepadEditorClick}
                   aria-label="Notepad editor"
