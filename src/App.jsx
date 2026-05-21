@@ -5556,16 +5556,6 @@ export default function App() {
           </div>
 
           <div className="portal-topbar-actions">
-            {canAccessPage(user?.role, "register_portal_user", user?.allowedPages) ? (
-              <button
-                className="portal-btn portal-btn-primary"
-                onClick={() => setActivePage("register_portal_user")}
-              >
-                <UserPlus size={16} strokeWidth={2} />
-                <span>Register User</span>
-              </button>
-            ) : null}
-
             {canRequestPortalUser ? (
               <button
                 className="portal-btn portal-btn-primary"
@@ -5684,6 +5674,12 @@ export default function App() {
                     }}
                     onToast={pushToast}
                     pageData={sharedPageData}
+                    canOpenRegisterUser={canAccessPage(
+                      user?.role,
+                      "register_portal_user",
+                      user?.allowedPages
+                    )}
+                    onOpenRegisterUser={() => setActivePage("register_portal_user")}
                   />
                 </div>
               )}

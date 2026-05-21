@@ -33,8 +33,11 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import {
+  ClipboardList,
   Database,
   Eye,
+  FileText,
+  Settings,
   MoreVertical,
   Pencil,
   Plus,
@@ -42,8 +45,9 @@ import {
   RefreshCcw,
   Save,
   Search,
-  ShieldAlert,
   Trash2,
+  User,
+  UserPlus,
   X,
 } from "lucide-react";
 import "./controlPanelPage.css";
@@ -521,6 +525,8 @@ export default function ControlPanelPage({
   onAttendanceResetTimeChange,
   onBusinessTimeZoneChange,
   onToast,
+  canOpenRegisterUser = false,
+  onOpenRegisterUser = null,
 }) {
   const [activeTab, setActiveTab] = useState(DATA_TABS.ACCESS);
   const [selectedType, setSelectedType] = useState("special");
@@ -559,10 +565,8 @@ export default function ControlPanelPage({
   const [applyingRoleCorePages, setApplyingRoleCorePages] = useState(false);
   const [savingAttendanceSettings, setSavingAttendanceSettings] = useState(false);
   const [localError, setLocalError] = useState("");
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
   const [settingsDrawerView, setSettingsDrawerView] = useState("");
-  const settingsMenuRef = useRef(null);
   const breakLogMenuRef = useRef(null);
   const [breakLogRows, setBreakLogRows] = useState([]);
   const [breakLogLoading, setBreakLogLoading] = useState(false);
@@ -903,21 +907,6 @@ export default function ControlPanelPage({
     setSpecialActionError("");
     setSpecialActionMessage("");
   }, [selectedSpecialUser]);
-
-  useEffect(() => {
-    if (!settingsMenuOpen) return undefined;
-
-    const handleOutsideClick = (event) => {
-      if (!settingsMenuRef.current) return;
-      if (settingsMenuRef.current.contains(event.target)) return;
-      setSettingsMenuOpen(false);
-    };
-
-    document.addEventListener("mousedown", handleOutsideClick);
-    return () => {
-      document.removeEventListener("mousedown", handleOutsideClick);
-    };
-  }, [settingsMenuOpen]);
 
   useEffect(() => {
     if (!settingsDrawerOpen) return undefined;
@@ -2246,70 +2235,79 @@ export default function ControlPanelPage({
     <div className="control-panel-page">
 
       <div className="control-panel-tabbar">
-        <button
-          type="button"
-          className={`control-panel-tab ${activeTab === DATA_TABS.ACCESS ? "active" : ""}`}
-          onClick={() => setActiveTab(DATA_TABS.ACCESS)}
-        >
-          Access & Settings
-        </button>
-        <button
-          type="button"
-          className={`control-panel-tab ${activeTab === DATA_TABS.DATA ? "active" : ""}`}
-          onClick={() => setActiveTab(DATA_TABS.DATA)}
-        >
-          <Database size={16} />
-          Data Browser
-        </button>
-        <button
-          type="button"
-          className="control-panel-tab"
-          onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.PENDING_REQUESTS)}
-        >
-          Pending User Requests
-        </button>
-        <button
-          type="button"
-          className="control-panel-tab"
-          onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS)}
-        >
-          Break Log Record
-        </button>
-
-        <div className="control-panel-more-wrap" ref={settingsMenuRef}>
+        <div className="control-panel-tabbar-left">
           <button
             type="button"
-            className="control-panel-tab control-panel-tab-icon"
-            onClick={() => setSettingsMenuOpen((prev) => !prev)}
-            aria-haspopup="menu"
-            aria-expanded={settingsMenuOpen}
-            aria-label="Open settings menu"
-            title="More settings"
+            className={`control-panel-tab ${activeTab === DATA_TABS.ACCESS ? "active" : ""}`}
+            onClick={() => setActiveTab(DATA_TABS.ACCESS)}
           >
-            <MoreVertical size={16} />
+            Access & Settings
           </button>
+          <button
+            type="button"
+            className={`control-panel-tab ${activeTab === DATA_TABS.DATA ? "active" : ""}`}
+            onClick={() => setActiveTab(DATA_TABS.DATA)}
+          >
+            <Database size={16} />
+            Data Browser
+          </button>
+        </div>
 
-          {settingsMenuOpen ? (
-            <div className="control-panel-more-menu" role="menu">
-              <button
-                type="button"
-                role="menuitem"
-                className="control-panel-more-item"
-                onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.ATTENDANCE)}
-              >
-                Attendance Settings
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="control-panel-more-item"
-                onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.ROLE_BULK)}
-                disabled={!onApplyRoleCorePagesToAll}
-              >
-                Role Core Pages (Bulk)
-              </button>
-            </div>
+        <div className="control-panel-tabbar-right">
+          {canOpenRegisterUser && typeof onOpenRegisterUser === "function" ? (
+            <button
+              type="button"
+              className="control-panel-tab control-panel-tab-register"
+              onClick={onOpenRegisterUser}
+            >
+              <UserPlus size={16} />
+              Register User
+            </button>
           ) : null}
+          <button
+            type="button"
+            className="control-panel-tab control-panel-tab-icon control-panel-tab-attendance"
+            onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.ATTENDANCE)}
+            aria-label="Open attendance settings"
+            title="Attendance Settings"
+          >
+            <span className="control-panel-attendance-icon-wrap" aria-hidden="true">
+              <ClipboardList size={16} />
+              <span className="control-panel-attendance-icon-gear">
+                <Settings size={9} />
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="control-panel-tab control-panel-tab-icon control-panel-tab-role-bulk"
+            onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.ROLE_BULK)}
+            aria-label="Open role core pages bulk editor"
+            title="Role Core Pages (Bulk)"
+            disabled={!onApplyRoleCorePagesToAll}
+          >
+            <span className="control-panel-role-bulk-icon-wrap" aria-hidden="true">
+              <FileText size={16} />
+              <span className="control-panel-role-bulk-icon-pencil">
+                <Pencil size={9} />
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="control-panel-tab control-panel-tab-icon control-panel-tab-pending-icon"
+            onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.PENDING_REQUESTS)}
+            aria-label="Open pending user requests"
+            title="Pending User Requests"
+          >
+            <span className="control-panel-pending-icon-wrap" aria-hidden="true">
+              <User size={16} />
+              <span className="control-panel-pending-icon-alert">!</span>
+              <span className="control-panel-pending-icon-badge">
+                {pendingRequests.length > 99 ? "99+" : pendingRequests.length}
+              </span>
+            </span>
+          </button>
         </div>
       </div>
 
