@@ -16,7 +16,7 @@
  * <InvoiceComponent />
  */
 
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import styled, { ThemeProvider } from 'styled-components';
 import { FileText, Download, ExternalLink, RefreshCw, Search, Filter } from 'lucide-react';
 
@@ -171,6 +171,13 @@ const Container = styled.div`
   min-height: 100vh;
   padding: ${props => props.theme.spacing.lg};
   box-sizing: border-box;
+
+  @media print {
+    min-height: auto;
+    padding: 0;
+    background: #ffffff;
+    color: #111827;
+  }
 `;
 
 const Header = styled.div`
@@ -207,6 +214,10 @@ const Actions = styled.div`
   display: flex;
   gap: ${props => props.theme.spacing.sm};
   flex-wrap: wrap;
+
+  @media print {
+    display: none;
+  }
 `;
 
 const Button = styled.button`
@@ -241,6 +252,10 @@ const SearchBar = styled.div`
   gap: ${props => props.theme.spacing.sm};
   margin-bottom: ${props => props.theme.spacing.md};
   flex-wrap: wrap;
+
+  @media print {
+    display: none;
+  }
 `;
 
 const Input = styled.input`
@@ -285,12 +300,24 @@ const TableContainer = styled.div`
   border: 1px solid ${props => props.theme.border};
   overflow: hidden;
   box-shadow: ${props => props.theme.shadow.sm};
+
+  @media print {
+    border-radius: 0;
+    border: none;
+    overflow: visible;
+    box-shadow: none;
+    background: #ffffff;
+  }
 `;
 
 const Table = styled.table`
   width: 100%;
   border-collapse: collapse;
   font-size: ${props => props.theme.fontSize.sm};
+
+  @media print {
+    font-size: 12px;
+  }
 `;
 
 const TableHead = styled.thead`
@@ -324,6 +351,11 @@ const TableRow = styled.tr`
   
   &:last-child {
     border-bottom: none;
+  }
+
+  @media print {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 `;
 
@@ -449,6 +481,7 @@ const InvoiceComponent = ({
   // Offline hardcoded data only (no API fetch)
   const invoices = HARDCODED_INVOICES;
   const [currentPage, setCurrentPage] = useState(1);
+  const [isPrintMode, setIsPrintMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortField, setSortField] = useState('createdAt');
@@ -514,6 +547,29 @@ const InvoiceComponent = ({
   const totalPages = Math.ceil(filteredInvoices.length / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
   const paginatedInvoices = filteredInvoices.slice(startIndex, startIndex + pageSize);
+  const visibleInvoices = isPrintMode ? filteredInvoices : paginatedInvoices;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handleBeforePrint = () => setIsPrintMode(true);
+    const handleAfterPrint = () => setIsPrintMode(false);
+
+    window.addEventListener('beforeprint', handleBeforePrint);
+    window.addEventListener('afterprint', handleAfterPrint);
+
+    const mediaQueryList = window.matchMedia('print');
+    const handleMediaChange = (event) => {
+      setIsPrintMode(!!event.matches);
+    };
+    mediaQueryList.addEventListener('change', handleMediaChange);
+
+    return () => {
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
+      mediaQueryList.removeEventListener('change', handleMediaChange);
+    };
+  }, []);
 
   // Handle sort click
   const handleSort = (field) => {
@@ -663,7 +719,7 @@ const InvoiceComponent = ({
                 </tr>
               </TableHead>
               <tbody>
-                {paginatedInvoices.map((invoice) => (
+                {visibleInvoices.map((invoice) => (
                   <TableRow 
                     key={invoice.id}
                     onClick={() => onInvoiceClick && onInvoiceClick(invoice)}
@@ -710,7 +766,7 @@ const InvoiceComponent = ({
         </TableContainer>
 
         {/* Pagination */}
-        {totalPages > 1 && (
+        {!isPrintMode && totalPages > 1 && (
           <Pagination>
             <PageButton 
               onClick={() => setCurrentPage(currentPage - 1)}

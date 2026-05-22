@@ -1610,6 +1610,9 @@
   .app-shell > .secondheader > .portal-main {
     display: block !important;
     width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
     margin: 0 !important;
     padding: 0 !important;
   }
@@ -1622,6 +1625,9 @@
     display: block !important;
     position: static;
     width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
     margin: 0;
     border: 0;
     box-shadow: none;
@@ -1634,11 +1640,25 @@
 
   .dashX > .p-payable .panelBody {
     padding: 0;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
   }
 
   .dashX > .p-payable #updateBox1 {
     padding: 0;
     gap: 10px;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .dashX > .p-payable .updateBody,
+  .dashX > .p-payable .updateBox,
+  .dashX > .p-payable .payableWorkbench {
+    display: block !important;
+    overflow: visible !important;
   }
 
   .dashX > .p-payable .updateItem,
@@ -1661,13 +1681,32 @@
   .payableChartWrap {
     height: auto;
     min-height: 330px;
-    page-break-inside: avoid;
-    break-inside: avoid;
+    margin-bottom: 12px !important;
+    page-break-inside: auto;
+    break-inside: auto;
+    page-break-after: avoid;
+    break-after: avoid-page;
+    position: static !important;
+    float: none !important;
+    clear: both;
+  }
+
+  .payableChartWrap .recharts-wrapper,
+  .payableChartWrap svg {
+    display: block !important;
+    max-width: 100% !important;
   }
 
   .payablePrintTableWrap {
-    margin-top: 14px;
+    margin-top: 0 !important;
     border-color: #cbd5e1;
+    overflow: visible !important;
+    max-height: none !important;
+    position: static !important;
+    float: none !important;
+    clear: both;
+    page-break-before: auto;
+    break-before: auto;
   }
 
   .payablePrintMetaLine {
@@ -1678,6 +1717,21 @@
 
   .payablePrintDayGroup {
     border-color: #cbd5e1;
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+
+  .payablePrintDayGroups {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .payablePrintTable {
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+
+  .payablePrintTable tr {
     page-break-inside: avoid;
     break-inside: avoid;
   }
@@ -2258,4 +2312,162 @@
 
 .clockin-actions {
   gap: 8px;
+}
+
+
+/* ---------------- Accounting window refresh: rendered hours per day ---------------- */
+.p-payable .payablePanelHead {
+  align-items: center;
+  gap: 16px;
+}
+
+.p-payable .payablePanelHeadIdentity .panelHeadTitle {
+  color: #0f172a;
+}
+
+.p-payable .payablePanelHeadIdentity .panelHeadSub {
+  color: #64748b;
+}
+
+.p-payable .payableHeadStat {
+  min-width: 132px;
+  padding: 9px 12px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+}
+
+.p-payable .payableHeadStat span,
+.p-payable .payableSummaryLabel,
+.p-payable .payableDateField span,
+.p-payable .payableYearField span,
+.p-payable .payableMonthField span,
+.p-payable .payablePresetSelectWrap span {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.p-payable .payableHeadStat strong {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.p-payable .payableWorkbench {
+  padding: 12px;
+  gap: 10px;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  border-radius: 16px;
+}
+
+.p-payable .updateItem {
+  font-size: 10px;
+  font-weight: 800;
+  color: #64748b;
+}
+
+.p-payable .payableSummaryPanels {
+  margin: 0 0 8px;
+  gap: 10px;
+}
+
+.p-payable .payableSummaryPanel {
+  border-radius: 14px;
+}
+
+.p-payable .payableSummaryPanel.range {
+  background: linear-gradient(145deg, #0f172a, #1e293b);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.p-payable .payableSummarySub {
+  font-size: 12px;
+}
+
+.p-payable .payableViewBtn {
+  height: 32px;
+  padding: 6px 12px;
+}
+
+.p-payable .payableViewBtn.isActive {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.p-payable .select-emp,
+.p-payable .payableDateInput,
+.p-payable .payableMonthSelect,
+.p-payable .payablePresetSelect {
+  height: 34px;
+  border-radius: 11px;
+  font-weight: 700;
+}
+
+.p-payable .payableChartWrap {
+  height: 320px;
+  min-height: 320px;
+  padding: 12px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.02);
+}
+
+.p-payable .payableScreenTableWrap {
+  max-height: 390px;
+}
+
+.p-payable .payableScreenTableWrap .payTable thead th {
+  font-size: 11px;
+  padding: 9px 10px;
+}
+
+.p-payable .payableScreenTableWrap .payTdName,
+.p-payable .payableScreenTableWrap .payTdHours {
+  font-size: 11px;
+  padding: 9px 10px;
+}
+
+@media print {
+  .p-payable .payableChartWrap {
+    height: auto;
+    min-height: 330px;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .p-payable .payableChartWrap {
+    height: 280px;
+    min-height: 280px;
+  }
+
+  .p-payable .payableControlRowSingleLine,
+  .p-payable .payableToolbarActions,
+  .p-payable .buttons-div {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .p-payable .payableDateField,
+  .p-payable .payableYearField,
+  .p-payable .payableMonthField,
+  .p-payable .payablePresetSelectWrap,
+  .p-payable .payableViewEmployeeField {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .p-payable .select-emp,
+  .p-payable .payableDateInput,
+  .p-payable .payableMonthSelect,
+  .p-payable .payablePresetSelect {
+    width: 100%;
+    min-width: 0;
+  }
 }

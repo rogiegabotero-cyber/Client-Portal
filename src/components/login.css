@@ -173,6 +173,8 @@
 
 .login-right {
   background: linear-gradient(180deg, #4e0106, #290105);
+  position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -180,6 +182,395 @@
   padding: 36px;
   color: white;
   gap: 2rem;
+}
+
+.login-right--petals .login-brand-box {
+  position: relative;
+  z-index: 2;
+}
+
+.login-right--petals .hhiuhai-logo {
+  position: relative;
+  z-index: 2;
+}
+
+.login-right-spots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.login-right-spots::before {
+  content: "";
+  position: absolute;
+  width: 360px;
+  height: 360px;
+  top: -170px;
+  left: -170px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  filter: blur(18px);
+  animation: login-corner-fade 12s ease-in-out infinite;
+}
+
+.login-right-spots::after {
+  content: "";
+  position: absolute;
+  width: 410px;
+  height: 410px;
+  top: -190px;
+  right: -190px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  filter: blur(20px);
+  animation: login-corner-fade 12s ease-in-out infinite;
+  animation-delay: -4s;
+}
+
+.login-right-spot {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
+  box-shadow: 0 0 68px rgba(0, 0, 0, 0.45);
+  filter: blur(9px);
+  animation: login-spot-fade 11s ease-in-out infinite;
+}
+
+.login-right-spot--1 {
+  width: 200px;
+  height: 200px;
+  top: 12%;
+  right: 10%;
+  animation: login-spot-drift-a 28s ease-in-out infinite, login-spot-fade 12s ease-in-out infinite;
+  animation-delay: -2s, 0s;
+}
+
+.login-right-spot--2 {
+  width: 170px;
+  height: 170px;
+  top: 42%;
+  right: 33%;
+  animation: login-spot-drift-b 32s ease-in-out infinite, login-spot-fade 9s ease-in-out infinite;
+  animation-delay: -10s, -2s;
+}
+
+.login-right-spot--3 {
+  width: 150px;
+  height: 150px;
+  top: 65%;
+  right: 14%;
+  animation: login-spot-drift-c 26s ease-in-out infinite, login-spot-fade 10s ease-in-out infinite;
+  animation-delay: -15s, -4s;
+}
+
+.login-right-spot--4 {
+  width: 210px;
+  height: 210px;
+  top: 28%;
+  right: 42%;
+  animation: login-spot-drift-d 34s ease-in-out infinite, login-spot-fade 13s ease-in-out infinite;
+  animation-delay: -7s, -1s;
+}
+
+.login-right-spot--5 {
+  width: 140px;
+  height: 140px;
+  top: 74%;
+  right: 38%;
+  animation: login-spot-drift-e 30s ease-in-out infinite, login-spot-fade 8s ease-in-out infinite;
+  animation-delay: -13s, -5s;
+}
+
+.login-right-spot--6 {
+  width: 130px;
+  height: 130px;
+  top: 16%;
+  right: 58%;
+  animation: login-spot-drift-f 36s ease-in-out infinite, login-spot-fade 14s ease-in-out infinite;
+  animation-delay: -21s, -8s;
+}
+
+.login-right-spot--white {
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 44px rgba(255, 255, 255, 0.32);
+  filter: blur(7px);
+}
+
+.login-right-spot--white-lg {
+  background: rgba(255, 255, 255, 0.32);
+  box-shadow: 0 0 54px rgba(255, 255, 255, 0.38);
+  filter: blur(8px);
+}
+
+.login-right-spot--white-xs {
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow: 0 0 26px rgba(255, 255, 255, 0.28);
+  filter: blur(5px);
+}
+
+.login-right-spot--w1 {
+  width: 84px;
+  height: 84px;
+  top: 18%;
+  right: 24%;
+  animation: login-spot-drift-c 24s ease-in-out infinite, login-spot-fade 10s ease-in-out infinite;
+  animation-delay: -5s, -1s;
+}
+
+.login-right-spot--w2 {
+  width: 66px;
+  height: 66px;
+  top: 58%;
+  right: 20%;
+  animation: login-spot-drift-e 27s ease-in-out infinite, login-spot-fade 9s ease-in-out infinite;
+  animation-delay: -11s, -3s;
+}
+
+.login-right-spot--w3 {
+  width: 74px;
+  height: 74px;
+  top: 34%;
+  right: 56%;
+  animation: login-spot-drift-a 30s ease-in-out infinite, login-spot-fade 12s ease-in-out infinite;
+  animation-delay: -17s, -6s;
+}
+
+.login-right-spot--w4 {
+  width: 58px;
+  height: 58px;
+  top: 76%;
+  right: 54%;
+  animation: login-spot-drift-b 26s ease-in-out infinite, login-spot-fade 8s ease-in-out infinite;
+  animation-delay: -23s, -4s;
+}
+
+.login-right-spot--w5 {
+  width: 112px;
+  height: 112px;
+  top: 12%;
+  right: 44%;
+  animation: login-spot-drift-f 31s ease-in-out infinite, login-spot-fade 11s ease-in-out infinite;
+  animation-delay: -14s, -2s;
+  animation-direction: reverse, normal;
+}
+
+.login-right-spot--w6 {
+  width: 98px;
+  height: 98px;
+  top: 52%;
+  right: 8%;
+  animation: login-spot-drift-d 29s ease-in-out infinite, login-spot-fade 9s ease-in-out infinite;
+  animation-delay: -8s, -3s;
+}
+
+.login-right-spot--w7 {
+  width: 104px;
+  height: 104px;
+  top: 72%;
+  right: 62%;
+  animation: login-spot-drift-c 34s ease-in-out infinite, login-spot-fade 13s ease-in-out infinite;
+  animation-delay: -18s, -6s;
+  animation-direction: reverse, normal;
+}
+
+.login-right-spot--w8 {
+  width: 44px;
+  height: 44px;
+  top: 24%;
+  right: 68%;
+  animation: login-spot-drift-a 21s ease-in-out infinite, login-spot-fade 8s ease-in-out infinite;
+  animation-delay: -4s, -1s;
+}
+
+.login-right-spot--w9 {
+  width: 36px;
+  height: 36px;
+  top: 66%;
+  right: 48%;
+  animation: login-spot-drift-e 23s ease-in-out infinite, login-spot-fade 7s ease-in-out infinite;
+  animation-delay: -12s, -5s;
+  animation-direction: reverse, normal;
+}
+
+.login-right-spot--w10 {
+  width: 40px;
+  height: 40px;
+  top: 38%;
+  right: 16%;
+  animation: login-spot-drift-b 19s ease-in-out infinite, login-spot-fade 8s ease-in-out infinite;
+  animation-delay: -16s, -2s;
+}
+
+.login-right-spot--w11 {
+  width: 34px;
+  height: 34px;
+  top: 82%;
+  right: 26%;
+  animation: login-spot-drift-f 22s ease-in-out infinite, login-spot-fade 6s ease-in-out infinite;
+  animation-delay: -21s, -4s;
+  animation-direction: reverse, normal;
+}
+
+.login-right-spot--w12 {
+  width: 42px;
+  height: 42px;
+  top: 10%;
+  right: 74%;
+  animation: login-spot-drift-d 24s ease-in-out infinite, login-spot-fade 8s ease-in-out infinite;
+  animation-delay: -9s, -3s;
+}
+
+.login-right-petals-bg {
+  position: absolute;
+  bottom: -480px;
+  right: -480px;
+  width: 980px;
+  height: 980px;
+  pointer-events: none;
+  opacity: 0.22;
+  z-index: 1;
+}
+
+.login-right-petals-bg img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  animation: login-petals-rotate 30s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes login-petals-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes login-spot-drift-a {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  30% {
+    transform: translate3d(-68px, 42px, 0) rotate(6deg);
+  }
+  50% {
+    transform: translate3d(-20px, 78px, 0) rotate(2deg);
+  }
+  80% {
+    transform: translate3d(52px, 30px, 0) rotate(-4deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+@keyframes login-spot-drift-b {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  25% {
+    transform: translate3d(62px, -36px, 0) rotate(-5deg);
+  }
+  55% {
+    transform: translate3d(26px, 58px, 0) rotate(4deg);
+  }
+  85% {
+    transform: translate3d(-48px, 30px, 0) rotate(-2deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+@keyframes login-spot-drift-c {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  20% {
+    transform: translate3d(-46px, -26px, 0) rotate(4deg);
+  }
+  45% {
+    transform: translate3d(42px, -62px, 0) rotate(-6deg);
+  }
+  70% {
+    transform: translate3d(62px, 26px, 0) rotate(3deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+@keyframes login-spot-drift-d {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  35% {
+    transform: translate3d(56px, 42px, 0) rotate(5deg);
+  }
+  65% {
+    transform: translate3d(-42px, 80px, 0) rotate(-4deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+@keyframes login-spot-drift-e {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  30% {
+    transform: translate3d(-58px, -42px, 0) rotate(-3deg);
+  }
+  60% {
+    transform: translate3d(36px, -78px, 0) rotate(4deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+@keyframes login-spot-drift-f {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  40% {
+    transform: translate3d(46px, 30px, 0) rotate(6deg);
+  }
+  75% {
+    transform: translate3d(-62px, 52px, 0) rotate(-5deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+}
+
+@keyframes login-spot-fade {
+  0% {
+    opacity: 0.14;
+  }
+  50% {
+    opacity: 0.38;
+  }
+  100% {
+    opacity: 0.14;
+  }
+}
+
+@keyframes login-corner-fade {
+  0% {
+    opacity: 0.12;
+  }
+  50% {
+    opacity: 0.44;
+  }
+  100% {
+    opacity: 0.12;
+  }
 }
 
 .hhiuhai-logo{
@@ -217,5 +608,116 @@
 
   .login-right {
     min-height: 220px;
+  }
+
+  .login-right-petals-bg {
+    width: 620px;
+    height: 620px;
+    bottom: -310px;
+    right: -310px;
+  }
+
+  .login-right-spot--1 {
+    width: 160px;
+    height: 160px;
+  }
+
+  .login-right-spot--2 {
+    width: 140px;
+    height: 140px;
+  }
+
+  .login-right-spot--3 {
+    width: 120px;
+    height: 120px;
+  }
+
+  .login-right-spot--4 {
+    width: 165px;
+    height: 165px;
+  }
+
+  .login-right-spot--5 {
+    width: 110px;
+    height: 110px;
+  }
+
+  .login-right-spot--6 {
+    width: 100px;
+    height: 100px;
+  }
+
+  .login-right-spot--w1 {
+    width: 66px;
+    height: 66px;
+  }
+
+  .login-right-spot--w2 {
+    width: 52px;
+    height: 52px;
+  }
+
+  .login-right-spot--w3 {
+    width: 58px;
+    height: 58px;
+  }
+
+  .login-right-spot--w4 {
+    width: 44px;
+    height: 44px;
+  }
+
+  .login-right-spot--w5 {
+    width: 86px;
+    height: 86px;
+  }
+
+  .login-right-spot--w6 {
+    width: 76px;
+    height: 76px;
+  }
+
+  .login-right-spot--w7 {
+    width: 80px;
+    height: 80px;
+  }
+
+  .login-right-spot--w8 {
+    width: 34px;
+    height: 34px;
+  }
+
+  .login-right-spot--w9 {
+    width: 28px;
+    height: 28px;
+  }
+
+  .login-right-spot--w10 {
+    width: 30px;
+    height: 30px;
+  }
+
+  .login-right-spot--w11 {
+    width: 26px;
+    height: 26px;
+  }
+
+  .login-right-spot--w12 {
+    width: 32px;
+    height: 32px;
+  }
+
+  .login-right-spots::before {
+    width: 280px;
+    height: 280px;
+    top: -130px;
+    left: -130px;
+  }
+
+  .login-right-spots::after {
+    width: 320px;
+    height: 320px;
+    top: -150px;
+    right: -150px;
   }
 }

@@ -23,8 +23,6 @@ import {
   BarChart,
   Bar,
   LabelList,
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -387,6 +385,15 @@ const startOfWeekYmd = (ymd) => {
   if (!d) return ymd;
   const day = d.getUTCDay();
   const diff = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  return ymdFromDateUtc(d);
+};
+
+const endOfWeekYmd = (ymd) => {
+  const d = parseYmdToUtcNoon(ymd);
+  if (!d) return ymd;
+  const day = d.getUTCDay();
+  const diff = day === 0 ? 0 : 7 - day;
   d.setUTCDate(d.getUTCDate() + diff);
   return ymdFromDateUtc(d);
 };
@@ -832,7 +839,6 @@ const PAYABLE_WINDOW_FILTER_OPTIONS = [
   { key: "week", label: "This Week" },
   { key: "15", label: "15D" },
   { key: "month", label: "Monthly" },
-  { key: "all", label: "All" },
 ];
 
 /* ------------------------ monthly attendance chart helpers ------------------------ */
@@ -1021,7 +1027,7 @@ const PayableHoursTooltip = ({ active, payload, label }) => {
   return (
     <div className="dashTooltipCard">
       <div className="dashTooltipTitle">
-        {label}
+        {row.label || label}
       </div>
       <div className="dashTooltipLine">
         Payable Hours: <strong>{formatHoursValue(row.hours)}</strong>
@@ -2309,11 +2315,12 @@ export default function Dashboard({
 
     if (payableGraphWindow === "week") {
       const start = startOfWeekYmd(end);
+      const weekEnd = endOfWeekYmd(end);
       return {
         label: "This Week",
         start,
-        end,
-        dayKeys: enumerateYmdRange(start, end),
+        end: weekEnd,
+        dayKeys: enumerateYmdRange(start, weekEnd),
         isMonthly: false,
         monthKeys: [],
       };
@@ -2336,16 +2343,21 @@ export default function Dashboard({
         /^\d{4}-\d{2}$/.test(String(effectiveSelectedPayableMonth || ""))
           ? String(effectiveSelectedPayableMonth)
           : monthKeyFromYmd(end);
-      const start = `${monthKey}-01`;
+      const targetYear = String(monthKey).slice(0, 4);
+      const currentYear = String(end || "").slice(0, 4);
+      const startMonthKey = `${targetYear}-01`;
+      const endMonthKey = targetYear === currentYear ? monthKeyFromYmd(end) : `${targetYear}-12`;
+      const monthKeys = enumerateMonthKeys(startMonthKey, endMonthKey);
+      const start = `${startMonthKey}-01`;
       const monthEnd =
-        monthKey === monthKeyFromYmd(end) ? end : lastDayOfMonthYmd(start);
+        endMonthKey === monthKeyFromYmd(end) ? end : lastDayOfMonthYmd(`${endMonthKey}-01`);
       return {
-        label: `Month (${prettyMonthLabel(monthKey)})`,
+        label: `Monthly (${targetYear})`,
         start,
         end: monthEnd,
-        dayKeys: enumerateYmdRange(start, monthEnd),
-        isMonthly: false,
-        monthKeys: [],
+        dayKeys: [],
+        isMonthly: true,
+        monthKeys,
       };
     }
 
@@ -2562,25 +2574,32 @@ export default function Dashboard({
     }
 
     const dayPrintRows = [];
+    const todayKey = String(endDate || "");
+    const includeUpcomingDays =
+      payableGraphWindow === "week" || payableGraphWindow === "15";
     const dayRows = payableGraphPeriod.dayKeys.map((dayKey) => {
       const dayTotals = computeDayTotals(dayKey);
       if (dayTotals.detailRows.length) {
         dayPrintRows.push(...dayTotals.detailRows);
       }
 
+      const isFutureDay = includeUpcomingDays && todayKey && String(dayKey) > todayKey;
+
       return {
         dayKey,
         label: prettyDayLabel(dayKey),
-        hours: dayTotals.totalMinutes / 60,
+        hours: isFutureDay ? null : dayTotals.totalMinutes / 60,
         completedCount: dayTotals.completedCount,
       };
     });
 
     const filteredRowsForDisplay =
       payableGraphUserId === "ALL"
-        ? dayRows.filter(
-            (row) => Number(row.hours || 0) > 0 || Number(row.completedCount || 0) > 0
-          )
+        ? includeUpcomingDays
+          ? dayRows
+          : dayRows.filter(
+              (row) => Number(row.hours || 0) > 0 || Number(row.completedCount || 0) > 0
+            )
         : filterDayKeysByEmployeeStartDate(
             dayRows.map((row) => row.dayKey),
             getEmployeeStartDateYmd(employeeProfilesByUserId, payableGraphUserId)
@@ -2622,6 +2641,26 @@ export default function Dashboard({
     attendanceResetTime,
     businessTimeZone,
   ]);
+
+  const payableAllWindowMonthTickKeys = useMemo(() => {
+    if (payableGraphWindow !== "all") return [];
+    const rows = Array.isArray(payableHoursChart.rows) ? payableHoursChart.rows : [];
+    const ticks = [];
+    let prevMonthKey = "";
+
+    for (const row of rows) {
+      const dayKey = String(row?.dayKey || "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) continue;
+
+      const monthKey = monthKeyFromYmd(dayKey);
+      if (monthKey && monthKey !== prevMonthKey) {
+        ticks.push(dayKey);
+        prevMonthKey = monthKey;
+      }
+    }
+
+    return ticks;
+  }, [payableGraphWindow, payableHoursChart.rows]);
 
   const anyHistoryLoading = useMemo(() => {
     const needDays =
@@ -2970,20 +3009,23 @@ export default function Dashboard({
     const sourceRows = Array.isArray(payableHoursChart.printRows) ? payableHoursChart.printRows : [];
     const targetDayKeys = payableTableColumnDayKeys;
     if (!targetDayKeys.length) return [];
+    const usingMonthColumns = targetDayKeys.every((key) => /^\d{4}-\d{2}$/.test(String(key || "")));
 
     const hoursByUserIdByDayKey = new Map();
     for (const row of sourceRows) {
       const userId = String(row?.userId || "").trim();
       const dayKey = String(row?.dayKey || "").trim();
-      if (!userId || !dayKey) continue;
+      const monthKey = String(row?.monthKey || "").trim();
+      const key = usingMonthColumns && /^\d{4}-\d{2}$/.test(monthKey) ? monthKey : dayKey;
+      if (!userId || !key) continue;
 
       if (!hoursByUserIdByDayKey.has(userId)) {
         hoursByUserIdByDayKey.set(userId, new Map());
       }
 
       const byDay = hoursByUserIdByDayKey.get(userId);
-      const prev = Number(byDay.get(dayKey) || 0);
-      byDay.set(dayKey, prev + Number(row?.hours || 0));
+      const prev = Number(byDay.get(key) || 0);
+      byDay.set(key, prev + Number(row?.hours || 0));
     }
 
     return selectedPayableEmployees.map((employee) => {
@@ -2994,7 +3036,10 @@ export default function Dashboard({
 
       let totalHours = 0;
       const dayValues = targetDayKeys.map((dayKey) => {
-        if (employeeStartDateYmd && String(dayKey) < String(employeeStartDateYmd)) {
+        const startKey = usingMonthColumns
+          ? monthKeyFromYmd(employeeStartDateYmd)
+          : employeeStartDateYmd;
+        if (startKey && String(dayKey) < String(startKey)) {
           return null;
         }
         const value = Number(dayMap.get(dayKey) || 0);
@@ -3623,7 +3668,7 @@ export default function Dashboard({
           <div className="payablePanelHeadIdentity">
             <div className="panelHeadTitle">Accounting Window</div>
             <div className="panelHeadSub">
-              Payable hours, completion volume, and printable range summaries.
+              Employee rendered hours per day for payroll review.
             </div>
           </div>
           <div className="payablePanelHeadStats noPrint">
@@ -3641,7 +3686,7 @@ export default function Dashboard({
         <div className="panelBody">
           <div className="updateBody">
             <div className="updateBox payableWorkbench" id="updateBox1">
-              <div className="updateItem">Daily Payable Hours Graph</div>
+              <div className="updateItem">Rendered Hours per Day</div>
 
               <div className="payableSummaryPanels">
                 <div className="payableSummaryPanel range">
@@ -3701,13 +3746,13 @@ export default function Dashboard({
 
               {anyHistoryLoading ? (
                 <div className="sideHint">
-                  Loading extra history so the chart can use full attendance records...
+                  Loading extra history so the report can use full attendance records...
                 </div>
               ) : null}
               {anyHistoryErrors ? <div className="sideError">{anyHistoryErrors}</div> : null}
 
               <div className="payablePrintHeader printOnly">
-                <div className="payablePrintTitle">Daily Payable Hours</div>
+                <div className="payablePrintTitle">Employee Rendered Hours</div>
                 <div className="payablePrintSub">
                   Employee: {payableGraphUserLabel} | Range: {payableHoursChart.start} -&gt;{" "}
                   {payableHoursChart.end}
@@ -3724,9 +3769,13 @@ export default function Dashboard({
                           <th
                             key={`payable-day-column-${dayKey}`}
                             className="payThRight payableMatrixDateHead"
-                            title={prettyDayLabel(dayKey)}
+                            title={
+                              /^\d{4}-\d{2}$/.test(dayKey)
+                                ? prettyMonthLabel(dayKey)
+                                : prettyDayLabel(dayKey)
+                            }
                           >
-                            {dayKey}
+                            {/^\d{4}-\d{2}$/.test(dayKey) ? prettyMonthLabel(dayKey) : dayKey}
                           </th>
                         ))}
                         <th className="payThRight payableMatrixTotalCol">Total</th>
@@ -3740,7 +3789,7 @@ export default function Dashboard({
                             className="payEmpty"
                             colSpan={Math.max(2, payableTableColumnDayKeys.length + 2)}
                           >
-                            No payable data in this range.
+                            No rendered hours in this range.
                           </td>
                         </tr>
                       ) : (
@@ -3769,7 +3818,18 @@ export default function Dashboard({
                   </table>
                 </div>
               ) : (
-                <div className="payableChartWrap" ref={payableChartWrapRef}>
+                <div
+                  className="payableChartWrap"
+                  ref={payableChartWrapRef}
+                  style={
+                    isPrinting
+                      ? {
+                          height: `${printBarChartHeight}px`,
+                          minHeight: `${printBarChartHeight}px`,
+                        }
+                      : undefined
+                  }
+                >
                   {chartReady ? (
                     isPrinting ? (
                       <BarChart
@@ -3816,30 +3876,55 @@ export default function Dashboard({
                       </BarChart>
                     ) : (
                       <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
-                        <LineChart
+                        <BarChart
                           data={payableHoursChart.rows}
-                          margin={{ top: 10, right: 50, left: 0, bottom: 10 }}
+                          margin={{ top: 18, right: 36, left: 0, bottom: 10 }}
+                          barCategoryGap={18}
                         >
-                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.08)" />
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(15, 23, 42, 0.08)" />
                           <XAxis
-                            dataKey="label"
-                            tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
-                            interval={0}
+                            dataKey="dayKey"
+                            tick={{ fontSize: 11, fill: "rgba(15, 23, 42, 0.72)" }}
+                            interval={payableGraphWindow === "all" ? "preserveStartEnd" : 0}
+                            ticks={
+                              payableGraphWindow === "all" && payableAllWindowMonthTickKeys.length
+                                ? payableAllWindowMonthTickKeys
+                                : undefined
+                            }
+                            tickFormatter={(value) => {
+                              const dayKey = String(value || "");
+                              if (/^\d{4}-\d{2}$/.test(dayKey)) {
+                                return prettyMonthLabel(dayKey);
+                              }
+                              if (payableGraphWindow === "all") {
+                                const monthKey = monthKeyFromYmd(dayKey);
+                                return monthKey ? prettyMonthLabel(monthKey) : dayKey;
+                              }
+                              return prettyDayLabel(dayKey);
+                            }}
                           />
                           <YAxis
                             allowDecimals
-                            tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
+                            tickFormatter={formatHoursValue}
+                            tick={{ fontSize: 11, fill: "rgba(15, 23, 42, 0.72)" }}
                           />
                           <Tooltip content={<PayableHoursTooltip />} />
-                          <Line
-                            type="linear"
+                          <Bar
                             dataKey="hours"
-                            stroke="#66bb6a"
-                            strokeWidth={3}
-                            dot={{ r: 4 }}
-                            activeDot={{ r: 6 }}
-                          />
-                        </LineChart>
+                            fill="#0ea5e9"
+                            radius={[8, 8, 0, 0]}
+                            minPointSize={4}
+                            isAnimationActive={!isPrinting}
+                          >
+                            <LabelList
+                              dataKey="hours"
+                              position="top"
+                              formatter={formatHoursValue}
+                              fill="#0f172a"
+                              fontSize={11}
+                            />
+                          </Bar>
+                        </BarChart>
                       </ResponsiveContainer>
                     )
                   ) : (
@@ -3870,7 +3955,7 @@ export default function Dashboard({
                               <tr>
                                 <th className="payThLeft">Date</th>
                                 <th className="payThLeft">Day</th>
-                                <th className="payThRight">Completed Hours</th>
+                                <th className="payThRight">Rendered Hours</th>
                                 <th className="payThLeft">Notes</th>
                               </tr>
                             </thead>
@@ -3906,7 +3991,7 @@ export default function Dashboard({
                         <th className="payThLeft">Date</th>
                         <th className="payThLeft">Day</th>
                         <th className="payThLeft">Employee</th>
-                        <th className="payThRight">Completed Hours</th>
+                        <th className="payThRight">Rendered Hours</th>
                         <th className="payThLeft">Notes</th>
                       </tr>
                     </thead>
