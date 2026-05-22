@@ -5,7 +5,7 @@ import "./login.css";
 import HHIUHAI from "../assets/hhi-uhai.png"
 import HHIPetals from "../assets/HHI-Petals.png";
 
-export default function LoginPage() {
+export default function LoginPage({ onGoToRegister }) {
   const { signIn, loading } = useAuth();
 
   const [form, setForm] = useState({
@@ -85,12 +85,22 @@ export default function LoginPage() {
 
               {error ? <div className="login-error">{error}</div> : null}
 
+            <div className="login-primary-actions">
               <button className="login-button" type="submit" disabled={loading}>
                 {loading ? "Signing in..." : "Log In"}
               </button>
+              <button
+                type="button"
+                className="login-self-register-btn"
+                onClick={() => onGoToRegister?.()}
+                disabled={loading}
+              >
+                Self Registration
+              </button>
+            </div>
 
-            </form>
-          </div>
+          </form>
+        </div>
           
         </div>
 

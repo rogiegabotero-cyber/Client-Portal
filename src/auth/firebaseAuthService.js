@@ -3,6 +3,7 @@ import app, { auth, db } from "../firebase";
 import {
   EmailAuthProvider,
   createUserWithEmailAndPassword,
+  fetchSignInMethodsForEmail,
   getAuth,
   reauthenticateWithCredential,
   sendPasswordResetEmail,
@@ -17,6 +18,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getFirestore,
   getDoc,
   getDocs,
   limit,
@@ -32,22 +34,213 @@ import {
 import { DEFAULT_ROLE_PAGES, PAGE_KEYS, ROLES } from "./roleUtils";
 import { buildTimeZoneMeta, resolveStorageTimeZone } from "../utils/timeZoneMeta";
 import { toMillis } from "../utils/common";
+import {
+  verifyEmailInHyacinthDepartment,
+} from "../services/hyacinthDirectoryService";
 
 const PORTAL_USER_REQUESTS_COLLECTION = "portal_user_requests";
 const BREAK_NOTIFICATIONS_COLLECTION = "break_notifications";
 const ACTIVE_SESSIONS_COLLECTION = "portal_active_sessions";
+const EMPLOYEE_CREDENTIALS_COLLECTION = "employee_credentials";
 const ACTIVE_SESSION_STALE_THRESHOLD_MS = 20 * 60 * 1000;
 const REQUEST_ROLE_OPTIONS = [ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
+const PUBLIC_SELF_REQUEST_ROLES = [ROLES.ADMIN, ROLES.VISITOR];
 const PORTAL_ROLE_OPTIONS = [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
 const PASSWORD_HASH_PREFIX = "portal_v1";
 const functions = getFunctions(app, "us-central1");
+const issueSessionTokenCallable = httpsCallable(functions, "issueSessionToken");
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 const normalizePortalRole = (value) => String(value || "").trim().toLowerCase();
+const HYACINTH_EMAIL_FALLBACK_MATCH = "hyacinth";
+
+const isHyacinthCompanyEmail = (emailValue) => {
+  const normalizedEmail = normalizeEmail(emailValue);
+  if (!normalizedEmail) return false;
+  const atIndex = normalizedEmail.lastIndexOf("@");
+  if (atIndex < 0) return false;
+  const domain = normalizedEmail.slice(atIndex + 1);
+  const configuredDomains = String(import.meta.env.VITE_HYACINTH_EMAIL_DOMAINS || "")
+    .split(",")
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter(Boolean);
+  const acceptedDomains = configuredDomains.length
+    ? configuredDomains
+    : [HYACINTH_EMAIL_FALLBACK_MATCH];
+
+  return acceptedDomains.some((candidate) => {
+    if (!candidate) return false;
+    if (candidate.includes(".")) {
+      return domain === candidate || domain.endsWith(`.${candidate}`);
+    }
+    return domain.includes(candidate);
+  });
+};
 
 const normalizePortalRequestRole = (value) => {
   const role = String(value || "").trim().toLowerCase();
   return REQUEST_ROLE_OPTIONS.includes(role) ? role : "";
+};
+
+const normalizePublicSelfRequestRole = (value) => {
+  const role = String(value || "").trim().toLowerCase();
+  return PUBLIC_SELF_REQUEST_ROLES.includes(role) ? role : "";
+};
+
+const splitNameParts = (fullName = "", emailFallback = "") => {
+  const cleaned = String(fullName || "").trim();
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  const fallbackBase = String(emailFallback || "").trim().split("@")[0] || "";
+  const firstName = parts[0] || fallbackBase || "Portal";
+  const lastName = parts.slice(1).join(" ") || "User";
+  return {
+    firstName,
+    lastName,
+    fullName: `${firstName} ${lastName}`.trim(),
+  };
+};
+
+const extractEmployeeNameDetails = (employee = {}, normalizedEmail = "") => {
+  const fullName =
+    String(employee?.name || "").trim() ||
+    String(employee?.displayName || "").trim() ||
+    String(employee?.fullName || "").trim() ||
+    `${String(employee?.firstName || "").trim()} ${String(employee?.lastName || "").trim()}`.trim();
+  return splitNameParts(fullName, normalizedEmail);
+};
+
+const extractEmployeeDirectoryIdentifiers = (employee = {}) => {
+  const toId = (value) => String(value || "").trim();
+  const employeeIdCandidates = [
+    employee?.employeeId,
+    employee?.employee_id,
+    employee?.employeeID,
+    employee?.employeeNumber,
+    employee?.staffId,
+    employee?.staff_id,
+    employee?.profile?.employeeId,
+    employee?.profile?.employee_id,
+  ];
+  const userIdCandidates = [
+    employee?.userId,
+    employee?.uid,
+    employee?.id,
+    employee?.profile?.userId,
+    employee?.profile?.uid,
+    employee?.profile?.id,
+  ];
+
+  let employeeId = "";
+  for (const candidate of employeeIdCandidates) {
+    const value = toId(candidate);
+    if (value) {
+      employeeId = value;
+      break;
+    }
+  }
+
+  let userId = "";
+  for (const candidate of userIdCandidates) {
+    const value = toId(candidate);
+    if (value) {
+      userId = value;
+      break;
+    }
+  }
+
+  return {
+    employeeId,
+    userId,
+  };
+};
+
+const isPermissionDeniedError = (error) => {
+  const code = String(error?.code || "").toLowerCase();
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    code.includes("permission-denied") ||
+    code.includes("permission_denied") ||
+    message.includes("missing or insufficient permissions")
+  );
+};
+
+const assertEmployeeSelfRegistrationIsAllowed = async ({ normalizedEmail = "" } = {}) => {
+  const usersRef = collection(db, "users");
+
+  try {
+    const response = await issueSessionTokenCallable({
+      mode: "check_employee_credentials_email",
+      email: normalizedEmail,
+    });
+    const payload = response?.data || {};
+    if (payload?.exists === true) {
+      throw new Error(
+        "Registration denied. This email is already registered. Please log in instead."
+      );
+    }
+  } catch (error) {
+    const code = String(error?.code || "").toLowerCase();
+    if (
+      code === "functions/not-found" ||
+      code === "functions/unavailable" ||
+      code === "functions/internal" ||
+      code === "functions/deadline-exceeded"
+    ) {
+      throw new Error(
+        "Registration check is unavailable right now. Please try again shortly."
+      );
+    }
+    if (error instanceof Error && /^Registration denied\./i.test(error.message || "")) {
+      throw error;
+    }
+    if (error instanceof Error && /^Email is required\./i.test(error.message || "")) {
+      throw error;
+    }
+    throw new Error(error?.message || "Registration check failed.");
+  }
+
+  try {
+    const byEmail = await getDocs(query(usersRef, where("email", "==", normalizedEmail), limit(1)));
+    if (!byEmail.empty) {
+      throw new Error(
+        "Registration denied. This email is already registered. Please log in instead."
+      );
+    }
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) throw error;
+  }
+
+  // Guard against auth users that may exist without a matching Firestore user document.
+  const signInMethods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
+  if (Array.isArray(signInMethods) && signInMethods.length > 0) {
+    throw new Error(
+      "Registration denied. This auth account already exists. Please log in instead."
+    );
+  }
+};
+
+const validateEmployeeSelfRegistrationEmail = async (emailValue) => {
+  const normalizedEmail = normalizeEmail(emailValue || "");
+  if (!normalizedEmail) throw new Error("Email is required.");
+  const { matchedEmployee } = await verifyEmailInHyacinthDepartment(normalizedEmail);
+
+  if (!matchedEmployee) {
+    throw new Error(
+      "Register to HyacinthHub First to Proceed Registration. Click the link to Register: https://hyacinthattendance.firebaseapp.com/register"
+    );
+  }
+
+  await assertEmployeeSelfRegistrationIsAllowed({ normalizedEmail });
+
+  const names = extractEmployeeNameDetails(matchedEmployee, normalizedEmail);
+  const identifiers = extractEmployeeDirectoryIdentifiers(matchedEmployee);
+  return {
+    email: normalizedEmail,
+    employee: matchedEmployee,
+    employeeId: identifiers.employeeId,
+    directoryUserId: identifiers.userId,
+    ...names,
+  };
 };
 
 const getActorIdentity = (actor = {}) => {
@@ -119,6 +312,56 @@ const verifyPortalPassword = async (password, salt, expectedHash) => {
     `${PASSWORD_HASH_PREFIX}:${normalizedSalt}:${String(password || "")}`
   );
   return actual.toLowerCase() === normalizedExpected;
+};
+
+const upsertEmployeeCredentialRecord = async ({
+  firestoreDb = db,
+  userId = "",
+  employeeId = "",
+  email = "",
+  firstName = "",
+  lastName = "",
+  fullName = "",
+  passwordSecret = null,
+} = {}) => {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return;
+
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedFirstName = String(firstName || "").trim();
+  const normalizedLastName = String(lastName || "").trim();
+  const normalizedFullName =
+    String(fullName || "").trim() ||
+    `${normalizedFirstName} ${normalizedLastName}`.trim() ||
+    normalizedEmail ||
+    normalizedUserId;
+  const normalizedEmployeeId = String(employeeId || "").trim();
+
+  const payload = {
+    userId: normalizedUserId,
+    role: ROLES.EMPLOYEE,
+    name: normalizedFullName,
+    email: normalizedEmail,
+    firstName: normalizedFirstName,
+    lastName: normalizedLastName,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (normalizedEmployeeId) {
+    payload.employeeId = normalizedEmployeeId;
+  }
+
+  if (passwordSecret?.salt && passwordSecret?.hash) {
+    payload.portalPasswordSalt = String(passwordSecret.salt).trim();
+    payload.portalPasswordHash = String(passwordSecret.hash).trim();
+    payload.portalPasswordUpdatedAt = serverTimestamp();
+  }
+
+  await setDoc(
+    doc(firestoreDb, EMPLOYEE_CREDENTIALS_COLLECTION, normalizedUserId),
+    payload,
+    { merge: true }
+  );
 };
 
 const addPortalNotification = async ({
@@ -200,6 +443,7 @@ export async function registerPortalUser({
   email,
   password,
   role,
+  employeeId = "",
 }) {
   const normalizedEmail = normalizeEmail(email);
   const normalizedPassword = String(password || "").trim();
@@ -211,7 +455,7 @@ export async function registerPortalUser({
   if (!normalizedPassword) throw new Error("Password is required");
 
   if (
-    ![ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR].includes(
+    ![ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR, ROLES.EMPLOYEE].includes(
       normalizedRole
     )
   ) {
@@ -221,11 +465,13 @@ export async function registerPortalUser({
   let createdUser = null;
   let secondaryApp = null;
   let secondaryAuth = null;
+  let secondaryDb = null;
 
   try {
     const appName = `portal-user-create-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     secondaryApp = initializeApp(buildFirebaseConfigFromEnv(), appName);
     secondaryAuth = getAuth(secondaryApp);
+    secondaryDb = getFirestore(secondaryApp);
 
     const cred = await createUserWithEmailAndPassword(
       secondaryAuth,
@@ -236,27 +482,71 @@ export async function registerPortalUser({
     createdUser = cred.user;
     const uid = createdUser.uid;
     const passwordSecret = await buildPortalPasswordSecret(normalizedPassword);
+    const normalizedFirstName = String(firstName).trim();
+    const normalizedLastName = String(lastName).trim();
+    const normalizedEmployeeId = String(employeeId || "").trim();
+    const allowedPages = DEFAULT_ROLE_PAGES[normalizedRole] || [];
+    const employeeName = `${normalizedFirstName} ${normalizedLastName}`.trim();
 
-    await setDoc(doc(db, "users", uid), {
+    const userPayload = {
       uid,
-      firstName: String(firstName).trim(),
-      lastName: String(lastName).trim(),
+      userId: uid,
+      firstName: normalizedFirstName,
+      lastName: normalizedLastName,
       email: normalizedEmail,
       role: normalizedRole,
-      allowedPages: DEFAULT_ROLE_PAGES[normalizedRole] || [],
+      allowedPages,
       portalPasswordSalt: passwordSecret.salt,
       portalPasswordHash: passwordSecret.hash,
       portalPasswordUpdatedAt: serverTimestamp(),
       createdAt: serverTimestamp(),
-    });
+      updatedAt: serverTimestamp(),
+    };
+
+    if (normalizedRole === ROLES.EMPLOYEE && normalizedEmployeeId) {
+      userPayload.employeeId = normalizedEmployeeId;
+    }
+
+    await setDoc(doc(secondaryDb, "users", uid), userPayload);
+
+    if (normalizedRole === ROLES.EMPLOYEE) {
+      await setDoc(
+        doc(secondaryDb, "user_permissions", uid),
+        {
+          userId: uid,
+          role: ROLES.EMPLOYEE,
+          allowedPages,
+          name: employeeName,
+          email: normalizedEmail,
+          ...(normalizedEmployeeId ? { employeeId: normalizedEmployeeId } : {}),
+          portalPasswordSalt: passwordSecret.salt,
+          portalPasswordHash: passwordSecret.hash,
+          portalPasswordUpdatedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      await upsertEmployeeCredentialRecord({
+        firestoreDb: secondaryDb,
+        userId: uid,
+        employeeId: normalizedEmployeeId,
+        email: normalizedEmail,
+        firstName: normalizedFirstName,
+        lastName: normalizedLastName,
+        fullName: employeeName,
+        passwordSecret,
+      });
+    }
 
     return {
       uid,
       email: normalizedEmail,
-      firstName: String(firstName).trim(),
-      lastName: String(lastName).trim(),
+      firstName: normalizedFirstName,
+      lastName: normalizedLastName,
       role: normalizedRole,
-      allowedPages: DEFAULT_ROLE_PAGES[normalizedRole] || [],
+      allowedPages,
     };
   } catch (error) {
     if (createdUser) {
@@ -283,6 +573,163 @@ export async function registerPortalUser({
       }
     }
   }
+}
+
+export async function selfRegisterPortalUser({
+  firstName,
+  lastName,
+  email,
+  password,
+  role,
+} = {}) {
+  const normalizedRole = normalizePortalRole(role || "");
+  const normalizedEmail = normalizeEmail(email || "");
+  const normalizedPassword = String(password || "").trim();
+  const normalizedFirstName = String(firstName || "").trim();
+  const normalizedLastName = String(lastName || "").trim();
+
+  if (![ROLES.ADMIN, ROLES.VISITOR, ROLES.EMPLOYEE].includes(normalizedRole)) {
+    throw new Error("Select a valid user type.");
+  }
+  if (!normalizedPassword) {
+    throw new Error("Password is required.");
+  }
+  if (normalizedPassword.length < 6) {
+    throw new Error("Password must be at least 6 characters.");
+  }
+
+  if (normalizedRole === ROLES.EMPLOYEE) {
+    const verified = await validateEmployeeSelfRegistrationEmail(normalizedEmail);
+    const employeeFirstName = normalizedFirstName || verified.firstName;
+    const employeeLastName = normalizedLastName || verified.lastName;
+    return registerPortalUser({
+      firstName: employeeFirstName,
+      lastName: employeeLastName,
+      email: verified.email,
+      password: normalizedPassword,
+      role: normalizedRole,
+      employeeId: verified.employeeId || verified.directoryUserId || "",
+    });
+  }
+
+  if (!normalizedFirstName) throw new Error("First name is required.");
+  if (!normalizedLastName) throw new Error("Last name is required.");
+  if (!normalizedEmail) throw new Error("Email is required.");
+
+  return registerPortalUser({
+    firstName: normalizedFirstName,
+    lastName: normalizedLastName,
+    email: normalizedEmail,
+    password: normalizedPassword,
+    role: normalizedRole,
+  });
+}
+
+export async function verifyEmployeeSelfRegistrationEmail(email) {
+  const verified = await validateEmployeeSelfRegistrationEmail(email);
+  return {
+    email: verified.email,
+    firstName: verified.firstName,
+    lastName: verified.lastName,
+    fullName: verified.fullName,
+    employeeId: verified.employeeId || "",
+    directoryUserId: verified.directoryUserId || "",
+  };
+}
+
+export async function createPublicPortalUserRequest({
+  firstName,
+  lastName,
+  email,
+  role,
+  note = "",
+} = {}) {
+  const normalizedFirstName = String(firstName || "").trim();
+  const normalizedLastName = String(lastName || "").trim();
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedRole = normalizePublicSelfRequestRole(role);
+  const normalizedNote = String(note || "").trim();
+
+  if (!normalizedFirstName) throw new Error("First name is required");
+  if (!normalizedLastName) throw new Error("Last name is required");
+  if (!normalizedEmail) throw new Error("Email is required");
+  if (!normalizedRole) throw new Error("Only Admin and Visitor requests are allowed here.");
+
+  const now = new Date();
+  const storageTimeZone = resolveStorageTimeZone();
+
+  const ref = await addDoc(collection(db, PORTAL_USER_REQUESTS_COLLECTION), {
+    firstName: normalizedFirstName,
+    lastName: normalizedLastName,
+    email: normalizedEmail,
+    role: normalizedRole,
+    note: normalizedNote,
+    status: "pending",
+    requestedByUserId: "public-self-registration",
+    requestedByName: "Self Registration",
+    requestedByEmail: normalizedEmail,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    approvedAt: null,
+    approvedByUserId: "",
+    approvedByName: "",
+    approvedByEmail: "",
+    approvedUserId: "",
+    rejectedAt: null,
+    rejectedByUserId: "",
+    rejectedByName: "",
+    rejectedByEmail: "",
+    rejectionReason: "",
+    ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
+    ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+  });
+
+  try {
+    const superAdminSnap = await getDocs(
+      query(collection(db, "users"), where("role", "==", ROLES.SUPER_ADMIN))
+    );
+    const pendingName = `${normalizedFirstName} ${normalizedLastName}`.trim();
+    const title = "New self-registration request";
+    const message = `${pendingName || normalizedEmail} requested a ${getReadableRole(
+      normalizedRole
+    )} portal account.`;
+
+    await Promise.all(
+      superAdminSnap.docs.map((item) => {
+        const superAdminId = String(item.id || "").trim();
+        if (!superAdminId) return Promise.resolve();
+
+        return addPortalNotification({
+          audience: "super_admin",
+          userId: superAdminId,
+          role: ROLES.SUPER_ADMIN,
+          type: "portal_user_request_pending",
+          title,
+          message,
+          targetPage: "control_panel",
+          actorUserId: "public-self-registration",
+          actorName: "Self Registration",
+          extra: {
+            portalUserRequestId: ref.id,
+            requestedRole: normalizedRole,
+            requestedEmail: normalizedEmail,
+          },
+        });
+      })
+    );
+  } catch (err) {
+    console.error("Failed to notify super admins about public user request:", err);
+  }
+
+  return {
+    id: ref.id,
+    firstName: normalizedFirstName,
+    lastName: normalizedLastName,
+    email: normalizedEmail,
+    role: normalizedRole,
+    note: normalizedNote,
+    status: "pending",
+  };
 }
 
 export async function createPortalUserRequest({
@@ -679,9 +1126,20 @@ const changeCurrentUserPassword = async ({ oldPassword, newPassword, confirmPass
   const passwordSecret = await buildPortalPasswordSecret(newValue);
   const now = new Date();
   const storageTimeZone = resolveStorageTimeZone();
+  const userRef = doc(db, "users", currentUser.uid);
+  const userSnap = await getDoc(userRef);
+  const currentProfile = userSnap.exists() ? userSnap.data() || {} : {};
+  const currentRole = normalizePortalRole(currentProfile?.role || "");
+  const firstName = String(currentProfile?.firstName || "").trim();
+  const lastName = String(currentProfile?.lastName || "").trim();
+  const employeeName =
+    String(currentProfile?.name || "").trim() ||
+    `${firstName} ${lastName}`.trim() ||
+    currentEmail;
+  const employeeId = String(currentProfile?.employeeId || "").trim();
 
   await setDoc(
-    doc(db, "users", currentUser.uid),
+    userRef,
     {
       portalPasswordSalt: passwordSecret.salt,
       portalPasswordHash: passwordSecret.hash,
@@ -692,6 +1150,36 @@ const changeCurrentUserPassword = async ({ oldPassword, newPassword, confirmPass
     },
     { merge: true }
   );
+
+  if (currentRole === ROLES.EMPLOYEE) {
+    await setDoc(
+      doc(db, "user_permissions", currentUser.uid),
+      {
+        userId: currentUser.uid,
+        role: ROLES.EMPLOYEE,
+        name: employeeName,
+        email: currentEmail,
+        ...(employeeId ? { employeeId } : {}),
+        portalPasswordSalt: passwordSecret.salt,
+        portalPasswordHash: passwordSecret.hash,
+        portalPasswordUpdatedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        ...buildTimeZoneMeta("portalPasswordUpdatedAtClient", now, storageTimeZone),
+        ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
+      },
+      { merge: true }
+    );
+
+    await upsertEmployeeCredentialRecord({
+      userId: currentUser.uid,
+      employeeId,
+      email: currentEmail,
+      firstName,
+      lastName,
+      fullName: employeeName,
+      passwordSecret,
+    });
+  }
 
   return {
     success: true,

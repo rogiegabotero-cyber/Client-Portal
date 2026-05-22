@@ -10,6 +10,7 @@ import EmployeeDashboard from "./components/employee_dashboard";
 import NotificationsPage from "./components/NotificationsPage";
 import LoginPage from "./components/LoginPage";
 import RegisterPortalUser from "./components/RegisterPortalUser";
+import SelfRegisterPage from "./components/SelfRegisterPage";
 import ControlPanelPage from "./components/ControlPanelPage";
 
 import "./App.css";
@@ -5503,11 +5504,15 @@ export default function App() {
   }
 
   if (!isAuthenticated) {
-    return authScreen === "register" ? (
-      <RegisterPortalUser onBackToLogin={() => setAuthScreen("login")} />
-    ) : (
+    if (authScreen === "register") {
+      return <RegisterPortalUser onBackToLogin={() => setAuthScreen("login")} />;
+    }
+    if (authScreen === "self-register") {
+      return <SelfRegisterPage onBackToLogin={() => setAuthScreen("login")} />;
+    }
+    return (
       <div className="portal-login-boot-wrap">
-        <LoginPage onGoToRegister={() => setAuthScreen("register")} />
+        <LoginPage onGoToRegister={() => setAuthScreen("self-register")} />
         {showLoginBootSkeleton ? renderLoginSkeletonOverlay("Loading sign in...") : null}
       </div>
     );

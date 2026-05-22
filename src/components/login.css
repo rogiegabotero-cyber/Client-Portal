@@ -200,7 +200,20 @@
   border: 1px solid #fecaca;
   padding: 12px;
   border-radius: 10px;
-  font-size: 14px;
+  font-size: 12px;
+}
+
+.login-error a {
+  color: #7f1d1d;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 1px;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+.login-error a:hover {
+  color: #0004d3;
+  text-decoration-color: #00158d;
 }
 
 .login-success {
@@ -234,6 +247,38 @@
   cursor: not-allowed;
 }
 
+.login-primary-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.login-primary-actions .login-button {
+  width: 100%;
+}
+
+.login-self-register-btn {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+  text-align: right;
+}
+
+.login-self-register-btn:hover {
+  text-decoration: underline;
+}
+
+.login-self-register-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
 .login-secondary-button {
   height: 48px;
   border: 1px solid #cbd5e1;
@@ -243,6 +288,186 @@
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.login-register-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: center;
+}
+
+.login-register-actions.single-action {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.login-register-actions .login-secondary-button {
+  min-width: 132px;
+  height: 46px;
+  padding: 0 14px;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-register-actions .login-button {
+  min-width: 132px;
+  height: 46px;
+  padding: 0 16px;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.self-register-next-arrow {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.self-register-left {
+  justify-content: flex-start;
+}
+
+.self-register-cancel-link {
+  margin-top: auto;
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: #7f1d1d;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 0 0;
+  cursor: pointer;
+}
+
+.self-register-cancel-link:hover {
+  text-decoration: underline;
+}
+
+.self-register-cancel-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.self-register-stepper {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 18px;
+}
+
+.self-register-stepper-item {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.self-register-stepper-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid #cbd5e1;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+}
+
+.self-register-stepper-line {
+  position: absolute;
+  top: 15px;
+  left: calc(50% + 16px);
+  width: calc(100% - 20px);
+  height: 2px;
+  background: #d1d5db;
+}
+
+.self-register-stepper-label {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.25;
+  color: #64748b;
+  max-width: 120px;
+}
+
+.self-register-stepper-item.active .self-register-stepper-circle {
+  border-color: #0891b2;
+  color: #0e7490;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.12);
+}
+
+.self-register-stepper-item.active .self-register-stepper-label {
+  color: #0e7490;
+  font-weight: 700;
+}
+
+.self-register-stepper-item.active .self-register-stepper-line {
+  background: #67c4d8;
+}
+
+.self-register-role-grid {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 10px;
+}
+
+.self-register-question {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.self-register-question-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #334155;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+.self-register-role-option {
+  min-height: 32px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #0f172a;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.14s ease, color 0.14s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+}
+
+.self-register-role-option:hover {
+  transform: translateY(-1px);
+  color: #334155;
+}
+
+.self-register-role-option input[type="radio"] {
+  margin: 0;
+  accent-color: #7f1d1d;
+}
+
+.self-register-role-option.selected {
+  border: 0;
+  background: transparent;
+  color: #7f1d1d;
 }
 
 .login-note {
@@ -729,6 +954,59 @@
   font-size: 16px;
 }
 
+.self-register-success-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.54);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  z-index: 1200;
+}
+
+.self-register-success-modal {
+  width: min(460px, 100%);
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.28);
+  padding: 22px;
+  display: grid;
+  gap: 12px;
+}
+
+.self-register-success-modal h3 {
+  margin: 0;
+  font-size: 22px;
+  color: #0f172a;
+}
+
+.self-register-success-modal p {
+  margin: 0;
+  font-size: 14px;
+  color: #334155;
+  line-height: 1.55;
+}
+
+.self-register-success-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.self-register-success-actions .login-button {
+  min-width: 130px;
+  margin-top: 0;
+}
+
+.self-register-success-timer {
+  min-width: 44px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #64748b;
+  text-align: right;
+}
+
 @media (max-width: 900px) {
   .login-card {
     grid-template-columns: 1fr;
@@ -760,6 +1038,18 @@
     padding: 28px 22px;
   }
 
+  .self-register-success-modal {
+    padding: 18px;
+  }
+
+  .self-register-success-modal h3 {
+    font-size: 20px;
+  }
+
+  .self-register-success-actions .login-button {
+    min-width: 118px;
+  }
+
   .login-left-hero {
     padding: 0;
     margin-bottom: 18px;
@@ -776,6 +1066,27 @@
 
   .login-left-hero-subtitle {
     font-size: 13px;
+  }
+
+  .self-register-stepper {
+    gap: 4px;
+  }
+
+  .self-register-stepper-circle {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+
+  .self-register-stepper-line {
+    top: 13px;
+    left: calc(50% + 14px);
+    width: calc(100% - 16px);
+  }
+
+  .self-register-stepper-label {
+    font-size: 10px;
+    max-width: 96px;
   }
 
   .login-right-petals-bg {

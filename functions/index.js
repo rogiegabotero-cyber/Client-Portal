@@ -19,6 +19,7 @@ const callableRuntimeOptions = {
 
 const USERS_COLLECTION = "users";
 const USER_PERMISSIONS_COLLECTION = "user_permissions";
+const EMPLOYEE_CREDENTIALS_COLLECTION = "employee_credentials";
 
 const PASSWORD_HASH_PREFIX = "portal_v1";
 
@@ -563,6 +564,49 @@ const buildDisplayName = (row = {}, fallbackEmail = "") => {
   return fallbackEmail || "Portal User";
 };
 
+const upsertEmployeeCredentialsRecord = async ({
+  userId = "",
+  employeeId = "",
+  email = "",
+  name = "",
+  role = ROLES.EMPLOYEE,
+  allowedPages = [],
+  passwordSecret = null,
+} = {}) => {
+  const normalizedUserId = toText(userId);
+  if (!normalizedUserId) return;
+
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedName = toText(name) || normalizedEmail || normalizedUserId;
+  const normalizedEmployeeId = toText(employeeId);
+  const cleanAllowedPages = normalizeAllowedPages(allowedPages, ROLES.EMPLOYEE);
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  const payload = {
+    userId: normalizedUserId,
+    role: normalizeRole(role) || ROLES.EMPLOYEE,
+    email: normalizedEmail,
+    name: normalizedName,
+    allowedPages: cleanAllowedPages,
+    updatedAt: now,
+  };
+
+  if (normalizedEmployeeId) {
+    payload.employeeId = normalizedEmployeeId;
+  }
+
+  if (passwordSecret?.salt && passwordSecret?.hash) {
+    payload.portalPasswordSalt = toText(passwordSecret.salt);
+    payload.portalPasswordHash = toText(passwordSecret.hash);
+    payload.portalPasswordUpdatedAt = now;
+  }
+
+  await db.collection(EMPLOYEE_CREDENTIALS_COLLECTION).doc(normalizedUserId).set(
+    payload,
+    { merge: true }
+  );
+};
+
 const validatePasswordPayload = (payload = {}) => {
   const oldPassword = toText(payload?.oldPassword || payload?.currentPassword);
   const newPassword = toText(payload?.newPassword);
@@ -586,6 +630,42 @@ const validatePasswordPayload = (payload = {}) => {
     newPassword,
   };
 };
+
+exports.checkEmployeeCredentialsEmail = onCall(callableRuntimeOptions, async (request) => {
+  const rawEmail = toText(request?.data?.email);
+  const normalizedEmail = normalizeEmail(rawEmail);
+
+  if (!normalizedEmail) {
+    throw new HttpsError("invalid-argument", "Email is required.");
+  }
+
+  const candidates = Array.from(new Set([normalizedEmail, rawEmail].filter(Boolean)));
+
+  for (const candidateEmail of candidates) {
+    const snap = await db
+      .collection(EMPLOYEE_CREDENTIALS_COLLECTION)
+      .where("email", "==", candidateEmail)
+      .limit(1)
+      .get();
+
+    if (!snap.empty) {
+      const row = snap.docs[0];
+      return {
+        exists: true,
+        email: normalizedEmail,
+        match: {
+          docId: row.id,
+          email: normalizeEmail(row.data()?.email || candidateEmail),
+        },
+      };
+    }
+  }
+
+  return {
+    exists: false,
+    email: normalizedEmail,
+  };
+});
 
 const verifyEmployeePassword = async ({ userId, oldPassword, row = {} }) => {
   const storedSalt = toText(row?.portalPasswordSalt);
@@ -611,12 +691,54 @@ const verifyEmployeePassword = async ({ userId, oldPassword, row = {} }) => {
       },
       { merge: true }
     );
+
+    await upsertEmployeeCredentialsRecord({
+      userId,
+      employeeId: row?.employeeId,
+      email: row?.email,
+      name: buildDisplayName(row, normalizeEmail(row?.email)),
+      role: ROLES.EMPLOYEE,
+      allowedPages: row?.allowedPages,
+      passwordSecret,
+    });
   }
 
   return isLegacyMatch;
 };
 
 exports.issueSessionToken = onCall(callableRuntimeOptions, async (request) => {
+  const mode = toText(request?.data?.mode || request?.data?.action).toLowerCase();
+  if (mode === "check_employee_credentials_email") {
+    const rawEmail = toText(request?.data?.email || request?.data?.identifier);
+    const normalizedEmail = normalizeEmail(rawEmail);
+
+    if (!normalizedEmail) {
+      throw new HttpsError("invalid-argument", "Email is required.");
+    }
+
+    const candidates = Array.from(new Set([normalizedEmail, rawEmail].filter(Boolean)));
+
+    for (const candidateEmail of candidates) {
+      const snap = await db
+        .collection(EMPLOYEE_CREDENTIALS_COLLECTION)
+        .where("email", "==", candidateEmail)
+        .limit(1)
+        .get();
+
+      if (!snap.empty) {
+        return {
+          exists: true,
+          email: normalizedEmail,
+        };
+      }
+    }
+
+    return {
+      exists: false,
+      email: normalizedEmail,
+    };
+  }
+
   const identifier = toText(request?.data?.identifier);
   const password = toText(request?.data?.password);
   let stage = "input-validation";
@@ -869,6 +991,18 @@ exports.changeOwnPassword = onCall(callableRuntimeOptions, async (request) => {
       { merge: true }
     );
 
+    if (isEmployee) {
+      await upsertEmployeeCredentialsRecord({
+        userId: uid,
+        employeeId: current?.employeeId,
+        email: current?.email,
+        name: buildDisplayName(current, normalizeEmail(current?.email)),
+        role: ROLES.EMPLOYEE,
+        allowedPages: current?.allowedPages,
+        passwordSecret,
+      });
+    }
+
     return {
       success: true,
       message: "Portal password updated successfully.",
@@ -1045,6 +1179,16 @@ exports.adminResetEmployeePassword = onCall(callableRuntimeOptions, async (reque
     },
     { merge: true }
   );
+
+  await upsertEmployeeCredentialsRecord({
+    userId,
+    employeeId: resolvedEmployeeId,
+    email: resolvedEmail,
+    name: resolvedName,
+    role: ROLES.EMPLOYEE,
+    allowedPages,
+    passwordSecret,
+  });
 
   return {
     success: true,
