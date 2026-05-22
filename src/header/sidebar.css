@@ -1,5 +1,5 @@
 .sidebar {
-  --sb-surface-bg: linear-gradient(180deg, #420004, #420004);
+  --sb-surface-bg: #420004;
   --sb-surface-size: 100% 100vh;
   width: 260px;
   min-width: 260px;
@@ -34,10 +34,10 @@
 
 .sb-ambient-petals {
   position: absolute;
-  top: calc(55% + 40px);
-  left: -230px;
-  width: 480px;
-  height: 480px;
+  top: calc(55% + 20px);
+  left: -250px;
+  width: 580px;
+  height: 580px;
   transform: translateY(-50%);
   opacity: 0.09;
 }
@@ -100,6 +100,7 @@
 }
 
 .sidebar > .sb-scroll-area,
+.sidebar > .navbar,
 .sidebar > .sb-collapse-section {
   position: relative;
   z-index: 1;
@@ -111,15 +112,14 @@
 }
 
 .sidebar.is-collapsed .sb-ambient-petals {
-  left: -240px;
-  width: 360px;
-  height: 360px;
+  left: -300px;
+  width: 540px;
+  height: 540px;
 }
 
 .navbar {
-  position: sticky; 
-  top: 0;             
-  z-index: 220;
+  position: relative;
+  z-index: 2;
   overflow: hidden;
   isolation: isolate;
   background: transparent;
@@ -127,15 +127,7 @@
 }
 
 .navbar::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: var(--sb-surface-bg);
-  background-size: var(--sb-surface-size);
-  background-position: top left;
-  background-repeat: no-repeat;
-  z-index: 0;
-  pointer-events: none;
+  content: none;
 }
 
 .navbar > * {
@@ -185,7 +177,7 @@
   gap: 12px;
   padding: 10px 10px 14px;
   margin-bottom: 10px;
-  position: sticky;
+  position: relative;
 }
 
 .sb-brand-badge {
@@ -248,10 +240,10 @@
 .sb-card {
   padding: 5px;
   margin: 5px 0px 7px 10px;
-  position: sticky;
+  position: relative;
   overflow-y: auto;
   overflow-x: hidden;
-  max-height: auto;
+  max-height: none;
   overscroll-behavior: contain;
 }
 
@@ -391,11 +383,11 @@
 
 .nav-title {
   position: sticky;
+  top: 0;
   z-index: 95;
   padding: 10px;
   font-weight: 600;
-   background: var(--sb-surface-bg);
-  background-size: var(--sb-surface-size);
+  background: transparent;
 }
 
 .sb-group-toggle {
@@ -615,8 +607,7 @@
   flex-shrink: 0;
   padding: 10px 8px;
   border-top: 1px solid rgba(0, 0, 0, 0.24);
-  background: var(--sb-surface-bg);
-  background-size: var(--sb-surface-size);
+  background: transparent;
   display: flex;
   justify-content: flex-end;
   z-index: 96;

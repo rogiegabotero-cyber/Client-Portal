@@ -13,7 +13,7 @@
   min-height: 620px;
   background: #ffffff;
   display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
+  grid-template-columns: 0.9fr 1.0fr;
   border-radius: 22px;
   overflow: hidden;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.25);
@@ -24,6 +24,95 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
+}
+
+.container-border{
+  padding: 60px 30px;
+  border: solid 0.5px rgba(0, 0, 0, 0.349);
+  border-radius: 10px;
+}
+
+.login-left-hero {
+  background: transparent;
+  color: #0f172a;
+  border-radius: 0;
+  padding: 0;
+  margin: 0 0 24px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.login-left-hero::before {
+  content: none;
+}
+
+.login-left-hero::after {
+  content: none;
+}
+
+.login-left-hero-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-left-hero-logo-badge {
+  width: 82px;
+  height: 82px;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px solid #e2e8f0;
+  display: grid;
+  place-items: center;
+}
+
+.login-left-hero-logo-badge img {
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+}
+
+.login-right-side-badge {
+  position: relative;
+  left: auto;
+  top: auto;
+  transform: none;
+  border-color: rgba(255, 255, 255, 0.35);
+  flex: 0 0 auto;
+  z-index: 2;
+}
+
+.login-left-hero-header-text {
+  display: grid;
+  gap: 2px;
+}
+
+.login-left-hero-kicker {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 1px;
+  font-weight: 800;
+  opacity: 1;
+  color: #475569;
+}
+
+.login-left-hero-header-text h1 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #4e0106;
+}
+
+.login-left-hero-subtitle {
+  position: relative;
+  z-index: 1;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #475569;
 }
 
 .login-header h1 {
@@ -184,6 +273,13 @@
   gap: 2rem;
 }
 
+.login-right--petals {
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 48px 32px;
+}
+
 .login-right--petals .login-brand-box {
   position: relative;
   z-index: 2;
@@ -192,6 +288,38 @@
 .login-right--petals .hhiuhai-logo {
   position: relative;
   z-index: 2;
+}
+
+.login-right--petals .login-right-header,
+.login-right--petals .login-right-subtitle,
+.login-right--petals .login-right-portal-copy {
+  position: relative;
+  z-index: 2;
+}
+
+.login-right-center-brand {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  max-width: 420px;
+}
+
+.login-right-portal-copy h3 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  line-height: 1.2;
+  color: #ffffff;
+}
+
+.login-right-portal-copy p {
+  margin: 0;
+  max-width: 320px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.86);
 }
 
 .login-right-spots {
@@ -608,6 +736,46 @@
 
   .login-right {
     min-height: 220px;
+  }
+
+  .login-right--petals {
+    padding: 28px 22px;
+  }
+
+  .login-right-side-badge {
+    width: 66px;
+    height: 66px;
+  }
+
+  .login-right-center-brand {
+    max-width: 100%;
+    gap: 10px;
+  }
+
+  .login-right-portal-copy h3 {
+    font-size: 22px;
+  }
+
+  .login-left {
+    padding: 28px 22px;
+  }
+
+  .login-left-hero {
+    padding: 0;
+    margin-bottom: 18px;
+  }
+
+  .login-left-hero-kicker {
+    font-size: 10px;
+    letter-spacing: 1.6px;
+  }
+
+  .login-left-hero-header-text h1 {
+    font-size: 13px;
+  }
+
+  .login-left-hero-subtitle {
+    font-size: 13px;
   }
 
   .login-right-petals-bg {
