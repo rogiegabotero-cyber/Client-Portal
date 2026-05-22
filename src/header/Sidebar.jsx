@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { canAccessPage } from "../auth/roleUtils";
 import HHIUHAI from "../assets/hhi-uhai.png";
+import HHIPetals from "../assets/HHI-Petals.png";
 
 export default function Sidebar({
   activePage,
@@ -298,6 +299,15 @@ export default function Sidebar({
 
   return (
     <aside className={`sidebar ${isSidebarCollapsed ? "is-collapsed" : ""}`} ref={sidebarRef}>
+      <div className="sb-ambient" aria-hidden="true">
+        <span className="sb-ambient-spot sb-ambient-spot--dark-1" />
+        <span className="sb-ambient-spot sb-ambient-spot--dark-2" />
+        <span className="sb-ambient-spot sb-ambient-spot--light-1" />
+        <span className="sb-ambient-spot sb-ambient-spot--light-2" />
+        <div className="sb-ambient-petals">
+          <img src={HHIPetals} alt="" />
+        </div>
+      </div>
       <div className="sb-scroll-area">
         <div className="anchore" />
 
