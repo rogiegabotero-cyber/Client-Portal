@@ -1,5 +1,6 @@
 ﻿import React, { useMemo, useState, useEffect } from "react";
 import "./attendancePage.css";
+import { createPortal } from "react-dom";
 import { getBusinessDayKey } from "../utils/attendanceDate";
 import {
   getDisplayName,
@@ -937,6 +938,8 @@ export default function AttendancePage({
     onConsumeOpenEmployeeDrawerRequest,
   ]);
 
+  const portalTarget = typeof document !== "undefined" ? document.body : null;
+
   return (
     <div className="attx">
       <div className="attxTop">
@@ -1145,130 +1148,136 @@ export default function AttendancePage({
         </div>
       </div>
 
-      {drawerOpen && (
-        <div
-          className="attxDrawerBackdrop"
-          onClick={closeDrawer}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => e.key === "Escape" && closeDrawer()}
-        />
-      )}
+      {portalTarget
+        ? createPortal(
+            <>
+              {drawerOpen && (
+                <div
+                  className="attxDrawerBackdrop"
+                  onClick={closeDrawer}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === "Escape" && closeDrawer()}
+                />
+              )}
 
-      <div className={`attxDrawer ${drawerOpen ? "open" : ""}`} role="dialog" aria-modal="true">
-        <div className="attxDrawerHead">
-          <div className="attxDrawerIdentity">
-            <div className="attxDrawerTitle">Attendance Records</div>
-            <div className="attxDrawerPerson">
-              <div className="attxAvatar" aria-label={drawerRow?.name || "Employee"}>
-                {drawerRow?.profileImg ? (
-                  <img
-                    src={drawerRow.profileImg}
-                    alt={`${drawerRow?.name || "Employee"} profile`}
-                    className="attxAvatarImg"
-                    loading="lazy"
-                  />
-                ) : (
-                  initials(drawerRow?.name || "")
-                )}
+              <div className={`attxDrawer ${drawerOpen ? "open" : ""}`} role="dialog" aria-modal="true">
+                <div className="attxDrawerHead">
+                  <div className="attxDrawerIdentity">
+                    <div className="attxDrawerTitle">Attendance Records</div>
+                    <div className="attxDrawerPerson">
+                      <div className="attxAvatar" aria-label={drawerRow?.name || "Employee"}>
+                        {drawerRow?.profileImg ? (
+                          <img
+                            src={drawerRow.profileImg}
+                            alt={`${drawerRow?.name || "Employee"} profile`}
+                            className="attxAvatarImg"
+                            loading="lazy"
+                          />
+                        ) : (
+                          initials(drawerRow?.name || "")
+                        )}
+                      </div>
+                      <div className="attxDrawerMeta">
+                        <div className="attxDrawerName">{drawerRow?.name || "-"}</div>
+                        <div className="attxDrawerSub">{drawerRow?.email || drawerRow?.userId || "-"}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button className="attxDrawerClose" type="button" onClick={closeDrawer}>
+                    X
+                  </button>
+                </div>
+
+                <div className="attxDrawerBody">
+                  <div className="attxHistoryTop">
+                    <div className="attxHistoryMeta">
+                      {drawerHistoryLoading
+                        ? "Loading history..."
+                        : `Showing ${Math.min(historyLimit, drawerHistoryRows.length)} of ${drawerHistoryRows.length} records`}
+                    </div>
+
+                    {drawerHistoryError ? (
+                      <div className="attxAlert attxAlertFlat">
+                        {drawerHistoryError}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="attxHistoryTableWrap">
+                    <table className="attxHistoryTable">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Day</th>
+                          <th colSpan={3}>IN</th>
+                          <th colSpan={3}>OUT</th>
+                          <th>Notes</th>
+                        </tr>
+                        <tr>
+                          <th />
+                          <th />
+                          <th>Time</th>
+                          <th>Status</th>
+                          <th>Difference</th>
+                          <th>Time</th>
+                          <th>Status</th>
+                          <th>Duration</th>
+                          <th />
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {drawerHistoryLoading ? (
+                          <tr>
+                            <td colSpan={9} className="attxHistoryEmpty">
+                              Fetching full attendance history...
+                            </td>
+                          </tr>
+                        ) : drawerHistoryRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="attxHistoryEmpty">
+                              No attendance records found.
+                            </td>
+                          </tr>
+                        ) : (
+                          drawerHistoryRows.slice(0, historyLimit).map((r) => (
+                            <tr key={r.key}>
+                              <td>{r.date}</td>
+                              <td>{r.day}</td>
+                              <td className="attxHistTime">{r.inTime}</td>
+                              <td>
+                                <span className={`attxHistPill ${statusBadgeClass(r.inStatus)}`}>{r.inStatus}</span>
+                              </td>
+                              <td>{r.difference}</td>
+                              <td className="attxHistTime">{r.outTime}</td>
+                              <td>
+                                <span className={`attxHistPill ${r.outStatus === "Complete" ? "done" : "warn"}`}>
+                                  {r.outStatus}
+                                </span>
+                              </td>
+                              <td>{r.duration}</td>
+                              <td className="attxHistoryNotes">{r.notes}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  {!drawerHistoryLoading && drawerHistoryRows.length > historyLimit && (
+                    <div className="attxHistoryMore">
+                      <button className="attxBtn" type="button" onClick={() => setHistoryLimit((n) => n + 30)}>
+                        Load more
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="attxDrawerMeta">
-                <div className="attxDrawerName">{drawerRow?.name || "-"}</div>
-                <div className="attxDrawerSub">{drawerRow?.email || drawerRow?.userId || "-"}</div>
-              </div>
-            </div>
-          </div>
-
-          <button className="attxDrawerClose" type="button" onClick={closeDrawer}>
-            X
-          </button>
-        </div>
-
-        <div className="attxDrawerBody">
-          <div className="attxHistoryTop">
-            <div className="attxHistoryMeta">
-              {drawerHistoryLoading
-                ? "Loading history..."
-                : `Showing ${Math.min(historyLimit, drawerHistoryRows.length)} of ${drawerHistoryRows.length} records`}
-            </div>
-
-            {drawerHistoryError ? (
-              <div className="attxAlert attxAlertFlat">
-                {drawerHistoryError}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="attxHistoryTableWrap">
-            <table className="attxHistoryTable">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Day</th>
-                  <th colSpan={3}>IN</th>
-                  <th colSpan={3}>OUT</th>
-                  <th>Notes</th>
-                </tr>
-                <tr>
-                  <th />
-                  <th />
-                  <th>Time</th>
-                  <th>Status</th>
-                  <th>Difference</th>
-                  <th>Time</th>
-                  <th>Status</th>
-                  <th>Duration</th>
-                  <th />
-                </tr>
-              </thead>
-
-              <tbody>
-                {drawerHistoryLoading ? (
-                  <tr>
-                    <td colSpan={9} className="attxHistoryEmpty">
-                      Fetching full attendance history...
-                    </td>
-                  </tr>
-                ) : drawerHistoryRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="attxHistoryEmpty">
-                      No attendance records found.
-                    </td>
-                  </tr>
-                ) : (
-                  drawerHistoryRows.slice(0, historyLimit).map((r) => (
-                    <tr key={r.key}>
-                      <td>{r.date}</td>
-                      <td>{r.day}</td>
-                      <td className="attxHistTime">{r.inTime}</td>
-                      <td>
-                        <span className={`attxHistPill ${statusBadgeClass(r.inStatus)}`}>{r.inStatus}</span>
-                      </td>
-                      <td>{r.difference}</td>
-                      <td className="attxHistTime">{r.outTime}</td>
-                      <td>
-                        <span className={`attxHistPill ${r.outStatus === "Complete" ? "done" : "warn"}`}>
-                          {r.outStatus}
-                        </span>
-                      </td>
-                      <td>{r.duration}</td>
-                      <td className="attxHistoryNotes">{r.notes}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-          {!drawerHistoryLoading && drawerHistoryRows.length > historyLimit && (
-            <div className="attxHistoryMore">
-              <button className="attxBtn" type="button" onClick={() => setHistoryLimit((n) => n + 30)}>
-                Load more
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
+            </>,
+            portalTarget
+          )
+        : null}
     </div>
   );
 }
-

@@ -12,6 +12,7 @@ const SELF_REGISTER_ROLES = [
   { value: "visitor", label: "Visitor" },
   { value: "admin", label: "Admin" },
 ];
+const TEMP_UNAVAILABLE_SELF_REGISTER_ROLES = new Set(["visitor", "admin"]);
 const HYACINTH_REGISTER_URL = "https://hyacinthattendance.firebaseapp.com/register";
 const SUCCESS_REDIRECT_SECONDS = 15;
 
@@ -267,23 +268,31 @@ export default function SelfRegisterPage({ onBackToLogin }) {
                   What type of user are you registering?
                 </legend>
                 <div className="self-register-role-grid">
-                  {SELF_REGISTER_ROLES.map((item) => (
-                    <label
-                      key={item.value}
-                      className={`self-register-role-option ${
-                        form.role === item.value ? "selected" : ""
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="role"
-                        value={item.value}
-                        checked={form.role === item.value}
-                        onChange={() => handleRoleSelect(item.value)}
-                      />
-                      <span>{item.label}</span>
-                    </label>
-                  ))}
+                  {SELF_REGISTER_ROLES.map((item) => {
+                    const isUnavailable = TEMP_UNAVAILABLE_SELF_REGISTER_ROLES.has(item.value);
+                    return (
+                      <label
+                        key={item.value}
+                        className={`self-register-role-option ${
+                          form.role === item.value ? "selected" : ""
+                        } ${isUnavailable ? "unavailable" : ""}`}
+                        title={isUnavailable ? "Not avilable" : undefined}
+                      >
+                        <input
+                          type="radio"
+                          name="role"
+                          value={item.value}
+                          checked={form.role === item.value}
+                          onChange={() => {
+                            if (isUnavailable) return;
+                            handleRoleSelect(item.value);
+                          }}
+                          disabled={loading || isUnavailable}
+                        />
+                        <span>{item.label}</span>
+                      </label>
+                    );
+                  })}
                 </div>
               </fieldset>
             ) : null}

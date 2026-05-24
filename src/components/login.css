@@ -470,6 +470,16 @@
   color: #7f1d1d;
 }
 
+.self-register-role-option.unavailable {
+  cursor: not-allowed;
+  color: #94a3b8;
+}
+
+.self-register-role-option.unavailable:hover {
+  transform: none;
+  color: #94a3b8;
+}
+
 .login-note {
   margin-top: 22px;
   padding: 14px 16px;
