@@ -6,6 +6,7 @@ import {
   verifyEmployeeSelfRegistrationEmail,
 } from "../auth/firebaseAuthService";
 import "./login.css";
+import HHIPetals from "../assets/HHI-Petals.png";
 
 const SELF_REGISTER_ROLES = [
   { value: "employee", label: "Employee" },
@@ -514,13 +515,37 @@ export default function SelfRegisterPage({ onBackToLogin }) {
         </div>
 
         <div className="login-right login-right--petals">
-          <div className="login-right-spots" aria-hidden="true" />
-          <div className="login-right-portal-copy">
-            <h3>Registration Flow</h3>
-            <p>
-              Employee registration is verified against Hyacinth + Unicorn Hair data before
-              credentials are saved.
-            </p>
+          <div className="login-right-spots" aria-hidden="true">
+            <span className="login-right-spot login-right-spot--1" />
+            <span className="login-right-spot login-right-spot--2" />
+            <span className="login-right-spot login-right-spot--3" />
+            <span className="login-right-spot login-right-spot--4" />
+            <span className="login-right-spot login-right-spot--5" />
+            <span className="login-right-spot login-right-spot--6" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--w1" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--w2" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--w3" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--w4" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--white-lg login-right-spot--w5" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--white-lg login-right-spot--w6" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--white-lg login-right-spot--w7" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--white-xs login-right-spot--w8" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--white-xs login-right-spot--w9" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--white-xs login-right-spot--w10" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--white-xs login-right-spot--w11" />
+            <span className="login-right-spot login-right-spot--white login-right-spot--white-xs login-right-spot--w12" />
+          </div>
+          <div className="login-right-petals-bg" aria-hidden="true">
+            <img src={HHIPetals} alt="" />
+          </div>
+          <div className="login-right-center-brand">
+            <div className="login-right-portal-copy">
+              <h3>Registration Flow</h3>
+              <p>
+                Employee registration is verified against Hyacinth + Unicorn Hair data before
+                credentials are saved.
+              </p>
+            </div>
           </div>
         </div>
       </div>
