@@ -170,13 +170,6 @@ export default function SpecialUsersPage({
     const password = String(approvalPasswordById?.[requestId] || "").trim();
 
     if (!requestId) return;
-    if (!password) {
-      setRequestActionErrorById((prev) => ({
-        ...prev,
-        [requestId]: "Enter a temporary password before approving.",
-      }));
-      return;
-    }
 
     setRequestActionErrorById((prev) => ({ ...prev, [requestId]: "" }));
 
@@ -384,7 +377,7 @@ export default function SpecialUsersPage({
                     <input
                       type="password"
                       className="special-users-request-input"
-                      placeholder="Temporary password (required to approve)"
+                      placeholder="Temporary password (optional)"
                       value={approvalPasswordById?.[requestId] || ""}
                       onChange={(e) =>
                         setApprovalPasswordById((prev) => ({

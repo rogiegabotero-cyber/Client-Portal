@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import {
-  createPublicPortalUserRequest,
+  beginVisitorGoogleSelfRegistration,
   selfRegisterPortalUser,
   verifyEmployeeSelfRegistrationEmail,
 } from "../auth/firebaseAuthService";
@@ -11,9 +11,8 @@ import HHIPetals from "../assets/HHI-Petals.png";
 const SELF_REGISTER_ROLES = [
   { value: "employee", label: "Employee" },
   { value: "visitor", label: "Visitor" },
-  { value: "admin", label: "Admin" },
 ];
-const TEMP_UNAVAILABLE_SELF_REGISTER_ROLES = new Set(["visitor", "admin"]);
+const TEMP_UNAVAILABLE_SELF_REGISTER_ROLES = new Set([]);
 const HYACINTH_REGISTER_URL = "https://hyacinthattendance.firebaseapp.com/register";
 const SUCCESS_REDIRECT_SECONDS = 15;
 
@@ -28,25 +27,25 @@ export default function SelfRegisterPage({ onBackToLogin }) {
     confirmPassword: "",
   });
   const [employeeVerified, setEmployeeVerified] = useState(null);
+  const [visitorGoogleProfile, setVisitorGoogleProfile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [showEmployeePassword, setShowEmployeePassword] = useState(false);
   const [showEmployeeConfirmPassword, setShowEmployeeConfirmPassword] = useState(false);
+  const [showVisitorPassword, setShowVisitorPassword] = useState(false);
+  const [showVisitorConfirmPassword, setShowVisitorConfirmPassword] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successEmail, setSuccessEmail] = useState("");
   const [redirectCountdown, setRedirectCountdown] = useState(SUCCESS_REDIRECT_SECONDS);
 
   const isEmployee = form.role === "employee";
-  const isVisitorOrAdmin = form.role === "visitor" || form.role === "admin";
-  const roleLabel = useMemo(
-    () => SELF_REGISTER_ROLES.find((item) => item.value === form.role)?.label || "User",
-    [form.role]
-  );
+  const isVisitor = form.role === "visitor";
+  const isVisitorGoogle = isVisitor && !!visitorGoogleProfile?.email;
   const stepLabels = useMemo(
     () => [
       "Select User Type",
-      isEmployee ? "Verify Company Email" : "Basic Info",
+      isEmployee ? "Verify Company Email" : "Choose Method",
       isEmployee ? "Set Password" : "Submit Request",
     ],
     [isEmployee]
@@ -92,8 +91,23 @@ export default function SelfRegisterPage({ onBackToLogin }) {
       confirmPassword: "",
     }));
     setEmployeeVerified(null);
+    setVisitorGoogleProfile(null);
+    setShowVisitorPassword(false);
+    setShowVisitorConfirmPassword(false);
     setStep(1);
     resetStatus();
+  }
+
+  function parseNameParts(rawName = "", emailFallback = "") {
+    const name = String(rawName || "").trim();
+    const parts = name.split(/\s+/).filter(Boolean);
+    const fallback = String(emailFallback || "").trim().split("@")[0] || "Visitor";
+    const firstName = parts[0] || fallback;
+    const lastName = parts.slice(1).join(" ") || "User";
+    return {
+      firstName,
+      lastName,
+    };
   }
 
   function handleChange(e) {
@@ -168,12 +182,60 @@ export default function SelfRegisterPage({ onBackToLogin }) {
     }
   }
 
-  async function handleSubmitVisitorOrAdmin() {
+  function handleVisitorManualNext() {
+    const firstName = String(form.firstName || "").trim();
+    const lastName = String(form.lastName || "").trim();
+    const email = String(form.email || "").trim();
+
+    if (!firstName) {
+      setError("First name is required.");
+      return false;
+    }
+    if (!lastName) {
+      setError("Last name is required.");
+      return false;
+    }
+    if (!email) {
+      setError("Email is required.");
+      return false;
+    }
+
+    setVisitorGoogleProfile(null);
+    setStep(3);
+    resetStatus();
+    return true;
+  }
+
+  async function handleVisitorGoogleNext() {
+    setLoading(true);
+    resetStatus();
+    try {
+      const googleProfile = await beginVisitorGoogleSelfRegistration();
+      const names = parseNameParts(googleProfile?.name, googleProfile?.email);
+      setVisitorGoogleProfile(googleProfile);
+      setForm((prev) => ({
+        ...prev,
+        firstName: names.firstName,
+        lastName: names.lastName,
+        email: String(googleProfile?.email || "").trim(),
+        password: "",
+        confirmPassword: "",
+      }));
+      setStep(3);
+    } catch (err) {
+      setError(err?.message || "Google sign-in failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSubmitVisitor() {
     const firstName = String(form.firstName || "").trim();
     const lastName = String(form.lastName || "").trim();
     const email = String(form.email || "").trim();
     const password = String(form.password || "");
     const confirmPassword = String(form.confirmPassword || "");
+
     if (!firstName) {
       setError("First name is required.");
       return;
@@ -187,7 +249,7 @@ export default function SelfRegisterPage({ onBackToLogin }) {
       return;
     }
     if (!password) {
-      setError("Password is required.");
+      setError("Enter your password.");
       return;
     }
     if (password.length < 6) {
@@ -198,21 +260,23 @@ export default function SelfRegisterPage({ onBackToLogin }) {
       setError("Passwords do not match.");
       return;
     }
-
     setLoading(true);
     resetStatus();
     try {
-      await createPublicPortalUserRequest({
+      const result = await selfRegisterPortalUser({
         firstName,
         lastName,
         email,
+        password,
         role: form.role,
+        googleProfile: isVisitorGoogle ? visitorGoogleProfile : null,
       });
       setMessage(
-        `${roleLabel} registration request sent. An admin will review your request, then you can log in once approved.`
+        `Visitor registration request sent for ${result?.email || email}. Admin approval is required before login is enabled.`
       );
+      setStep(1);
     } catch (err) {
-      setError(err?.message || "Could not submit request.");
+      setError(err?.message || "Visitor registration failed.");
     } finally {
       setLoading(false);
     }
@@ -231,9 +295,23 @@ export default function SelfRegisterPage({ onBackToLogin }) {
       return;
     }
 
-    if (isVisitorOrAdmin) {
-      await handleSubmitVisitorOrAdmin();
+    if (isVisitor) {
+      if (step === 2) {
+        handleVisitorManualNext();
+        return;
+      }
+      if (step === 3) {
+        await handleSubmitVisitor();
+      }
     }
+  }
+
+  function handleBackStep() {
+    if (step === 3 && isVisitor && visitorGoogleProfile) {
+      setVisitorGoogleProfile(null);
+    }
+    setStep((prev) => Math.max(1, prev - 1));
+    resetStatus();
   }
 
   return (
@@ -313,8 +391,38 @@ export default function SelfRegisterPage({ onBackToLogin }) {
               </div>
             ) : null}
 
-            {step === 2 && isVisitorOrAdmin ? (
+            {step === 2 && isVisitor ? (
               <>
+                <button
+                  type="button"
+                  className="self-register-google-panel"
+                  onClick={handleVisitorGoogleNext}
+                  disabled={loading}
+                >
+                  <span className="self-register-google-icon" aria-hidden="true">
+                    <svg viewBox="0 0 48 48" width="18" height="18">
+                      <path
+                        fill="#EA4335"
+                        d="M24 9.5c3.2 0 6.1 1.1 8.4 3.2l6.3-6.3C34.8 2.8 29.7.5 24 .5 14.6.5 6.5 5.9 2.6 13.8l7.4 5.8C11.8 13.6 17.4 9.5 24 9.5z"
+                      />
+                      <path
+                        fill="#4285F4"
+                        d="M46.5 24.5c0-1.6-.1-3.1-.4-4.6H24v9h12.7c-.6 3-2.3 5.6-4.9 7.3l7.4 5.8c4.3-4 6.8-9.9 6.8-17.5z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M10 28.4c-.5-1.4-.8-2.9-.8-4.4s.3-3 .8-4.4l-7.4-5.8C.9 17 .5 20.4.5 24s.4 7 2.1 10.2l7.4-5.8z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M24 47.5c6.5 0 11.9-2.2 15.9-5.9l-7.4-5.8c-2.1 1.4-4.8 2.3-8.5 2.3-6.6 0-12.2-4.1-14.2-10l-7.4 5.8C6.5 42.1 14.6 47.5 24 47.5z"
+                      />
+                    </svg>
+                  </span>
+                  <span>{loading ? "Opening Google..." : "Login with Google instead"}</span>
+                </button>
+
+                <>
                 <div className="login-field">
                   <label htmlFor="self-first-name">First Name</label>
                   <input
@@ -351,30 +459,7 @@ export default function SelfRegisterPage({ onBackToLogin }) {
                     disabled={loading}
                   />
                 </div>
-                <div className="login-field">
-                  <label htmlFor="self-password">Password</label>
-                  <input
-                    id="self-password"
-                    name="password"
-                    type="password"
-                    placeholder="Create password"
-                    value={form.password}
-                    onChange={handleChange}
-                    disabled={loading}
-                  />
-                </div>
-                <div className="login-field">
-                  <label htmlFor="self-confirm-password">Confirm Password</label>
-                  <input
-                    id="self-confirm-password"
-                    name="confirmPassword"
-                    type="password"
-                    placeholder="Re-enter password"
-                    value={form.confirmPassword}
-                    onChange={handleChange}
-                    disabled={loading}
-                  />
-                </div>
+                </>
               </>
             ) : null}
 
@@ -433,6 +518,68 @@ export default function SelfRegisterPage({ onBackToLogin }) {
               </>
             ) : null}
 
+            {step === 3 && isVisitor ? (
+              <>
+                <div className="login-note">
+                  <strong>{isVisitorGoogle ? "Google profile" : "Visitor details"}</strong>
+                  <p>
+                    Name: {String(form.firstName || "").trim()} {String(form.lastName || "").trim()}
+                  </p>
+                  {isVisitorGoogle ? (
+                    <p>Username: {visitorGoogleProfile?.username || "-"}</p>
+                  ) : null}
+                  <p>Email: {String(form.email || "").trim() || "-"}</p>
+                  <p>Admin approval is required before this account can log in.</p>
+                </div>
+                <div className="login-field">
+                  <label htmlFor="self-visitor-password">Custom Password</label>
+                  <div className="login-password-wrap">
+                    <input
+                      id="self-visitor-password"
+                      name="password"
+                      type={showVisitorPassword ? "text" : "password"}
+                      placeholder="Create password"
+                      value={form.password}
+                      onChange={handleChange}
+                      disabled={loading}
+                    />
+                    <button
+                      type="button"
+                      className="login-password-toggle"
+                      aria-label={showVisitorPassword ? "Hide password" : "Show password"}
+                      onClick={() => setShowVisitorPassword((prev) => !prev)}
+                      disabled={loading}
+                    >
+                      {showVisitorPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+                <div className="login-field">
+                  <label htmlFor="self-visitor-confirm-password">Verify Password</label>
+                  <div className="login-password-wrap">
+                    <input
+                      id="self-visitor-confirm-password"
+                      name="confirmPassword"
+                      type={showVisitorConfirmPassword ? "text" : "password"}
+                      placeholder="Re-enter password"
+                      value={form.confirmPassword}
+                      onChange={handleChange}
+                      disabled={loading}
+                    />
+                    <button
+                      type="button"
+                      className="login-password-toggle"
+                      aria-label={showVisitorConfirmPassword ? "Hide password" : "Show password"}
+                      onClick={() => setShowVisitorConfirmPassword((prev) => !prev)}
+                      disabled={loading}
+                    >
+                      {showVisitorConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
             {error ? (
               <div className="login-error">
                 {error.includes(HYACINTH_REGISTER_URL) ? (
@@ -458,10 +605,7 @@ export default function SelfRegisterPage({ onBackToLogin }) {
                 <button
                   type="button"
                   className="login-secondary-button"
-                  onClick={() => {
-                    setStep((prev) => Math.max(1, prev - 1));
-                    resetStatus();
-                  }}
+                  onClick={handleBackStep}
                   disabled={loading}
                 >
                   Back
@@ -479,7 +623,7 @@ export default function SelfRegisterPage({ onBackToLogin }) {
                   disabled={loading}
                 >
                   <span className="self-register-next-label">Next</span>
-                  <span aria-hidden="true" className="self-register-next-arrow">→</span>
+                  <span aria-hidden="true" className="self-register-next-arrow">{"->"}</span>
                 </button>
               ) : step === 2 && isEmployee ? (
                 <button className="login-button" type="submit" disabled={loading}>
@@ -488,17 +632,18 @@ export default function SelfRegisterPage({ onBackToLogin }) {
                   ) : (
                     <>
                       <span className="self-register-next-label">Next</span>
-                      <span aria-hidden="true" className="self-register-next-arrow">→</span>
+                      <span aria-hidden="true" className="self-register-next-arrow">{"->"}</span>
                     </>
                   )}
                 </button>
+              ) : step === 2 && isVisitor ? (
+                <button className="login-button" type="submit" disabled={loading}>
+                  <span className="self-register-next-label">Next</span>
+                  <span aria-hidden="true" className="self-register-next-arrow">{"->"}</span>
+                </button>
               ) : (
                 <button className="login-button" type="submit" disabled={loading}>
-                  {loading
-                    ? "Submitting..."
-                    : isEmployee
-                    ? "Submit Registration"
-                    : "Submit Request"}
+                  {loading ? "Submitting..." : isVisitor ? "Submit Request" : "Submit Registration"}
                 </button>
               )}
             </div>
@@ -575,3 +720,5 @@ export default function SelfRegisterPage({ onBackToLogin }) {
     </div>
   );
 }
+
+

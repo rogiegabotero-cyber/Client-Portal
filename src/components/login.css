@@ -480,6 +480,44 @@
   color: #94a3b8;
 }
 
+.self-register-google-panel {
+  width: 100%;
+  min-height: 50px;
+  border: 1px solid #d0d7e2;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1f2937;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+
+.self-register-google-panel:hover {
+  transform: translateY(-1px);
+  border-color: #b9c4d6;
+  box-shadow: 0 6px 18px rgba(2, 6, 23, 0.08);
+}
+
+.self-register-google-panel:disabled {
+  opacity: 0.68;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.self-register-google-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .login-note {
   margin-top: 22px;
   padding: 14px 16px;

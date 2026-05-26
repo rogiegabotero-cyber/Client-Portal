@@ -2,11 +2,14 @@ import { deleteApp, initializeApp } from "firebase/app";
 import app, { auth, db } from "../firebase";
 import {
   EmailAuthProvider,
+  GoogleAuthProvider,
   createUserWithEmailAndPassword,
   fetchSignInMethodsForEmail,
+  getAdditionalUserInfo,
   getAuth,
   reauthenticateWithCredential,
   sendPasswordResetEmail,
+  signInWithPopup,
   signInWithEmailAndPassword,
   signOut,
   updatePassword,
@@ -53,6 +56,27 @@ const issueSessionTokenCallable = httpsCallable(functions, "issueSessionToken");
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 const normalizePortalRole = (value) => String(value || "").trim().toLowerCase();
 const HYACINTH_EMAIL_FALLBACK_MATCH = "hyacinth";
+
+const toGoogleProfileSnapshot = (user = null) => {
+  const normalizedEmail = normalizeEmail(user?.email || "");
+  const displayName = String(user?.displayName || "").trim();
+  const rawUsername = normalizedEmail ? normalizedEmail.split("@")[0] : "";
+  const username = String(rawUsername || "").trim();
+  const photoURL = String(user?.photoURL || "").trim();
+  const providerData = Array.isArray(user?.providerData) ? user.providerData : [];
+  const googleProviderData =
+    providerData.find((item) => String(item?.providerId || "").trim() === "google.com") || {};
+
+  return {
+    uid: String(user?.uid || "").trim(),
+    providerId: "google.com",
+    email: normalizedEmail,
+    name: displayName || String(googleProviderData?.displayName || "").trim() || username,
+    username,
+    photoURL: photoURL || String(googleProviderData?.photoURL || "").trim(),
+    googleUid: String(googleProviderData?.uid || user?.uid || "").trim(),
+  };
+};
 
 const isHyacinthCompanyEmail = (emailValue) => {
   const normalizedEmail = normalizeEmail(emailValue);
@@ -444,6 +468,7 @@ export async function registerPortalUser({
   password,
   role,
   employeeId = "",
+  googleProfile = null,
 }) {
   const normalizedEmail = normalizeEmail(email);
   const normalizedPassword = String(password || "").trim();
@@ -487,6 +512,18 @@ export async function registerPortalUser({
     const normalizedEmployeeId = String(employeeId || "").trim();
     const allowedPages = DEFAULT_ROLE_PAGES[normalizedRole] || [];
     const employeeName = `${normalizedFirstName} ${normalizedLastName}`.trim();
+    const googleDetails =
+      googleProfile && typeof googleProfile === "object"
+        ? {
+            uid: String(googleProfile?.uid || "").trim(),
+            providerId: String(googleProfile?.providerId || "google.com").trim() || "google.com",
+            email: normalizeEmail(googleProfile?.email || normalizedEmail),
+            name: String(googleProfile?.name || "").trim(),
+            username: String(googleProfile?.username || "").trim(),
+            photoURL: String(googleProfile?.photoURL || "").trim(),
+            googleUid: String(googleProfile?.googleUid || "").trim(),
+          }
+        : null;
 
     const userPayload = {
       uid,
@@ -502,6 +539,11 @@ export async function registerPortalUser({
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
+
+    if (googleDetails?.email) {
+      userPayload.authProviders = ["password", "google.com"];
+      userPayload.googleProfile = googleDetails;
+    }
 
     if (normalizedRole === ROLES.EMPLOYEE && normalizedEmployeeId) {
       userPayload.employeeId = normalizedEmployeeId;
@@ -575,12 +617,90 @@ export async function registerPortalUser({
   }
 }
 
+export async function beginVisitorGoogleSelfRegistration() {
+  let secondaryApp = null;
+  let secondaryAuth = null;
+  let secondaryDb = null;
+  let popupUser = null;
+  let shouldDeletePopupUser = false;
+
+  try {
+    const appName = `portal-visitor-google-prefill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    secondaryApp = initializeApp(buildFirebaseConfigFromEnv(), appName);
+    secondaryAuth = getAuth(secondaryApp);
+    secondaryDb = getFirestore(secondaryApp);
+
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+
+    const result = await signInWithPopup(secondaryAuth, provider);
+    popupUser = result?.user || null;
+    const googleProfile = toGoogleProfileSnapshot(popupUser);
+    const additionalInfo = getAdditionalUserInfo(result);
+    shouldDeletePopupUser = additionalInfo?.isNewUser === true;
+
+    if (!googleProfile.email) {
+      throw new Error("Google account is missing an email. Try a different account.");
+    }
+
+    const existingUserByEmail = await getDocs(
+      query(collection(secondaryDb, "users"), where("email", "==", googleProfile.email), limit(1))
+    );
+    if (!existingUserByEmail.empty) {
+      throw new Error(
+        "Registration denied. This email is already registered. Please log in instead."
+      );
+    }
+
+    const isNewGoogleAuthUser = additionalInfo?.isNewUser === true;
+    if (!isNewGoogleAuthUser) {
+      throw new Error(
+        "This Google account already exists in authentication. Please log in or use a different Google account."
+      );
+    }
+
+    return googleProfile;
+  } catch (error) {
+    const code = String(error?.code || "").toLowerCase();
+    if (code === "auth/popup-closed-by-user") {
+      throw new Error("Google sign-in was cancelled.");
+    }
+    if (code === "auth/cancelled-popup-request") {
+      throw new Error("Another Google sign-in is in progress. Please try again.");
+    }
+    throw new Error(error?.message || "Could not fetch Google profile details.");
+  } finally {
+    if (popupUser && shouldDeletePopupUser) {
+      try {
+        await deleteUser(popupUser);
+      } catch {
+        // ignore cleanup failures for temporary google user
+      }
+    }
+    if (secondaryAuth) {
+      try {
+        await signOut(secondaryAuth);
+      } catch {
+        // ignore cleanup failure
+      }
+    }
+    if (secondaryApp) {
+      try {
+        await deleteApp(secondaryApp);
+      } catch {
+        // ignore cleanup failure
+      }
+    }
+  }
+}
+
 export async function selfRegisterPortalUser({
   firstName,
   lastName,
   email,
   password,
   role,
+  googleProfile = null,
 } = {}) {
   const normalizedRole = normalizePortalRole(role || "");
   const normalizedEmail = normalizeEmail(email || "");
@@ -591,14 +711,14 @@ export async function selfRegisterPortalUser({
   if (![ROLES.ADMIN, ROLES.VISITOR, ROLES.EMPLOYEE].includes(normalizedRole)) {
     throw new Error("Select a valid user type.");
   }
-  if (!normalizedPassword) {
-    throw new Error("Password is required.");
-  }
-  if (normalizedPassword.length < 6) {
-    throw new Error("Password must be at least 6 characters.");
-  }
 
   if (normalizedRole === ROLES.EMPLOYEE) {
+    if (!normalizedPassword) {
+      throw new Error("Password is required.");
+    }
+    if (normalizedPassword.length < 6) {
+      throw new Error("Password must be at least 6 characters.");
+    }
     const verified = await validateEmployeeSelfRegistrationEmail(normalizedEmail);
     const employeeFirstName = normalizedFirstName || verified.firstName;
     const employeeLastName = normalizedLastName || verified.lastName;
@@ -616,12 +736,66 @@ export async function selfRegisterPortalUser({
   if (!normalizedLastName) throw new Error("Last name is required.");
   if (!normalizedEmail) throw new Error("Email is required.");
 
+  if (normalizedRole === ROLES.VISITOR) {
+    if (!normalizedPassword) {
+      throw new Error("Password is required.");
+    }
+    if (normalizedPassword.length < 6) {
+      throw new Error("Password must be at least 6 characters.");
+    }
+
+    const noteParts = [];
+    if (googleProfile && typeof googleProfile === "object") {
+      const providerId = String(googleProfile?.providerId || "").trim();
+      const username = String(googleProfile?.username || "").trim();
+      if (providerId === "google.com") {
+        noteParts.push("Self-registration source: Google");
+      }
+      if (username) {
+        noteParts.push(`Google username: ${username}`);
+      }
+    }
+
+    const request = await createPublicPortalUserRequest({
+      firstName: normalizedFirstName,
+      lastName: normalizedLastName,
+      email: normalizedEmail,
+      role: normalizedRole,
+      note: noteParts.join(" | "),
+      preferredPassword: normalizedPassword,
+    });
+
+    return {
+      ...request,
+      status: "pending_approval",
+    };
+  }
+
+  if (!normalizedPassword) {
+    throw new Error("Password is required.");
+  }
+  if (normalizedPassword.length < 6) {
+    throw new Error("Password must be at least 6 characters.");
+  }
+
   return registerPortalUser({
     firstName: normalizedFirstName,
     lastName: normalizedLastName,
     email: normalizedEmail,
     password: normalizedPassword,
     role: normalizedRole,
+    googleProfile:
+      normalizedRole === ROLES.VISITOR && googleProfile && typeof googleProfile === "object"
+        ? {
+            uid: String(googleProfile?.uid || "").trim(),
+            providerId: String(googleProfile?.providerId || "google.com").trim() || "google.com",
+            email: normalizeEmail(googleProfile?.email || normalizedEmail),
+            name: String(googleProfile?.name || "").trim(),
+            username: String(googleProfile?.username || "").trim(),
+            photoURL: String(googleProfile?.photoURL || "").trim(),
+            googleUid: String(googleProfile?.googleUid || "").trim(),
+          }
+        : null,
   });
 }
 
@@ -643,17 +817,22 @@ export async function createPublicPortalUserRequest({
   email,
   role,
   note = "",
+  preferredPassword = "",
 } = {}) {
   const normalizedFirstName = String(firstName || "").trim();
   const normalizedLastName = String(lastName || "").trim();
   const normalizedEmail = normalizeEmail(email);
   const normalizedRole = normalizePublicSelfRequestRole(role);
   const normalizedNote = String(note || "").trim();
+  const normalizedPreferredPassword = String(preferredPassword || "").trim();
 
   if (!normalizedFirstName) throw new Error("First name is required");
   if (!normalizedLastName) throw new Error("Last name is required");
   if (!normalizedEmail) throw new Error("Email is required");
   if (!normalizedRole) throw new Error("Only Admin and Visitor requests are allowed here.");
+  if (normalizedPreferredPassword && normalizedPreferredPassword.length < 6) {
+    throw new Error("Password must be at least 6 characters.");
+  }
 
   const now = new Date();
   const storageTimeZone = resolveStorageTimeZone();
@@ -664,6 +843,7 @@ export async function createPublicPortalUserRequest({
     email: normalizedEmail,
     role: normalizedRole,
     note: normalizedNote,
+    preferredPassword: normalizedPreferredPassword,
     status: "pending",
     requestedByUserId: "public-self-registration",
     requestedByName: "Self Registration",
@@ -839,10 +1019,14 @@ export async function getPortalUserRequests() {
     )
   );
 
-  const rows = snap.docs.map((item) => ({
-    id: item.id,
-    ...item.data(),
-  }));
+  const rows = snap.docs.map((item) => {
+    const row = {
+      id: item.id,
+      ...(item.data() || {}),
+    };
+    delete row.preferredPassword;
+    return row;
+  });
 
   rows.sort((a, b) => {
     const aMs = toMillis(a?.createdAt);
@@ -862,7 +1046,6 @@ export async function approvePortalUserRequest(
   const approver = getActorIdentity(approvedBy);
 
   if (!normalizedRequestId) throw new Error("Missing request id");
-  if (!normalizedPassword) throw new Error("Approval password is required");
   if (!approver.userId) throw new Error("Missing approver user id");
 
   const requestRef = doc(db, PORTAL_USER_REQUESTS_COLLECTION, normalizedRequestId);
@@ -873,16 +1056,19 @@ export async function approvePortalUserRequest(
   }
 
   const current = requestSnap.data() || {};
+  const requestPreferredPassword = String(current?.preferredPassword || "").trim();
+  const approvalPassword = normalizedPassword || requestPreferredPassword;
   if (toRequestStatus(current?.status) !== "pending") {
     throw new Error("Only pending requests can be approved");
   }
+  if (!approvalPassword) throw new Error("Approval password is required");
 
   const result = await registerPortalUser({
     firstName: current?.firstName || "",
     lastName: current?.lastName || "",
     email: current?.email || "",
     role: current?.role || "",
-    password: normalizedPassword,
+    password: approvalPassword,
   });
 
   const now = new Date();
@@ -901,6 +1087,7 @@ export async function approvePortalUserRequest(
     rejectedByUserId: "",
     rejectedByName: "",
     rejectedByEmail: "",
+    preferredPassword: "",
     ...buildTimeZoneMeta("approvedAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
@@ -972,6 +1159,7 @@ export async function rejectPortalUserRequest(
     approvedByName: "",
     approvedByEmail: "",
     approvedUserId: "",
+    preferredPassword: "",
     ...buildTimeZoneMeta("rejectedAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
   });
@@ -1417,35 +1605,33 @@ export async function transferPortalUserToEmployeeRole(userId, userData = {}) {
 export async function deleteAdminPortalUser(userId) {
   const normalizedUserId = String(userId || "").trim();
   if (!normalizedUserId) throw new Error("User id is required");
+  try {
+    const callable = httpsCallable(functions, "adminDeletePortalUserAccount");
+    const response = await callable({
+      userId: normalizedUserId,
+    });
+    const payload = response?.data || {};
+    if (payload?.success === false) {
+      throw new Error(payload?.message || "Could not delete portal user.");
+    }
+    return {
+      userId: String(payload?.userId || normalizedUserId),
+      role: normalizePortalRole(payload?.role || ""),
+      email: normalizeEmail(payload?.email || ""),
+      authDeleted: payload?.authDeleted !== false,
+    };
+  } catch (error) {
+    const code = String(error?.code || "").toLowerCase();
+    const message = String(error?.message || "").trim();
 
-  const userRef = doc(db, "users", normalizedUserId);
-  const userSnap = await getDoc(userRef);
-  if (!userSnap.exists()) {
-    throw new Error("User profile not found.");
+    if (code === "functions/unavailable") {
+      throw new Error(
+        "Delete service is unavailable. Deploy functions and try again."
+      );
+    }
+
+    throw new Error(message || "Could not delete portal user.");
   }
-
-  const profile = userSnap.data() || {};
-  const role = normalizePortalRole(profile?.role || "");
-  const deletablePortalRoles = [ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
-
-  if (role === ROLES.SUPER_ADMIN) {
-    throw new Error("Super Admin cannot be deleted from this action.");
-  }
-  if (!deletablePortalRoles.includes(role)) {
-    throw new Error("Only special portal users can be deleted from this action.");
-  }
-
-  await Promise.all([
-    deleteDoc(doc(db, "users", normalizedUserId)),
-    deleteDoc(doc(db, "user_permissions", normalizedUserId)),
-    deleteDoc(doc(db, ACTIVE_SESSIONS_COLLECTION, normalizedUserId)),
-  ]);
-
-  return {
-    userId: normalizedUserId,
-    role,
-    email: normalizeEmail(profile?.email || ""),
-  };
 }
 
 export async function adminUpdateEmployeePortalPassword({

@@ -20,6 +20,7 @@ const callableRuntimeOptions = {
 const USERS_COLLECTION = "users";
 const USER_PERMISSIONS_COLLECTION = "user_permissions";
 const EMPLOYEE_CREDENTIALS_COLLECTION = "employee_credentials";
+const ACTIVE_SESSIONS_COLLECTION = "portal_active_sessions";
 
 const PASSWORD_HASH_PREFIX = "portal_v1";
 
@@ -1195,6 +1196,88 @@ exports.adminResetEmployeePassword = onCall(callableRuntimeOptions, async (reque
     userId,
     authUserCreated,
     authUserUpdated,
+  };
+});
+
+exports.adminDeletePortalUserAccount = onCall(callableRuntimeOptions, async (request) => {
+  if (!request.auth?.uid) {
+    throw new HttpsError("unauthenticated", "You must be signed in.");
+  }
+
+  const actorUid = toText(request.auth.uid);
+  const actorTokenRole = normalizeRole(request.auth.token?.role);
+  let actorRole = actorTokenRole;
+
+  if (!actorRole) {
+    const actorSnap = await db.collection(USERS_COLLECTION).doc(actorUid).get();
+    const actorData = actorSnap.exists ? actorSnap.data() || {} : {};
+    actorRole = normalizeRole(actorData?.role);
+  }
+
+  if (actorRole !== ROLES.SUPER_ADMIN) {
+    throw new HttpsError(
+      "permission-denied",
+      "Only Super Admin can delete portal user accounts."
+    );
+  }
+
+  const userId = toText(request?.data?.userId);
+  if (!userId) {
+    throw new HttpsError("invalid-argument", "User id is required.");
+  }
+  if (userId === actorUid) {
+    throw new HttpsError("failed-precondition", "You cannot delete your own account.");
+  }
+
+  const targetRef = db.collection(USERS_COLLECTION).doc(userId);
+  const targetSnap = await targetRef.get();
+  if (!targetSnap.exists) {
+    throw new HttpsError("not-found", "User profile not found.");
+  }
+
+  const targetData = targetSnap.data() || {};
+  const targetRole = normalizeRole(targetData?.role);
+  const deletablePortalRoles = [ROLES.ADMIN, ROLES.ACCOUNTING, ROLES.VISITOR];
+
+  if (targetRole === ROLES.SUPER_ADMIN) {
+    throw new HttpsError("failed-precondition", "Super Admin cannot be deleted from this action.");
+  }
+  if (!deletablePortalRoles.includes(targetRole)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Only special portal users can be deleted from this action."
+    );
+  }
+
+  let authDeleted = false;
+  try {
+    await admin.auth().deleteUser(userId);
+    authDeleted = true;
+  } catch (error) {
+    const code = toText(error?.code);
+    if (code !== "auth/user-not-found") {
+      logger.error("adminDeletePortalUserAccount auth delete failed", {
+        userId,
+        code,
+        message: toText(error?.message),
+      });
+      throw new HttpsError("internal", "Could not delete Authentication user.");
+    }
+  }
+
+  await Promise.all([
+    db.collection(USERS_COLLECTION).doc(userId).delete(),
+    db.collection(USER_PERMISSIONS_COLLECTION).doc(userId).delete(),
+    db.collection(ACTIVE_SESSIONS_COLLECTION).doc(userId).delete(),
+    db.collection(EMPLOYEE_CREDENTIALS_COLLECTION).doc(userId).delete(),
+  ]);
+
+  return {
+    success: true,
+    userId,
+    role: targetRole,
+    email: normalizeEmail(targetData?.email),
+    authDeleted,
   };
 });
 

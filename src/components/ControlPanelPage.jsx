@@ -446,6 +446,12 @@ const preparePayload = (tableKey, editorText, mode = "edit") => {
 
 const canUseDataBrowser = (viewer) => !!viewer;
 const getPortalUserDocId = (value) => String(value?.uid || value?.id || "").trim();
+const getUserDisplayLabel = (user = {}) =>
+  String(user?.name || "").trim() ||
+  `${user?.firstName || ""} ${user?.lastName || ""}`.trim() ||
+  String(user?.email || "").trim() ||
+  getPortalUserDocId(user) ||
+  "Unnamed User";
 const formatDateTime = (value, timeZone = "America/New_York") => {
   const resolved = timestampToDate(value);
   if (!resolved) return "-";
@@ -537,6 +543,7 @@ export default function ControlPanelPage({
   const [transferRoleDraft, setTransferRoleDraft] = useState(ROLES.ADMIN);
   const [transferringEmployee, setTransferringEmployee] = useState(false);
   const [transferringToEmployee, setTransferringToEmployee] = useState(false);
+  const [specialTransferTargetUserId, setSpecialTransferTargetUserId] = useState("");
   const [deletingSpecialUser, setDeletingSpecialUser] = useState(false);
   const [employeePasswordDraft, setEmployeePasswordDraft] = useState("");
   const [employeePasswordConfirmDraft, setEmployeePasswordConfirmDraft] = useState("");
@@ -725,6 +732,30 @@ export default function ControlPanelPage({
     );
   }, [selectedType, selectedUserId, filteredSpecialUsers, employees]);
   const selectedSpecialUser = selectedType === "special" ? selectedUser : null;
+  const specialTransferTargetOptions = useMemo(() => {
+    const source = Array.isArray(employees) ? employees : [];
+    const options = source
+      .map((user) => {
+        const value = getPortalUserDocId(user);
+        if (!value) return null;
+        return {
+          value,
+          label: getUserDisplayLabel(user),
+          user,
+        };
+      })
+      .filter(Boolean);
+
+    options.sort((a, b) => String(a?.label || "").localeCompare(String(b?.label || "")));
+    return options;
+  }, [employees]);
+  const selectedSpecialTransferTarget = useMemo(
+    () =>
+      specialTransferTargetOptions.find(
+        (option) => String(option?.value || "") === String(specialTransferTargetUserId || "")
+      ) || null,
+    [specialTransferTargetOptions, specialTransferTargetUserId]
+  );
   const selectedEmployeeProfile =
     selectedType === "employee" && selectedUserId
       ? employeeProfilesByUserId?.[String(selectedUserId)] || {}
@@ -800,6 +831,22 @@ export default function ControlPanelPage({
       setBreakLogFilterEmployeeId("");
     }
   }, [breakLogFilterEmployeeId, breakLogEmployeeOptions]);
+
+  useEffect(() => {
+    if (selectedType !== "special") return;
+    if (!specialTransferTargetOptions.length) {
+      if (specialTransferTargetUserId) {
+        setSpecialTransferTargetUserId("");
+      }
+      return;
+    }
+
+    const hasCurrent = specialTransferTargetOptions.some(
+      (option) => String(option?.value || "") === String(specialTransferTargetUserId || "")
+    );
+    if (hasCurrent) return;
+    setSpecialTransferTargetUserId(String(specialTransferTargetOptions[0]?.value || ""));
+  }, [selectedType, specialTransferTargetOptions, specialTransferTargetUserId]);
 
   const permissionPageKeys = useMemo(() => {
     const ordered = PERMISSION_PAGE_ORDER.filter((page) => PAGE_KEYS.includes(page));
@@ -1292,6 +1339,12 @@ export default function ControlPanelPage({
       setLocalError("Selected user is missing user id.");
       return;
     }
+    if (!selectedSpecialTransferTarget?.user) {
+      setLocalError("Select the employee user to transfer this special user to.");
+      return;
+    }
+
+    const targetEmployee = selectedSpecialTransferTarget.user;
 
     setTransferringToEmployee(true);
     setLocalError("");
@@ -1300,13 +1353,11 @@ export default function ControlPanelPage({
       await onTransferSpecialUserToEmployeeRole?.({
         userId: targetUserId,
         userData: {
-          name:
-            selectedUser?.name ||
-            `${selectedUser?.firstName || ""} ${selectedUser?.lastName || ""}`.trim(),
+          name: getUserDisplayLabel(targetEmployee),
           email: selectedUser?.email || "",
-          firstName: selectedUser?.firstName || "",
-          lastName: selectedUser?.lastName || "",
-          employeeId: selectedUser?.employeeId || "",
+          firstName: targetEmployee?.firstName || selectedUser?.firstName || "",
+          lastName: targetEmployee?.lastName || selectedUser?.lastName || "",
+          employeeId: targetEmployee?.employeeId || selectedUser?.employeeId || "",
         },
       });
 
@@ -1317,7 +1368,9 @@ export default function ControlPanelPage({
       onToast?.({
         type: "success",
         title: "Transferred",
-        message: `${selectedUser?.name || selectedUser?.email || "User"} moved to employee.`,
+        message: `${selectedUser?.name || selectedUser?.email || "User"} moved to employee as ${getUserDisplayLabel(
+          targetEmployee
+        )}.`,
       });
     } catch (err) {
       const msg = err?.message || "Failed to transfer user to employee";
@@ -1353,7 +1406,7 @@ export default function ControlPanelPage({
       typeof window === "undefined"
         ? true
         : window.confirm(
-            `Delete special user "${targetLabel}"? This removes their portal profile access.`
+            `Delete special user "${targetLabel}"? This permanently deletes the account from portal data and Firebase Authentication.`
           );
     if (!confirmed) return;
 
@@ -1508,14 +1561,6 @@ export default function ControlPanelPage({
     const requestId = String(requestRow?.id || "").trim();
     const password = String(approvalPasswordById?.[requestId] || "").trim();
     if (!requestId) return;
-
-    if (!password) {
-      setRequestActionErrorById((prev) => ({
-        ...prev,
-        [requestId]: "Enter a temporary password before approving.",
-      }));
-      return;
-    }
 
     setRequestActionErrorById((prev) => ({ ...prev, [requestId]: "" }));
 
@@ -3326,14 +3371,32 @@ export default function ControlPanelPage({
                     ) : (
                       <div className="control-panel-transfer-row">
                         {onTransferSpecialUserToEmployeeRole ? (
-                          <button
-                            type="button"
-                            className="control-panel-btn secondary"
-                            onClick={handleTransferSelectedSpecialToEmployee}
-                            disabled={transferringToEmployee}
-                          >
-                            {transferringToEmployee ? "Transferring..." : "Transfer to Employee"}
-                          </button>
+                          <>
+                            <label className="control-panel-transfer-field">
+                              <span>Transfer To Employee User</span>
+                              <select
+                                value={specialTransferTargetUserId}
+                                onChange={(e) => setSpecialTransferTargetUserId(e.target.value)}
+                                className="control-panel-time-input control-panel-time-select"
+                                disabled={transferringToEmployee || !specialTransferTargetOptions.length}
+                              >
+                                <option value="">Select employee user</option>
+                                {specialTransferTargetOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <button
+                              type="button"
+                              className="control-panel-btn secondary"
+                              onClick={handleTransferSelectedSpecialToEmployee}
+                              disabled={transferringToEmployee || !specialTransferTargetUserId}
+                            >
+                              {transferringToEmployee ? "Transferring..." : "Transfer to Selected Employee"}
+                            </button>
+                          </>
                         ) : null}
 
                         {onDeleteAdminUser && normalizeRole(selectedUser?.role) !== ROLES.SUPER_ADMIN ? (
@@ -3610,7 +3673,7 @@ export default function ControlPanelPage({
                               <input
                                 type="password"
                                 className="control-panel-time-input"
-                                placeholder="Temporary password (required to approve)"
+                                placeholder="Temporary password (optional)"
                                 value={approvalPasswordById?.[requestId] || ""}
                                 onChange={(e) =>
                                   setApprovalPasswordById((prev) => ({

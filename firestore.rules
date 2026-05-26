@@ -6,6 +6,77 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isPublicSelfRegistrationRequestCreate() {
+      return request.auth == null
+        && request.resource.data.keys().hasOnly([
+          "firstName",
+          "lastName",
+          "email",
+          "role",
+          "note",
+          "preferredPassword",
+          "status",
+          "requestedByUserId",
+          "requestedByName",
+          "requestedByEmail",
+          "createdAt",
+          "updatedAt",
+          "approvedAt",
+          "approvedByUserId",
+          "approvedByName",
+          "approvedByEmail",
+          "approvedUserId",
+          "rejectedAt",
+          "rejectedByUserId",
+          "rejectedByName",
+          "rejectedByEmail",
+          "rejectionReason",
+          "createdAtClientTimeZone",
+          "createdAtClientUtcIso",
+          "createdAtClientLocal",
+          "updatedAtClientTimeZone",
+          "updatedAtClientUtcIso",
+          "updatedAtClientLocal"
+        ])
+        && request.resource.data.firstName is string
+        && request.resource.data.firstName.size() > 0
+        && request.resource.data.lastName is string
+        && request.resource.data.lastName.size() > 0
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 3
+        && request.resource.data.role in ["admin", "visitor"]
+        && request.resource.data.note is string
+        && request.resource.data.preferredPassword is string
+        && request.resource.data.preferredPassword.size() >= 6
+        && request.resource.data.status == "pending"
+        && request.resource.data.requestedByUserId == "public-self-registration"
+        && request.resource.data.requestedByName == "Self Registration"
+        && request.resource.data.requestedByEmail == request.resource.data.email
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.approvedAt == null
+        && request.resource.data.approvedByUserId == ""
+        && request.resource.data.approvedByName == ""
+        && request.resource.data.approvedByEmail == ""
+        && request.resource.data.approvedUserId == ""
+        && request.resource.data.rejectedAt == null
+        && request.resource.data.rejectedByUserId == ""
+        && request.resource.data.rejectedByName == ""
+        && request.resource.data.rejectedByEmail == ""
+        && request.resource.data.rejectionReason == ""
+        && request.resource.data.createdAtClientTimeZone is string
+        && request.resource.data.createdAtClientUtcIso is string
+        && request.resource.data.createdAtClientLocal is string
+        && request.resource.data.updatedAtClientTimeZone is string
+        && request.resource.data.updatedAtClientUtcIso is string
+        && request.resource.data.updatedAtClientLocal is string;
+    }
+
+    match /portal_user_requests/{requestId} {
+      allow create: if isSignedIn() || isPublicSelfRegistrationRequestCreate();
+      allow read, update, delete: if isSignedIn();
+    }
+
     match /{document=**} {
       allow read, write: if isSignedIn();
     }

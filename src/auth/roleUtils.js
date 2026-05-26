@@ -52,8 +52,26 @@ export const DEFAULT_ROLE_PAGES = {
     "perf_monthly",
     "invoices",
   ],
-  [ROLES.VISITOR]: ["employee_dashboard", "notifications", "manage_announcements"],
-  [ROLES.EMPLOYEE]: ["employee_dashboard", "attendance", "assignment", "schedule", "notifications"],
+  [ROLES.VISITOR]: [
+    "dashboard",
+    "attendance",
+    "schedule",
+    "notifications",
+    "perf_daily",
+    "perf_weekly",
+    "perf_monthly",
+    "invoices",
+  ],
+  [ROLES.EMPLOYEE]: [
+    "employee_dashboard", 
+    "attendance",
+    "schedule",
+    "notifications",
+    "perf_daily",
+    "perf_weekly",
+    "perf_monthly",
+    "invoices",
+  ],
 };
 
 export function normalizeRole(role) {

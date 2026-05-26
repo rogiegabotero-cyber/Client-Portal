@@ -776,6 +776,16 @@
   border-bottom: 0;
 }
 
+.payablePrintTable .payablePrintTotalRow td {
+  border-top: 1px solid rgba(17, 24, 39, 0.14);
+  font-weight: 700;
+  background: #f8fafc;
+}
+
+.payablePrintTable .payablePrintTotalRow .payTdHours {
+  color: #0f172a;
+}
+
 .monthlyLegend {
   display: flex;
   gap: 14px;
@@ -1750,6 +1760,12 @@
 
   .payablePrintTable tbody td {
     border-bottom: 1px solid #e2e8f0;
+    color: #0f172a;
+  }
+
+  .payablePrintTable .payablePrintTotalRow td {
+    border-top: 1px solid #cbd5e1;
+    background: #f8fafc;
     color: #0f172a;
   }
 }

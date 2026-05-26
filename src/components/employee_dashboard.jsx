@@ -3348,23 +3348,25 @@ export default function EmployeeDashboard({
         <>
           <div className="empDashTop">
             <div>
-              <select
-                className="employee-select"
-                value={String(effectiveSelectedId)}
-                onChange={(e) => setSelected(e.target.value)}
-                disabled={!canSwitchEmployee || !!lockedEmployeeId}
-              >
-                {(Array.isArray(employees) ? employees : []).map((emp) => {
-                  const id = String(getUserId(emp) ?? emp?.userId ?? emp?.id ?? "");
-                  if (!id) return null;
+              {viewerRole !== "employee" ? (
+                <select
+                  className="employee-select"
+                  value={String(effectiveSelectedId)}
+                  onChange={(e) => setSelected(e.target.value)}
+                  disabled={!canSwitchEmployee || !!lockedEmployeeId}
+                >
+                  {(Array.isArray(employees) ? employees : []).map((emp) => {
+                    const id = String(getUserId(emp) ?? emp?.userId ?? emp?.id ?? "");
+                    if (!id) return null;
 
-                  return (
-                    <option key={id} value={id}>
-                      {getDisplayName(emp)}
-                    </option>
-                  );
-                })}
-              </select>
+                    return (
+                      <option key={id} value={id}>
+                        {getDisplayName(emp)}
+                      </option>
+                    );
+                  })}
+                </select>
+              ) : null}
 
               {historyLoading ? (
                 <div className="empHistoryGhost">Loading full history...</div>

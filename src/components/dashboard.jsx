@@ -2981,15 +2981,28 @@ export default function Dashboard({
           rows[0]?.employeeName ||
           getDisplayName(selectedPayableEmployees.find((emp) => String(getUserId(emp)) === userId)) ||
           `User ${userId}`;
+        const totalHours = rows.reduce((sum, item) => {
+          const value = Number(item?.hours || 0);
+          return Number.isFinite(value) ? sum + value : sum;
+        }, 0);
 
         return {
           userId,
           employeeName,
           rows,
+          totalHours,
         };
       })
       .filter(Boolean);
   }, [payableHoursChart.printRows, selectedPayableEmployees]);
+
+  const payableSelectedPrintTotalHours = useMemo(() => {
+    const rows = Array.isArray(payableHoursChart.printRows) ? payableHoursChart.printRows : [];
+    return rows.reduce((sum, item) => {
+      const value = Number(item?.hours || 0);
+      return Number.isFinite(value) ? sum + value : sum;
+    }, 0);
+  }, [payableHoursChart.printRows]);
 
   const payableTableColumnDayKeys = useMemo(() => {
     const periodDayKeys = (Array.isArray(payableGraphPeriod.dayKeys) ? payableGraphPeriod.dayKeys : [])
@@ -3978,6 +3991,17 @@ export default function Dashboard({
                                   </tr>
                                 ))
                               )}
+                              {employeeGroup.rows.length > 0 ? (
+                                <tr className="payablePrintTotalRow">
+                                  <td className="payTdName" colSpan={2}>
+                                    Total Hours
+                                  </td>
+                                  <td className="payTdHours">
+                                    {formatHoursValue(employeeGroup.totalHours)}
+                                  </td>
+                                  <td className="payTdName">-</td>
+                                </tr>
+                              ) : null}
                             </tbody>
                           </table>
                         </div>
@@ -4015,6 +4039,17 @@ export default function Dashboard({
                           </tr>
                         ))
                       )}
+                      {payableHoursChart.printRows.length > 0 ? (
+                        <tr className="payablePrintTotalRow">
+                          <td className="payTdName" colSpan={3}>
+                            Total Hours
+                          </td>
+                          <td className="payTdHours">
+                            {formatHoursValue(payableSelectedPrintTotalHours)}
+                          </td>
+                          <td className="payTdName">-</td>
+                        </tr>
+                      ) : null}
                     </tbody>
                   </table>
                 )}
