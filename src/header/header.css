@@ -1,6 +1,6 @@
 .top-header {
   height: 64px;
-  padding: 0 24px;
+  padding: 0 5px;
   background: rgb(255, 255, 255);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid rgba(0, 0, 0, 0.288);
@@ -16,6 +16,7 @@
 .header-left {
   display: flex;
   align-items: center;
+  min-width: 0;
 }
 
 .header-right {
@@ -23,6 +24,57 @@
   align-items: center;
   justify-content: center;
   width: 100%;
+}
+
+.top-header-clock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  padding: 6px 12px;
+  border-radius: 999px;
+  color: #0f172a;
+  min-height: 40px;
+  min-width: 200px;
+  max-width: 100%;
+}
+
+.top-header-clock-card.is-on-break {
+  background: none;
+}
+
+.top-header-clock-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.top-header-clock-time {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.top-header-clock-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  opacity: 0.78;
+}
+
+.top-header-clock-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: none;
+}
+
+.top-header-clock-break {
+  color: #92400e;
+  font-weight: 700;
 }
 
 /* Search */
@@ -163,8 +215,10 @@
   display:flex;
   align-items:center;
   gap: 1rem;
-  margin-left:16px;
   color: #0f172a;
+  border: solid 0.5px #0f172a56;
+  padding: 5px 8px 5px 20px;
+  border-radius: 50px;
 }
 
 .name{
@@ -196,7 +250,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 5px;
 }
 
 .icon-btn {
@@ -210,6 +264,7 @@
   justify-content: center;
   cursor: pointer;
   background: none;
+  border: solid 0.5px #0f172a56;
 }
 
 .icon-btn.active {
@@ -825,6 +880,20 @@
 }
 
 @media (max-width: 640px) {
+  .top-header-clock-title,
+  .top-header-clock-meta {
+    display: none;
+  }
+
+  .top-header-clock-card {
+    min-height: 34px;
+    padding: 5px 10px;
+  }
+
+  .top-header-clock-time {
+    font-size: 13px;
+  }
+
   .header-profile-drawer {
     width: 100vw;
   }
@@ -847,7 +916,6 @@
 
 /* Compact spacing pass */
 .top-header {
-  padding: 0 14px;
   gap: 1rem;
 }
 
@@ -868,7 +936,6 @@
 
 .profile-box {
   gap: 0.6rem;
-  margin-left: 10px;
 }
 
 .notif-header {

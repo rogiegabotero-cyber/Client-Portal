@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import "./employee_dashboard.css";
 import {
   startBreak,
@@ -12,13 +13,28 @@ import {
   AlignLeft,
   AlignRight,
   Bold,
+  ChevronLeft,
+  ChevronRight,
+  Coffee,
   CheckSquare,
+  ClipboardList,
+  Columns3,
   Eraser,
   FileText,
   Italic,
   List,
   ListOrdered,
+  Megaphone,
+  Minus,
+  MoreVertical,
+  Palette,
+  Pencil,
+  Pin,
+  Plus,
   RotateCcw,
+  Table2,
+  TableColumnsSplit,
+  TableRowsSplit,
   Trash2,
   Underline,
   Users,
@@ -358,6 +374,77 @@ const EMPTY_NOTEPAD_HTML = '<p><br></p>';
 const NOTEPAD_VIEW_MY = "my";
 const NOTEPAD_VIEW_GROUP = "group";
 const NOTEPAD_VIEW_BIN = "bin";
+const DEFAULT_NOTEPAD_COLOR_KEY = "gold";
+const NOTEPAD_COLOR_THEMES = Object.freeze({
+  gold: {
+    label: "Golden",
+    vars: {
+      "--dash-note-page-base": "#f4d15d",
+      "--dash-note-page-back": "#e7bf45",
+      "--dash-note-page-mid": "#edc84f",
+      "--dash-note-front-0": "#f8d76b",
+      "--dash-note-front-1": "#f1ca55",
+      "--dash-note-front-2": "#e6bd49",
+      "--dash-note-corner-0": "rgba(255,246,197,.96)",
+      "--dash-note-corner-1": "#d9ae39",
+    },
+  },
+  blue: {
+    label: "Sky",
+    vars: {
+      "--dash-note-page-base": "#9ed3fb",
+      "--dash-note-page-back": "#7dbef3",
+      "--dash-note-page-mid": "#8ac8f7",
+      "--dash-note-front-0": "#b6e0ff",
+      "--dash-note-front-1": "#92cff7",
+      "--dash-note-front-2": "#73bde9",
+      "--dash-note-corner-0": "rgba(235,247,255,.98)",
+      "--dash-note-corner-1": "#66b0de",
+    },
+  },
+  mint: {
+    label: "Mint",
+    vars: {
+      "--dash-note-page-base": "#b8e9c2",
+      "--dash-note-page-back": "#9fd9ab",
+      "--dash-note-page-mid": "#ace2b7",
+      "--dash-note-front-0": "#cef2d4",
+      "--dash-note-front-1": "#b2e6bd",
+      "--dash-note-front-2": "#95d6a4",
+      "--dash-note-corner-0": "rgba(236,253,241,.98)",
+      "--dash-note-corner-1": "#86c995",
+    },
+  },
+  rose: {
+    label: "Rose",
+    vars: {
+      "--dash-note-page-base": "#f4bfd0",
+      "--dash-note-page-back": "#eaaac0",
+      "--dash-note-page-mid": "#efb5c8",
+      "--dash-note-front-0": "#f8d1dd",
+      "--dash-note-front-1": "#f2bdcf",
+      "--dash-note-front-2": "#e9a9be",
+      "--dash-note-corner-0": "rgba(255,238,244,.98)",
+      "--dash-note-corner-1": "#dd96ad",
+    },
+  },
+  violet: {
+    label: "Violet",
+    vars: {
+      "--dash-note-page-base": "#d7c7f7",
+      "--dash-note-page-back": "#c4b0ec",
+      "--dash-note-page-mid": "#cfbdf2",
+      "--dash-note-front-0": "#e4d9fb",
+      "--dash-note-front-1": "#d3c4f4",
+      "--dash-note-front-2": "#bea9e9",
+      "--dash-note-corner-0": "rgba(245,241,255,.98)",
+      "--dash-note-corner-1": "#ae96dd",
+    },
+  },
+});
+const NOTEPAD_COLOR_OPTIONS = Object.freeze(
+  Object.entries(NOTEPAD_COLOR_THEMES).map(([key, theme]) => ({ key, label: theme?.label || key }))
+);
 const NOTEPAD_TOOLBAR_DEFAULT = Object.freeze({
   bold: false,
   italic: false,
@@ -368,7 +455,16 @@ const NOTEPAD_TOOLBAR_DEFAULT = Object.freeze({
   unorderedList: false,
   orderedList: false,
   checklist: false,
+  fontSizePx: 14,
+  fontColor: "#0f172a",
 });
+const NOTEPAD_FONT_SIZE_OPTIONS = Object.freeze([10, 12, 14, 16, 18, 20, 24, 28, 32]);
+const NOTEPAD_TAB_SPACE_COUNT = 4;
+const NOTEPAD_TAB_NBSP = "\u00A0".repeat(NOTEPAD_TAB_SPACE_COUNT);
+const isNotepadToolbarStateDefault = (state = {}) =>
+  Object.entries(NOTEPAD_TOOLBAR_DEFAULT).every(([key, defaultValue]) => state?.[key] === defaultValue);
+const NOTEPAD_TABLE_PICKER_MAX_ROWS = 8;
+const NOTEPAD_TABLE_PICKER_MAX_COLS = 8;
 const NOTEPAD_DOCS_CACHE_BY_EMPLOYEE = new Map();
 const NOTEPAD_NOTIFICATION_EVENT_CACHE = new Set();
 
@@ -393,11 +489,42 @@ const normalizeNotepadScope = (scopeValue = "", hasGroupMembers = false) => {
   return hasGroupMembers ? "group" : "personal";
 };
 
+const normalizeNotepadColorKey = (value = "") => {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw && NOTEPAD_COLOR_THEMES[raw]) return raw;
+  return DEFAULT_NOTEPAD_COLOR_KEY;
+};
+
+const resolveNotepadDeadlineValue = (data = {}) => {
+  const directCandidates = [
+    data?.deadlineAt,
+    data?.deadline,
+    data?.dueAt,
+    data?.dueDateTime,
+    data?.dueOn,
+  ];
+  for (const candidate of directCandidates) {
+    const ms = toMillis(candidate);
+    if (Number.isFinite(ms)) return candidate;
+  }
+
+  const deadlineDate = toText(data?.deadlineDate || data?.dueDate);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(deadlineDate)) {
+    const rawTime = toText(data?.deadlineTime || data?.dueTime);
+    const timePart = /^\d{1,2}:\d{2}$/.test(rawTime) ? rawTime.padStart(5, "0") : "23:59";
+    const combinedMs = new Date(`${deadlineDate}T${timePart}:00`).getTime();
+    if (Number.isFinite(combinedMs)) return new Date(combinedMs);
+  }
+
+  return null;
+};
+
 const mapNotepadDocToRow = (noteDoc, fallbackEmployeeUserId = "") => {
   const data = noteDoc?.data?.() || {};
   const createdAtMs = toMillis(data.createdAt);
   const updatedAtMs = toMillis(data.updatedAt);
-  const deadlineAtMs = toMillis(data.deadlineAt);
+  const resolvedDeadlineValue = resolveNotepadDeadlineValue(data);
+  const deadlineAtMs = toMillis(resolvedDeadlineValue);
   const completedAtMs = toMillis(data.completedAt);
   const ownerUserId = toText(data.employeeUserId || fallbackEmployeeUserId);
   const hasGroupMembers = Array.isArray(data.memberUserIds) && data.memberUserIds.length > 0;
@@ -419,8 +546,10 @@ const mapNotepadDocToRow = (noteDoc, fallbackEmployeeUserId = "") => {
     memberProfiles: sanitizeNotepadMemberProfiles(data.memberProfiles),
     title: toText(data.title),
     contentHtml: String(data.contentHtml || EMPTY_NOTEPAD_HTML),
-    deadlineAt: data.deadlineAt || null,
+    noteColorKey: normalizeNotepadColorKey(data?.noteColorKey || data?.noteColor),
+    deadlineAt: resolvedDeadlineValue,
     deadlineAtMs: Number.isFinite(deadlineAtMs) ? deadlineAtMs : NaN,
+    isPinned: !!data?.isPinned,
     isCompleted: !!data?.isCompleted,
     isTrashed: !!data?.isTrashed,
     trashedAt: data.trashedAt || null,
@@ -484,6 +613,13 @@ const persistChecklistStateInHtml = (html = "", checkedStates = []) => {
     checkbox.setAttribute("contenteditable", "false");
   });
 
+  wrapper.querySelectorAll("td.notepadTableCellActive, th.notepadTableCellActive").forEach((cell) => {
+    cell.classList.remove("notepadTableCellActive");
+  });
+  wrapper.querySelectorAll("td.notepadTableCellSelected, th.notepadTableCellSelected").forEach((cell) => {
+    cell.classList.remove("notepadTableCellSelected");
+  });
+
   return wrapper.innerHTML;
 };
 
@@ -502,6 +638,12 @@ const stripHtmlForPreview = (html = "") =>
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const hasMeaningfulNotepadContent = (html = "") => {
+  const textContent = stripHtmlForPreview(html);
+  if (textContent) return true;
+  return /<(img|video|audio|iframe|svg|canvas|table|pre|code|blockquote|hr)\b/i.test(String(html || ""));
+};
 
 const escapeHtml = (value = "") =>
   String(value || "")
@@ -545,6 +687,289 @@ const convertSelectionLinesToChecklist = (editorEl) => {
 
   const html = buildChecklistHtmlFromText(selectedText);
   document.execCommand("insertHTML", false, html);
+  return true;
+};
+
+const getNotepadTableContext = (editorEl) => {
+  if (!editorEl || typeof window === "undefined") return null;
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  const anchorNode = selection.anchorNode;
+  const focusNode = selection.focusNode;
+  const anchorEl = anchorNode?.nodeType === Node.TEXT_NODE ? anchorNode.parentElement : anchorNode;
+  const focusEl = focusNode?.nodeType === Node.TEXT_NODE ? focusNode.parentElement : focusNode;
+  const scopedEl = (focusEl && editorEl.contains(focusEl) ? focusEl : null) || anchorEl;
+  if (!scopedEl || !editorEl.contains(scopedEl)) return null;
+
+  const cell = scopedEl.closest?.("td,th") || null;
+  const row = cell?.parentElement || scopedEl.closest?.("tr") || null;
+  const table = scopedEl.closest?.("table") || null;
+  if (!table || !editorEl.contains(table)) return null;
+
+  return { table, row, cell };
+};
+
+const createEmptyTableCell = (tagName = "td") => {
+  const cell = document.createElement(String(tagName || "td").toLowerCase() === "th" ? "th" : "td");
+  cell.innerHTML = "&nbsp;";
+  return cell;
+};
+
+const createEmptyTableRow = (columnCount = 2, tagName = "td") => {
+  const row = document.createElement("tr");
+  const safeCols = Math.max(1, Number(columnCount) || 1);
+  for (let index = 0; index < safeCols; index += 1) {
+    row.appendChild(createEmptyTableCell(tagName));
+  }
+  return row;
+};
+
+const getNotepadTableRowCells = (rowEl) =>
+  Array.from(rowEl?.children || []).filter((cellEl) => {
+    const tag = String(cellEl?.tagName || "").toLowerCase();
+    return tag === "td" || tag === "th";
+  });
+
+const getNotepadTableCellPosition = (cellEl) => {
+  if (!cellEl) return null;
+  const tableEl = cellEl.closest?.("table");
+  const rowEl = cellEl.closest?.("tr");
+  if (!tableEl || !rowEl) return null;
+
+  const rows = Array.from(tableEl.querySelectorAll("tr"));
+  const rowIndex = rows.indexOf(rowEl);
+  if (rowIndex < 0) return null;
+
+  const rowCells = getNotepadTableRowCells(rowEl);
+  const colIndex = rowCells.indexOf(cellEl);
+  if (colIndex < 0) return null;
+
+  return {
+    tableEl,
+    rowEl,
+    rowIndex,
+    colIndex,
+    rows,
+  };
+};
+
+const getNotepadTableRectCells = (startCell, endCell) => {
+  const startPos = getNotepadTableCellPosition(startCell);
+  const endPos = getNotepadTableCellPosition(endCell);
+  if (!startPos || !endPos) return [];
+  if (startPos.tableEl !== endPos.tableEl) return [];
+
+  const minRow = Math.min(startPos.rowIndex, endPos.rowIndex);
+  const maxRow = Math.max(startPos.rowIndex, endPos.rowIndex);
+  const minCol = Math.min(startPos.colIndex, endPos.colIndex);
+  const maxCol = Math.max(startPos.colIndex, endPos.colIndex);
+  const rectCells = [];
+
+  for (let rowIndex = minRow; rowIndex <= maxRow; rowIndex += 1) {
+    const rowEl = startPos.rows[rowIndex];
+    if (!rowEl) return [];
+    const rowCells = getNotepadTableRowCells(rowEl);
+    for (let colIndex = minCol; colIndex <= maxCol; colIndex += 1) {
+      const cellEl = rowCells[colIndex];
+      if (!cellEl) return [];
+      rectCells.push(cellEl);
+    }
+  }
+
+  return rectCells;
+};
+
+const buildNotepadTableMergePlan = (selectedCells = []) => {
+  const uniqueCells = Array.from(new Set(Array.isArray(selectedCells) ? selectedCells : [])).filter(Boolean);
+  if (uniqueCells.length < 2) return null;
+
+  const firstCellPos = getNotepadTableCellPosition(uniqueCells[0]);
+  if (!firstCellPos) return null;
+  if (uniqueCells.some((cellEl) => cellEl.closest?.("table") !== firstCellPos.tableEl)) return null;
+  if (
+    uniqueCells.some(
+      (cellEl) => (Number(cellEl?.rowSpan) || 1) !== 1 || (Number(cellEl?.colSpan) || 1) !== 1
+    )
+  ) {
+    return null;
+  }
+
+  const coords = uniqueCells.map((cellEl) => getNotepadTableCellPosition(cellEl)).filter(Boolean);
+  if (coords.length !== uniqueCells.length) return null;
+
+  const minRow = Math.min(...coords.map((item) => item.rowIndex));
+  const maxRow = Math.max(...coords.map((item) => item.rowIndex));
+  const minCol = Math.min(...coords.map((item) => item.colIndex));
+  const maxCol = Math.max(...coords.map((item) => item.colIndex));
+
+  const rectCells = [];
+  for (let rowIndex = minRow; rowIndex <= maxRow; rowIndex += 1) {
+    const rowEl = firstCellPos.rows[rowIndex];
+    if (!rowEl) return null;
+    const rowCells = getNotepadTableRowCells(rowEl);
+    for (let colIndex = minCol; colIndex <= maxCol; colIndex += 1) {
+      const cellEl = rowCells[colIndex];
+      if (!cellEl) return null;
+      if ((Number(cellEl?.rowSpan) || 1) !== 1 || (Number(cellEl?.colSpan) || 1) !== 1) return null;
+      rectCells.push(cellEl);
+    }
+  }
+
+  const selectedSet = new Set(uniqueCells);
+  if (rectCells.some((cellEl) => !selectedSet.has(cellEl))) return null;
+
+  const topRowCells = getNotepadTableRowCells(firstCellPos.rows[minRow]);
+  const topLeftCell = topRowCells[minCol] || null;
+  if (!topLeftCell) return null;
+
+  const mergedParts = rectCells
+    .map((cellEl) => String(cellEl.innerHTML || "").trim())
+    .filter((html) => html && html !== "<br>" && html !== "&nbsp;");
+
+  return {
+    topLeftCell,
+    cellsToRemove: rectCells.filter((cellEl) => cellEl !== topLeftCell),
+    rowSpan: maxRow - minRow + 1,
+    colSpan: maxCol - minCol + 1,
+    mergedHtml: mergedParts.length ? mergedParts.join("<br>") : "&nbsp;",
+  };
+};
+
+const applyNotepadFontSizeInEditor = (editorEl, fontSizePx) => {
+  if (!editorEl || typeof document === "undefined" || typeof window === "undefined") return;
+  const px = Math.max(8, Math.min(96, Number(fontSizePx) || NOTEPAD_TOOLBAR_DEFAULT.fontSizePx));
+  const selection = window.getSelection();
+  const selectedRange =
+    selection && selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null;
+  const candidatesBefore = new Set(
+    Array.from(editorEl.querySelectorAll("font[size], span[style*='font-size']"))
+  );
+
+  document.execCommand("styleWithCSS", false, true);
+  document.execCommand("fontSize", false, "7");
+
+  const shouldNormalizeNode = (nodeEl) => {
+    if (!nodeEl || !editorEl.contains(nodeEl)) return false;
+    if (!candidatesBefore.has(nodeEl)) return true;
+    if (!selectedRange) return false;
+    try {
+      return selectedRange.intersectsNode(nodeEl);
+    } catch (_err) {
+      return false;
+    }
+  };
+
+  const needsFontSizeNormalization = (nodeEl) => {
+    if (!nodeEl) return false;
+    const tagName = String(nodeEl.tagName || "").toLowerCase();
+    if (tagName === "font" && String(nodeEl.getAttribute("size") || "").trim()) return true;
+    const inlineFontSize = String(nodeEl.style?.fontSize || "").trim().toLowerCase();
+    if (!inlineFontSize) return false;
+    return !/^\d+(\.\d+)?px$/.test(inlineFontSize);
+  };
+
+  editorEl.querySelectorAll("font[size], span[style*='font-size']").forEach((nodeEl) => {
+    if (!shouldNormalizeNode(nodeEl)) return;
+    if (!needsFontSizeNormalization(nodeEl)) return;
+    if (String(nodeEl.tagName || "").toLowerCase() === "font") {
+      nodeEl.removeAttribute("size");
+    }
+    nodeEl.style.fontSize = `${px}px`;
+  });
+};
+
+const toTwoDigitHex = (value) => {
+  const clamped = Math.max(0, Math.min(255, Number(value) || 0));
+  return clamped.toString(16).padStart(2, "0");
+};
+
+const normalizeCssColorToHex = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return NOTEPAD_TOOLBAR_DEFAULT.fontColor;
+
+  const hexMatch = raw.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hexMatch) {
+    if (hexMatch[1].length === 6) return `#${hexMatch[1].toLowerCase()}`;
+    const [r, g, b] = hexMatch[1].split("");
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    return NOTEPAD_TOOLBAR_DEFAULT.fontColor;
+  }
+
+  const probeEl = document.createElement("span");
+  probeEl.style.color = raw;
+  probeEl.style.position = "absolute";
+  probeEl.style.left = "-9999px";
+  probeEl.style.top = "-9999px";
+  probeEl.style.pointerEvents = "none";
+  document.body.appendChild(probeEl);
+  const computedColor = String(window.getComputedStyle(probeEl).color || "");
+  probeEl.remove();
+
+  const rgbMatch = computedColor.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if (!rgbMatch) return NOTEPAD_TOOLBAR_DEFAULT.fontColor;
+  const [, r, g, b] = rgbMatch;
+  return `#${toTwoDigitHex(r)}${toTwoDigitHex(g)}${toTwoDigitHex(b)}`;
+};
+
+const clampNotepadMenuCoordinate = (value, minValue, maxValue) => {
+  const safeValue = Number(value) || 0;
+  const safeMin = Number(minValue) || 0;
+  const safeMax = Number(maxValue);
+  if (!Number.isFinite(safeMax) || safeMax < safeMin) return safeMin;
+  return Math.min(Math.max(safeValue, safeMin), safeMax);
+};
+
+const insertNotepadTabIndentAtCaret = (editorEl) => {
+  if (!editorEl || typeof window === "undefined" || typeof document === "undefined") return false;
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+  const range = selection.getRangeAt(0);
+  const startNode = range.startContainer;
+  const startElement = startNode?.nodeType === Node.ELEMENT_NODE ? startNode : startNode?.parentElement;
+  const listItemEl = startElement?.closest?.("li");
+
+  if (listItemEl && editorEl.contains(listItemEl)) {
+    document.execCommand("indent", false, null);
+    return true;
+  }
+
+  document.execCommand("insertHTML", false, NOTEPAD_TAB_NBSP);
+  return true;
+};
+
+const outdentNotepadTabIndentAtCaret = (editorEl) => {
+  if (!editorEl || typeof window === "undefined" || typeof document === "undefined") return false;
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+  const range = selection.getRangeAt(0);
+  const startNode = range.startContainer;
+  const startElement = startNode?.nodeType === Node.ELEMENT_NODE ? startNode : startNode?.parentElement;
+  const listItemEl = startElement?.closest?.("li");
+
+  if (listItemEl && editorEl.contains(listItemEl)) {
+    document.execCommand("outdent", false, null);
+    return true;
+  }
+
+  if (!range.collapsed || startNode?.nodeType !== Node.TEXT_NODE) return false;
+
+  const rawText = String(startNode.nodeValue || "");
+  const startOffset = Math.max(0, Math.min(rawText.length, Number(range.startOffset) || 0));
+  const beforeCaret = rawText.slice(0, startOffset);
+  const indentMatch = beforeCaret.match(/(?:\u00A0| ){1,4}$/);
+  if (!indentMatch || !indentMatch[0]) return false;
+
+  const removeCount = indentMatch[0].length;
+  startNode.nodeValue = `${rawText.slice(0, startOffset - removeCount)}${rawText.slice(startOffset)}`;
+
+  const nextRange = document.createRange();
+  nextRange.setStart(startNode, Math.max(0, startOffset - removeCount));
+  nextRange.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(nextRange);
   return true;
 };
 
@@ -691,6 +1116,8 @@ export default function EmployeeDashboard({
   const [breakConfirmAction, setBreakConfirmAction] = useState("");
   const [taskStatusFilter, setTaskStatusFilter] = useState("active");
   const [isTaskFilterOpen, setIsTaskFilterOpen] = useState(false);
+  const [isTaskListDrawerOpen, setIsTaskListDrawerOpen] = useState(false);
+  const [isAnnouncementDrawerOpen, setIsAnnouncementDrawerOpen] = useState(false);
   const [isBreakLogsDrawerOpen, setIsBreakLogsDrawerOpen] = useState(false);
   const [breakLogFilter, setBreakLogFilter] = useState("thisWeek");
   const [breakLogRows, setBreakLogRows] = useState([]);
@@ -714,10 +1141,13 @@ export default function EmployeeDashboard({
   const [notepadError, setNotepadError] = useState("");
   const [selectedNotepadNoteId, setSelectedNotepadNoteId] = useState("");
   const [notepadCompletingNoteId, setNotepadCompletingNoteId] = useState("");
+  const [notepadPinningNoteId, setNotepadPinningNoteId] = useState("");
   const [notepadTitleDraft, setNotepadTitleDraft] = useState("");
+  const [notepadColorDraft, setNotepadColorDraft] = useState(DEFAULT_NOTEPAD_COLOR_KEY);
   const [notepadDeadlineDraft, setNotepadDeadlineDraft] = useState("");
   const [notepadContentDraft, setNotepadContentDraft] = useState(EMPTY_NOTEPAD_HTML);
   const [notepadDirty, setNotepadDirty] = useState(false);
+  const [notepadChecklistChangeVersion, setNotepadChecklistChangeVersion] = useState(0);
   const [savingNotepadNote, setSavingNotepadNote] = useState(false);
   const [notepadStatusText, setNotepadStatusText] = useState("");
   const [isNotepadTyping, setIsNotepadTyping] = useState(false);
@@ -733,11 +1163,53 @@ export default function EmployeeDashboard({
     note: null,
   });
   const [notepadConfirmBusy, setNotepadConfirmBusy] = useState(false);
+  const [dashboardDisplayHtml, setDashboardDisplayHtml] = useState("");
+  const [dashboardDisplayDirty, setDashboardDisplayDirty] = useState(false);
+  const [dashboardDisplaySaving, setDashboardDisplaySaving] = useState(false);
+  const [dashboardDisplayStatus, setDashboardDisplayStatus] = useState("");
+  const [dashboardDisplayChangeVersion, setDashboardDisplayChangeVersion] = useState(0);
+  const [dashboardDisplayNoteIndex, setDashboardDisplayNoteIndex] = useState(0);
+  const [isDashboardNoteMenuOpen, setIsDashboardNoteMenuOpen] = useState(false);
+  const [isDashboardUnpinConfirmOpen, setIsDashboardUnpinConfirmOpen] = useState(false);
+  const [dashboardNoteColorUpdatingId, setDashboardNoteColorUpdatingId] = useState("");
+  const [notepadTableMenuState, setNotepadTableMenuState] = useState({
+    open: false,
+    x: 0,
+    y: 0,
+  });
+  const [notepadTableMoveHandleState, setNotepadTableMoveHandleState] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+  });
+  const [notepadTableSelectedCount, setNotepadTableSelectedCount] = useState(0);
+  const [isNotepadTablePickerOpen, setIsNotepadTablePickerOpen] = useState(false);
+  const [notepadTablePickerRows, setNotepadTablePickerRows] = useState(2);
+  const [notepadTablePickerCols, setNotepadTablePickerCols] = useState(2);
+  const [dashboardNotepadPreviewColorKey, setDashboardNotepadPreviewColorKey] = useState(
+    DEFAULT_NOTEPAD_COLOR_KEY
+  );
   const taskFilterDrawerRef = useRef(null);
   const taskFilterMenuRef = useRef(null);
   const notepadEditorRef = useRef(null);
+  const dashboardDisplayRef = useRef(null);
+  const dashboardNoteActionsRef = useRef(null);
+  const notepadTableMenuRef = useRef(null);
+  const notepadTablePickerRef = useRef(null);
+  const notepadTableMoveHandleTableRef = useRef(null);
+  const notepadTableMoveHandleHideTimerRef = useRef(null);
+  const notepadSelectedTableCellRef = useRef(null);
+  const notepadSelectedTableCellsRef = useRef([]);
+  const notepadTableSelectionAnchorRef = useRef(null);
+  const notepadTableResizeStateRef = useRef(null);
+  const notepadSelectionRangeRef = useRef(null);
+  const saveNotepadNoteRef = useRef(null);
+  const saveDashboardDisplayNoteRef = useRef(null);
+  const dashboardColorSaveTimerRef = useRef(null);
+  const dashboardColorPendingPayloadRef = useRef(null);
   const notepadDueSoonNotifyInFlightRef = useRef(new Set());
   const notepadNotificationEventCacheRef = useRef(NOTEPAD_NOTIFICATION_EVENT_CACHE);
+  const portalRoot = typeof document !== "undefined" ? document.body : null;
 
   const viewerRole = normalize(
     pageData?.viewer?.role || pageData?.currentUser?.role || pageData?.user?.role || ""
@@ -847,6 +1319,20 @@ export default function EmployeeDashboard({
       }
     }
   }, [lockedEmployeeId, selectedEmployeeId, onSelectEmployeeId]);
+
+  useEffect(() => {
+    if ((!isNotepadDrawerOpen && !isTaskListDrawerOpen && !isAnnouncementDrawerOpen) || !portalRoot) return undefined;
+
+    const previousOverflow = portalRoot.style.overflow;
+    const previousOverscrollBehavior = portalRoot.style.overscrollBehavior;
+    portalRoot.style.overflow = "hidden";
+    portalRoot.style.overscrollBehavior = "contain";
+
+    return () => {
+      portalRoot.style.overflow = previousOverflow;
+      portalRoot.style.overscrollBehavior = previousOverscrollBehavior;
+    };
+  }, [isNotepadDrawerOpen, isTaskListDrawerOpen, isAnnouncementDrawerOpen, portalRoot]);
 
   const employee = useMemo(
     () =>
@@ -1092,6 +1578,11 @@ export default function EmployeeDashboard({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isTaskFilterOpen]);
+
+  useEffect(() => {
+    if (isTaskListDrawerOpen) return;
+    setIsTaskFilterOpen(false);
+  }, [isTaskListDrawerOpen]);
 
   useEffect(() => {
     const uid = String(effectiveSelectedId || "");
@@ -1376,7 +1867,6 @@ export default function EmployeeDashboard({
     breakLimitMinutes,
     isOnBreak ? baseUsedMinutes + liveActiveMinutes : savedTotalMinutes
   );
-  const breakMinutesActive = isOnBreak ? liveActiveMinutes : 0;
   const breakMinutesLeft = Math.max(0, breakLimitMinutes - effectiveUsedMinutes);
   const breakRemainingPct = Math.min(
     100,
@@ -1670,19 +2160,7 @@ export default function EmployeeDashboard({
     const editorEl = notepadEditorRef.current;
     if (!editorEl) {
       setNotepadToolbarState((prev) => {
-        if (
-          !prev.bold &&
-          !prev.italic &&
-          !prev.underline &&
-          !prev.alignLeft &&
-          !prev.alignCenter &&
-          !prev.alignRight &&
-          !prev.unorderedList &&
-          !prev.orderedList &&
-          !prev.checklist
-        ) {
-          return prev;
-        }
+        if (isNotepadToolbarStateDefault(prev)) return prev;
         return { ...NOTEPAD_TOOLBAR_DEFAULT };
       });
       return;
@@ -1691,19 +2169,7 @@ export default function EmployeeDashboard({
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) {
       setNotepadToolbarState((prev) => {
-        if (
-          !prev.bold &&
-          !prev.italic &&
-          !prev.underline &&
-          !prev.alignLeft &&
-          !prev.alignCenter &&
-          !prev.alignRight &&
-          !prev.unorderedList &&
-          !prev.orderedList &&
-          !prev.checklist
-        ) {
-          return prev;
-        }
+        if (isNotepadToolbarStateDefault(prev)) return prev;
         return { ...NOTEPAD_TOOLBAR_DEFAULT };
       });
       return;
@@ -1716,22 +2182,15 @@ export default function EmployeeDashboard({
     const isInEditor = (!!anchorEl && editorEl.contains(anchorEl)) || (!!focusEl && editorEl.contains(focusEl));
     if (!isInEditor) {
       setNotepadToolbarState((prev) => {
-        if (
-          !prev.bold &&
-          !prev.italic &&
-          !prev.underline &&
-          !prev.alignLeft &&
-          !prev.alignCenter &&
-          !prev.alignRight &&
-          !prev.unorderedList &&
-          !prev.orderedList &&
-          !prev.checklist
-        ) {
-          return prev;
-        }
+        if (isNotepadToolbarStateDefault(prev)) return prev;
         return { ...NOTEPAD_TOOLBAR_DEFAULT };
       });
       return;
+    }
+    try {
+      notepadSelectionRangeRef.current = selection.getRangeAt(0).cloneRange();
+    } catch (_err) {
+      notepadSelectionRangeRef.current = null;
     }
 
     const safeQueryState = (commandName) => {
@@ -1747,6 +2206,21 @@ export default function EmployeeDashboard({
     const closestChecklistRow = scopedElement?.closest?.(".notepad-check-item");
     const blockElement =
       scopedElement?.closest?.("p,div,li,ol,ul,h1,h2,h3,h4,h5,h6,blockquote") || scopedElement || editorEl;
+    const computedInlineStyle = window.getComputedStyle(scopedElement || editorEl);
+    const parsedFontSize = Number.parseFloat(String(computedInlineStyle?.fontSize || "").replace("px", ""));
+    const resolvedFontSize = Number.isFinite(parsedFontSize)
+      ? Math.max(8, Math.min(96, Math.round(parsedFontSize)))
+      : NOTEPAD_TOOLBAR_DEFAULT.fontSizePx;
+    const nearestFontSize = NOTEPAD_FONT_SIZE_OPTIONS.reduce((closest, sizeValue) => {
+      if (!Number.isFinite(closest)) return sizeValue;
+      const prevDelta = Math.abs(closest - resolvedFontSize);
+      const nextDelta = Math.abs(sizeValue - resolvedFontSize);
+      return nextDelta < prevDelta ? sizeValue : closest;
+    }, NaN);
+    const resolvedFontSizePx = Number.isFinite(nearestFontSize)
+      ? nearestFontSize
+      : NOTEPAD_TOOLBAR_DEFAULT.fontSizePx;
+    const resolvedFontColor = normalizeCssColorToHex(String(computedInlineStyle?.color || ""));
 
     let alignment = "left";
     const inlineAlign = String(blockElement?.style?.textAlign || "").trim().toLowerCase();
@@ -1770,6 +2244,8 @@ export default function EmployeeDashboard({
       unorderedList: safeQueryState("insertUnorderedList"),
       orderedList: safeQueryState("insertOrderedList"),
       checklist: !!closestChecklistRow,
+      fontSizePx: resolvedFontSizePx,
+      fontColor: resolvedFontColor,
     };
 
     setNotepadToolbarState((prev) => {
@@ -1782,7 +2258,9 @@ export default function EmployeeDashboard({
         prev.alignRight === nextState.alignRight &&
         prev.unorderedList === nextState.unorderedList &&
         prev.orderedList === nextState.orderedList &&
-        prev.checklist === nextState.checklist
+        prev.checklist === nextState.checklist &&
+        prev.fontSizePx === nextState.fontSizePx &&
+        prev.fontColor === nextState.fontColor
       ) {
         return prev;
       }
@@ -1791,9 +2269,39 @@ export default function EmployeeDashboard({
   }, []);
 
   const runNotepadCommand = useCallback(
-    (command, value = null) => {
-      if (!notepadEditorRef.current || typeof document === "undefined") return;
-      notepadEditorRef.current.focus();
+    (command, value = null, options = {}) => {
+      if (!notepadEditorRef.current || typeof document === "undefined" || typeof window === "undefined") return;
+      const forceRestoreSelection = !!options?.forceRestoreSelection;
+      const editorEl = notepadEditorRef.current;
+      editorEl.focus();
+      const selection = window.getSelection();
+      const hasSelectionInEditor =
+        selection &&
+        selection.rangeCount > 0 &&
+        (() => {
+          const anchorNode = selection.anchorNode;
+          const focusNode = selection.focusNode;
+          const anchorEl = anchorNode?.nodeType === Node.TEXT_NODE ? anchorNode.parentNode : anchorNode;
+          const focusEl = focusNode?.nodeType === Node.TEXT_NODE ? focusNode.parentNode : focusNode;
+          return (!!anchorEl && editorEl.contains(anchorEl)) || (!!focusEl && editorEl.contains(focusEl));
+        })();
+      const hasCachedSelection = !!notepadSelectionRangeRef.current;
+      const shouldRestoreCachedSelection =
+        !!selection &&
+        hasCachedSelection &&
+        (forceRestoreSelection ||
+          !hasSelectionInEditor ||
+          (hasSelectionInEditor &&
+            !!selection.isCollapsed &&
+            !notepadSelectionRangeRef.current?.collapsed));
+      if (shouldRestoreCachedSelection && selection && notepadSelectionRangeRef.current) {
+        try {
+          selection.removeAllRanges();
+          selection.addRange(notepadSelectionRangeRef.current.cloneRange());
+        } catch (_err) {
+          // Selection can become stale when editor DOM changes; ignore and continue with caret at focus.
+        }
+      }
 
       if (command === "insertChecklistItem") {
         const converted = convertSelectionLinesToChecklist(notepadEditorRef.current);
@@ -1808,6 +2316,118 @@ export default function EmployeeDashboard({
         document.execCommand("styleWithCSS", false, true);
         document.execCommand(command, false, null);
         document.execCommand("styleWithCSS", false, false);
+      } else if (command === "foreColor") {
+        const nextColor = normalizeCssColorToHex(value);
+        document.execCommand("styleWithCSS", false, true);
+        document.execCommand("foreColor", false, nextColor);
+        document.execCommand("styleWithCSS", false, false);
+      } else if (command === "fontSizePx") {
+        applyNotepadFontSizeInEditor(notepadEditorRef.current, value);
+      } else if (command === "insertTable") {
+        const requestedRows = Math.max(1, Math.min(20, Number(value?.rows) || 2));
+        const requestedCols = Math.max(1, Math.min(20, Number(value?.cols) || 2));
+        let tableHtml = "<table><tbody>";
+        for (let rowIndex = 0; rowIndex < requestedRows; rowIndex += 1) {
+          tableHtml += "<tr>";
+          for (let colIndex = 0; colIndex < requestedCols; colIndex += 1) {
+            tableHtml += "<td>&nbsp;</td>";
+          }
+          tableHtml += "</tr>";
+        }
+        tableHtml += "</tbody></table><p><br></p>";
+        document.execCommand("insertHTML", false, tableHtml);
+      } else if (command === "tableAddRow" || command === "tableDeleteRow") {
+        const context = getNotepadTableContext(notepadEditorRef.current);
+        if (context?.table) {
+          const activeRow = context.row || context.table.querySelector("tr");
+          if (activeRow) {
+            if (command === "tableAddRow") {
+              const columnCount = activeRow.cells?.length || 1;
+              const tagName = String(activeRow.cells?.[0]?.tagName || "td");
+              const nextRow = createEmptyTableRow(columnCount, tagName);
+              activeRow.insertAdjacentElement("afterend", nextRow);
+            } else {
+              activeRow.remove();
+              const remainingRows = context.table.querySelectorAll("tr");
+              if (!remainingRows.length) {
+                context.table.remove();
+              }
+            }
+          }
+        }
+      } else if (command === "tableAddColumn" || command === "tableDeleteColumn") {
+        const context = getNotepadTableContext(notepadEditorRef.current);
+        if (context?.table) {
+          const activeRow = context.row || context.table.querySelector("tr");
+          const activeCell = context.cell || activeRow?.cells?.[0] || null;
+          if (activeRow && activeCell) {
+            const rawIndex = Array.from(activeRow.cells || []).indexOf(activeCell);
+            const targetIndex = rawIndex >= 0 ? rawIndex : 0;
+            const rows = Array.from(context.table.querySelectorAll("tr"));
+            if (command === "tableAddColumn") {
+              rows.forEach((rowEl) => {
+                const cellTag = String(rowEl.cells?.[targetIndex]?.tagName || activeCell.tagName || "td");
+                const nextCell = createEmptyTableCell(cellTag);
+                const referenceCell = rowEl.cells?.[targetIndex + 1] || null;
+                if (referenceCell) rowEl.insertBefore(nextCell, referenceCell);
+                else rowEl.appendChild(nextCell);
+              });
+            } else {
+              rows.forEach((rowEl) => {
+                const cellToRemove = rowEl.cells?.[targetIndex];
+                if (cellToRemove) cellToRemove.remove();
+              });
+              const hasAnyCells = rows.some((rowEl) => (rowEl.cells?.length || 0) > 0);
+              if (!hasAnyCells) {
+                context.table.remove();
+              }
+            }
+          }
+        }
+      } else if (command === "tableDelete") {
+        const context = getNotepadTableContext(notepadEditorRef.current);
+        if (context?.table) {
+          context.table.remove();
+        }
+      } else if (command === "tableMergeSelected") {
+        const editorEl = notepadEditorRef.current;
+        const selectedCells = Array.from(new Set(notepadSelectedTableCellsRef.current || [])).filter(
+          (cellEl) => editorEl?.contains(cellEl)
+        );
+        const mergePlan = buildNotepadTableMergePlan(selectedCells);
+        if (mergePlan?.topLeftCell) {
+          mergePlan.topLeftCell.setAttribute("rowspan", String(Math.max(1, mergePlan.rowSpan || 1)));
+          mergePlan.topLeftCell.setAttribute("colspan", String(Math.max(1, mergePlan.colSpan || 1)));
+          mergePlan.topLeftCell.innerHTML = mergePlan.mergedHtml;
+          mergePlan.cellsToRemove.forEach((cellEl) => cellEl.remove());
+        }
+      } else if (command === "tableSetCellColor" || command === "tableClearCellColor") {
+        const context = getNotepadTableContext(notepadEditorRef.current);
+        const highlightedCell = notepadSelectedTableCellRef.current;
+        const selectedCells = Array.from(new Set(notepadSelectedTableCellsRef.current || [])).filter((cellEl) =>
+          notepadEditorRef.current?.contains(cellEl)
+        );
+        const targetCell =
+          context?.cell && notepadEditorRef.current.contains(context.cell)
+            ? context.cell
+            : highlightedCell && notepadEditorRef.current.contains(highlightedCell)
+              ? highlightedCell
+              : null;
+        const targetCells = selectedCells.length > 0 ? selectedCells : targetCell ? [targetCell] : [];
+        if (targetCells.length > 0) {
+          if (command === "tableSetCellColor") {
+            const colorValue = String(value || "").trim();
+            if (colorValue) {
+              targetCells.forEach((cellEl) => {
+                cellEl.style.backgroundColor = colorValue;
+              });
+            }
+          } else {
+            targetCells.forEach((cellEl) => {
+              cellEl.style.removeProperty("background-color");
+            });
+          }
+        }
       } else {
         document.execCommand(command, false, value);
       }
@@ -1842,7 +2462,10 @@ export default function EmployeeDashboard({
       const docsById = new Map();
       for (const noteDoc of personalSnapshot.docs) docsById.set(noteDoc.id, noteDoc);
       for (const noteDoc of groupSnapshot.docs) docsById.set(noteDoc.id, noteDoc);
-      const mergedDocs = Array.from(docsById.values());
+      const mergedDocs = Array.from(docsById.values()).filter((noteDoc) => {
+        const data = noteDoc?.data?.() || {};
+        return String(data?.docType || "").trim() !== "dashboardPref";
+      });
       NOTEPAD_DOCS_CACHE_BY_EMPLOYEE.set(employeeUserId, mergedDocs);
       return mergedDocs;
     },
@@ -2016,6 +2639,7 @@ export default function EmployeeDashboard({
         setNotepadGroupMemberDraft([]);
         setSelectedNotepadNoteId("");
         setNotepadTitleDraft("");
+        setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
         setNotepadDeadlineDraft("");
         setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
         setNotepadError("");
@@ -2031,6 +2655,9 @@ export default function EmployeeDashboard({
         const rows = noteDocs
           .map((noteDoc) => mapNotepadDocToRow(noteDoc, employeeUserId))
           .sort((a, b) => {
+            const aPinned = !!a?.isPinned;
+            const bPinned = !!b?.isPinned;
+            if (aPinned !== bPinned) return aPinned ? -1 : 1;
             if (b.updatedAtMs !== a.updatedAtMs) return b.updatedAtMs - a.updatedAtMs;
             if (b.createdAtMs !== a.createdAtMs) return b.createdAtMs - a.createdAtMs;
             return String(a.title || "").localeCompare(String(b.title || ""));
@@ -2072,6 +2699,7 @@ export default function EmployeeDashboard({
     setNotepadGroupMemberDraft([]);
     setSelectedNotepadNoteId("");
     setNotepadTitleDraft("");
+    setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
     setNotepadDeadlineDraft("");
     setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
     setNotepadDirty(false);
@@ -2094,6 +2722,7 @@ export default function EmployeeDashboard({
     setNotepadViewMode(NOTEPAD_VIEW_GROUP);
     setSelectedNotepadNoteId("");
     setNotepadTitleDraft("");
+    setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
     setNotepadDeadlineDraft("");
     setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
     setNotepadDirty(false);
@@ -2156,8 +2785,10 @@ export default function EmployeeDashboard({
         memberUserIds,
         memberProfiles,
         title: "Untitled group note",
+        noteColorKey: DEFAULT_NOTEPAD_COLOR_KEY,
         contentHtml: EMPTY_NOTEPAD_HTML,
         deadlineAt: null,
+        isPinned: false,
         isCompleted: false,
         completedAt: null,
         isTrashed: false,
@@ -2303,6 +2934,47 @@ export default function EmployeeDashboard({
       employeesByUserId,
       formatNotepadDueLabel,
       createNotepadNotificationIfMissing,
+      refreshNotepadIconMeta,
+      loadNotepadNotes,
+    ]
+  );
+
+  const toggleNotepadNotePinned = useCallback(
+    async (note) => {
+      const noteId = String(note?.id || "").trim();
+      if (!noteId) return;
+      if (savingNotepadNote || notepadTrashingNoteId || notepadBinActionNoteId) return;
+      if (notepadPinningNoteId) return;
+
+      const actorUserId =
+        viewerUserId || String(effectiveSelectedId || "").trim() || String(note?.employeeUserId || "").trim();
+      const nextPinned = !note?.isPinned;
+
+      setNotepadPinningNoteId(noteId);
+      setNotepadError("");
+
+      try {
+        await updateDoc(doc(db, EMPLOYEE_NOTEPAD_COLLECTION, noteId), {
+          isPinned: nextPinned,
+          updatedAt: serverTimestamp(),
+          updatedByUserId: actorUserId || "",
+        });
+        setNotepadStatusText(nextPinned ? "Note pinned." : "Note unpinned.");
+        await refreshNotepadIconMeta({ force: true });
+        await loadNotepadNotes(noteId, { force: true });
+      } catch (err) {
+        setNotepadError(err?.message || "Failed to update pin state.");
+      } finally {
+        setNotepadPinningNoteId("");
+      }
+    },
+    [
+      savingNotepadNote,
+      notepadTrashingNoteId,
+      notepadBinActionNoteId,
+      notepadPinningNoteId,
+      viewerUserId,
+      effectiveSelectedId,
       refreshNotepadIconMeta,
       loadNotepadNotes,
     ]
@@ -2526,8 +3198,21 @@ export default function EmployeeDashboard({
     const persistedHtml = serializeNotepadEditorHtml(notepadEditorRef.current, editorHtml);
     const finalContentHtml = String(persistedHtml || "").trim() || EMPTY_NOTEPAD_HTML;
     const finalTitle = toText(notepadTitleDraft) || "Untitled note";
+    const finalColorKey = normalizeNotepadColorKey(notepadColorDraft || selectedNotepadNote?.noteColorKey);
     const deadlineMs = parseLocalDateTimeInputMs(notepadDeadlineDraft);
     const deadlineAtValue = Number.isFinite(deadlineMs) ? new Date(deadlineMs) : null;
+    const hasMeaningfulTitle = !!toText(notepadTitleDraft);
+    const hasMeaningfulContent = hasMeaningfulNotepadContent(finalContentHtml);
+    const hasDeadline = Number.isFinite(deadlineMs);
+    const isCreatingNewNote = !String(selectedNotepadNoteId || "").trim();
+    if (isCreatingNewNote && !hasMeaningfulTitle && !hasMeaningfulContent && !hasDeadline) {
+      setNotepadDirty(false);
+      setNotepadChecklistChangeVersion(0);
+      setNotepadStatusText("Nothing to save.");
+      setNotepadError("");
+      return;
+    }
+
     const deadlineNotificationKey = Number.isFinite(deadlineMs) ? String(Math.floor(deadlineMs / 60000)) : "";
     const previousNotificationKey = String(selectedNotepadNote?.dueSoonNotificationKey || "").trim();
     const nextDueSoonNotificationKey =
@@ -2545,8 +3230,10 @@ export default function EmployeeDashboard({
       if (keepSelectedId) {
         await updateDoc(doc(db, EMPLOYEE_NOTEPAD_COLLECTION, keepSelectedId), {
           title: finalTitle,
+          noteColorKey: finalColorKey,
           contentHtml: finalContentHtml,
           deadlineAt: deadlineAtValue,
+          isPinned: !!selectedNotepadNote?.isPinned,
           dueSoonNotificationKey: nextDueSoonNotificationKey,
           employeeName: toText(employee?.name || employee?.email || ""),
           updatedAt: serverTimestamp(),
@@ -2560,8 +3247,10 @@ export default function EmployeeDashboard({
           memberUserIds: [employeeUserId],
           memberProfiles: resolveNotepadMemberProfiles([employeeUserId], []),
           title: finalTitle,
+          noteColorKey: finalColorKey,
           contentHtml: finalContentHtml,
           deadlineAt: deadlineAtValue,
+          isPinned: false,
           isCompleted: false,
           completedAt: null,
           isTrashed: false,
@@ -2577,8 +3266,10 @@ export default function EmployeeDashboard({
 
       setNotepadDirty(false);
       setNotepadTitleDraft(finalTitle);
+      setNotepadColorDraft(finalColorKey);
       setNotepadDeadlineDraft(toLocalDateTimeInputValue(deadlineAtValue));
       setNotepadContentDraft(finalContentHtml);
+      setNotepadChecklistChangeVersion(0);
       if (notepadEditorRef.current) {
         notepadEditorRef.current.innerHTML = finalContentHtml;
       }
@@ -2596,6 +3287,7 @@ export default function EmployeeDashboard({
     notepadContentDraft,
     notepadDeadlineDraft,
     notepadTitleDraft,
+    notepadColorDraft,
     viewerUserId,
     selectedNotepadNoteId,
     notepadViewMode,
@@ -2605,6 +3297,10 @@ export default function EmployeeDashboard({
     refreshNotepadIconMeta,
     loadNotepadNotes,
   ]);
+
+  useEffect(() => {
+    saveNotepadNoteRef.current = saveNotepadNote;
+  }, [saveNotepadNote]);
 
   useEffect(() => {
     if (!isNotepadDrawerOpen) return;
@@ -2625,14 +3321,17 @@ export default function EmployeeDashboard({
       setNotepadDeadlineDraft("");
       setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
       setNotepadDirty(false);
+      setNotepadChecklistChangeVersion(0);
       if (notepadEditorRef.current) notepadEditorRef.current.innerHTML = EMPTY_NOTEPAD_HTML;
       return;
     }
 
     setNotepadTitleDraft(toText(selectedNotepadNote.title) || "Untitled note");
+    setNotepadColorDraft(normalizeNotepadColorKey(selectedNotepadNote?.noteColorKey));
     setNotepadDeadlineDraft(toLocalDateTimeInputValue(selectedNotepadNote.deadlineAt));
     setNotepadContentDraft(String(selectedNotepadNote.contentHtml || EMPTY_NOTEPAD_HTML));
     setNotepadDirty(false);
+    setNotepadChecklistChangeVersion(0);
   }, [isNotepadDrawerOpen, selectedNotepadNote]);
 
   useEffect(() => {
@@ -2650,7 +3349,7 @@ export default function EmployeeDashboard({
     if (savingNotepadNote) return;
 
     const autosaveTimerId = window.setTimeout(() => {
-      saveNotepadNote();
+      saveNotepadNoteRef.current?.();
     }, 30000);
 
     return () => {
@@ -2664,7 +3363,28 @@ export default function EmployeeDashboard({
     notepadTitleDraft,
     notepadDeadlineDraft,
     notepadContentDraft,
-    saveNotepadNote,
+  ]);
+
+  useEffect(() => {
+    if (!isNotepadDrawerOpen) return;
+    if (String(notepadViewMode || "") === NOTEPAD_VIEW_BIN) return;
+    if (!notepadChecklistChangeVersion) return;
+    if (!notepadDirty) return;
+    if (savingNotepadNote) return;
+
+    const checklistAutosaveTimerId = window.setTimeout(() => {
+      saveNotepadNoteRef.current?.();
+    }, 10000);
+
+    return () => {
+      window.clearTimeout(checklistAutosaveTimerId);
+    };
+  }, [
+    isNotepadDrawerOpen,
+    notepadViewMode,
+    notepadChecklistChangeVersion,
+    notepadDirty,
+    savingNotepadNote,
   ]);
 
   const visitorAnnouncements = useMemo(() => {
@@ -2904,23 +3624,6 @@ export default function EmployeeDashboard({
       : "No agent data for this month.";
 
   const now = new Date(Number.isFinite(liveNowMs) ? liveNowMs : nowMs);
-  const clockReferenceTimeZone = String(businessTimeZone || "").trim() || "America/Chicago";
-  const clockReferenceLabel = useMemo(() => {
-    try {
-      const zonePart = new Intl.DateTimeFormat(undefined, {
-        timeZone: clockReferenceTimeZone,
-        timeZoneName: "short",
-      })
-        .formatToParts(now)
-        .find((part) => part.type === "timeZoneName")?.value;
-
-      return zonePart
-        ? `${clockReferenceTimeZone} (${zonePart})`
-        : clockReferenceTimeZone;
-    } catch {
-      return clockReferenceTimeZone;
-    }
-  }, [clockReferenceTimeZone, now]);
 
   const greetingText = useMemo(() => {
     const parts = getPartsInTimeZone(
@@ -2937,6 +3640,13 @@ export default function EmployeeDashboard({
   const historyLoading = !!loadingHistoryByUserId?.[String(effectiveSelectedId)];
   const historyError = historyErrorByUserId?.[String(effectiveSelectedId)] || "";
   const closeBreakLogsDrawer = () => setIsBreakLogsDrawerOpen(false);
+  const closeTaskListDrawer = () => {
+    setIsTaskFilterOpen(false);
+    setIsTaskListDrawerOpen(false);
+  };
+  const closeAnnouncementDrawer = () => {
+    setIsAnnouncementDrawerOpen(false);
+  };
   const closeNotepadDrawer = () => {
     setNotepadConfirmState({
       open: false,
@@ -2966,6 +3676,8 @@ export default function EmployeeDashboard({
   const notepadGroupNoteCount = notepadGroupNotes.length;
   const notepadTrashedNoteCount = Array.isArray(notepadTrashedNotes) ? notepadTrashedNotes.length : 0;
   const notepadIconBadgeLabel = notepadIconCount > 99 ? "99+" : String(Math.max(0, notepadIconCount));
+  const taskIconCountLabel =
+    employeeTasks.length > 99 ? "99+" : String(Math.max(0, employeeTasks.length));
   const notepadGroupMemberSelectionCount = sanitizeNotepadMemberUserIds(notepadGroupMemberDraft).length;
   const isNotepadPersonalNewMode =
     String(notepadViewMode || "") === NOTEPAD_VIEW_MY &&
@@ -2988,15 +3700,1157 @@ export default function EmployeeDashboard({
   );
   const notepadDraftDeadlineMs = parseLocalDateTimeInputMs(notepadDeadlineDraft);
   const notepadDraftDeadlineTone = getNotepadDeadlineTone(notepadDraftDeadlineMs, nowMsForNotepad);
+  const currentNotepadEditorHtml = String(
+    notepadEditorRef.current?.innerHTML || notepadContentDraft || EMPTY_NOTEPAD_HTML
+  );
+  const notepadEditorIsEmpty = !hasMeaningfulNotepadContent(currentNotepadEditorHtml);
+  const dashboardImportantNotes = useMemo(() => {
+    const rows = (Array.isArray(notepadNotes) ? notepadNotes : []).filter((note) => !note?.isCompleted);
+    const nowForPriorityMs = Number.isFinite(nowMsForNotepad) ? nowMsForNotepad : Date.now();
+    const getPriorityBucket = (note) => {
+      const deadlineMs = Number(note?.deadlineAtMs);
+      if (!Number.isFinite(deadlineMs)) return 3; // no due date
+      if (deadlineMs < nowForPriorityMs) return 0; // overdue first
+      if (deadlineMs - nowForPriorityMs <= NOTEPAD_DUE_SOON_WINDOW_MS) return 1; // due soon
+      return 2; // upcoming but not due soon
+    };
+
+    return rows
+      .slice()
+      .sort((a, b) => {
+        const aPinned = !!a?.isPinned;
+        const bPinned = !!b?.isPinned;
+        if (aPinned !== bPinned) return aPinned ? -1 : 1;
+
+        const aBucket = getPriorityBucket(a);
+        const bBucket = getPriorityBucket(b);
+        if (aBucket !== bBucket) return aBucket - bBucket;
+
+        const aDeadlineMs = Number(a?.deadlineAtMs);
+        const bDeadlineMs = Number(b?.deadlineAtMs);
+        const aHasDeadline = Number.isFinite(aDeadlineMs);
+        const bHasDeadline = Number.isFinite(bDeadlineMs);
+        if ((aBucket === 1 || aBucket === 2) && aHasDeadline && bHasDeadline) {
+          const aDeltaMs = aDeadlineMs - nowForPriorityMs;
+          const bDeltaMs = bDeadlineMs - nowForPriorityMs;
+          if (aDeltaMs !== bDeltaMs) return aDeltaMs - bDeltaMs;
+        }
+
+        if (aBucket === 0 && aHasDeadline && bHasDeadline && aDeadlineMs !== bDeadlineMs) {
+          // Overdue notes: the most recently overdue appears first.
+          return bDeadlineMs - aDeadlineMs;
+        }
+
+        const aCreatedMs = Number(a?.createdAtMs) || 0;
+        const bCreatedMs = Number(b?.createdAtMs) || 0;
+        if (aCreatedMs !== bCreatedMs) {
+          return bCreatedMs - aCreatedMs;
+        }
+
+        const aUpdatedMs = Number(a?.updatedAtMs) || 0;
+        const bUpdatedMs = Number(b?.updatedAtMs) || 0;
+        if (aUpdatedMs !== bUpdatedMs) return bUpdatedMs - aUpdatedMs;
+
+        return String(a?.title || "").localeCompare(String(b?.title || ""));
+      })
+      .slice(0, 5);
+  }, [notepadNotes, nowMsForNotepad]);
+  useEffect(() => {
+    if (!dashboardImportantNotes.length) {
+      setDashboardDisplayNoteIndex(0);
+      return;
+    }
+    setDashboardDisplayNoteIndex((prev) =>
+      prev >= 0 && prev < dashboardImportantNotes.length ? prev : 0
+    );
+  }, [dashboardImportantNotes.length]);
+
+  const topDashboardImportantNote =
+    dashboardImportantNotes[dashboardDisplayNoteIndex] || dashboardImportantNotes[0] || null;
+  const dashboardImportantNoteCount = dashboardImportantNotes.length;
+  const dashboardVisiblePageCount = Math.min(3, Math.max(0, dashboardImportantNoteCount));
+  const dashboardHasFrontPage = dashboardVisiblePageCount >= 1;
+  const dashboardHasMidPage = dashboardVisiblePageCount >= 2;
+  const dashboardHasBackPage = dashboardVisiblePageCount >= 3;
+  const dashboardHasNoPages = dashboardVisiblePageCount === 0;
+  const dashboardStackMidNote =
+    dashboardImportantNoteCount > 1
+      ? dashboardImportantNotes[(dashboardDisplayNoteIndex + 1) % dashboardImportantNoteCount]
+      : null;
+  const dashboardStackBackNote =
+    dashboardImportantNoteCount > 2
+      ? dashboardImportantNotes[(dashboardDisplayNoteIndex + 2) % dashboardImportantNoteCount]
+      : dashboardStackMidNote;
+  const dashboardNotepadColorKey = normalizeNotepadColorKey(dashboardNotepadPreviewColorKey);
+  const dashboardDefaultThemeVars = NOTEPAD_COLOR_THEMES[DEFAULT_NOTEPAD_COLOR_KEY]?.vars || {};
+  const dashboardFrontThemeVars = NOTEPAD_COLOR_THEMES[dashboardNotepadColorKey]?.vars || dashboardDefaultThemeVars;
+  const dashboardMidColorKey = normalizeNotepadColorKey(
+    dashboardStackMidNote?.noteColorKey || dashboardNotepadColorKey
+  );
+  const dashboardMidThemeVars = NOTEPAD_COLOR_THEMES[dashboardMidColorKey]?.vars || dashboardDefaultThemeVars;
+  const dashboardBackColorKey = normalizeNotepadColorKey(
+    dashboardStackBackNote?.noteColorKey || dashboardMidColorKey
+  );
+  const dashboardBackThemeVars = NOTEPAD_COLOR_THEMES[dashboardBackColorKey]?.vars || dashboardDefaultThemeVars;
+  const dashboardNotepadTitle = toText(topDashboardImportantNote?.title) || "Notes";
+  const dashboardNotepadDeadlineMs = Number(topDashboardImportantNote?.deadlineAtMs);
+  const dashboardNotepadHasDeadline = Number.isFinite(dashboardNotepadDeadlineMs);
+  const dashboardNotepadDeadlineTone = dashboardNotepadHasDeadline
+    ? getNotepadDeadlineTone(dashboardNotepadDeadlineMs, nowMsForNotepad)
+    : "";
+  const dashboardNotepadDeadlineLabel = dashboardNotepadHasDeadline
+    ? formatNotepadDeadlineLabel(dashboardNotepadDeadlineMs, dashboardNotepadDeadlineTone)
+    : "";
+  const dashboardNotepadIsPinned = !!topDashboardImportantNote?.isPinned;
+  const hasDashboardImportantNote = !!String(topDashboardImportantNote?.id || "").trim();
+  const dashboardDisplayNoteId = String(topDashboardImportantNote?.id || "").trim();
+  const dashboardDisplaySourceHtml = String(topDashboardImportantNote?.contentHtml || EMPTY_NOTEPAD_HTML);
+  const dashboardPreviewHasTable = /<table\b/i.test(String(dashboardDisplayHtml || ""));
+  const dashboardDisplayNoteCount = dashboardImportantNotes.length;
+  const dashboardUnpinBusy =
+    String(notepadPinningNoteId || "").trim() === String(topDashboardImportantNote?.id || "").trim();
+  const dashboardColorUpdateBusy = !!String(dashboardNoteColorUpdatingId || "").trim();
+
+  useEffect(() => {
+    if (dashboardColorSaveTimerRef.current) return;
+    if (topDashboardImportantNote?.id) {
+      setDashboardNotepadPreviewColorKey(
+        normalizeNotepadColorKey(topDashboardImportantNote?.noteColorKey || DEFAULT_NOTEPAD_COLOR_KEY)
+      );
+      return;
+    }
+    setDashboardNotepadPreviewColorKey(DEFAULT_NOTEPAD_COLOR_KEY);
+  }, [topDashboardImportantNote?.id, topDashboardImportantNote?.noteColorKey]);
+
+  useEffect(() => {
+    return () => {
+      if (dashboardColorSaveTimerRef.current) {
+        window.clearTimeout(dashboardColorSaveTimerRef.current);
+      }
+      dashboardColorSaveTimerRef.current = null;
+      dashboardColorPendingPayloadRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dashboardColorSaveTimerRef.current) return;
+    window.clearTimeout(dashboardColorSaveTimerRef.current);
+    dashboardColorSaveTimerRef.current = null;
+    dashboardColorPendingPayloadRef.current = null;
+  }, [effectiveSelectedId]);
+
+  useEffect(() => {
+    setIsDashboardNoteMenuOpen(false);
+  }, [dashboardDisplayNoteId]);
+
+  useEffect(() => {
+    if (!isDashboardNoteMenuOpen) return;
+    const handlePointerDown = (event) => {
+      const hostEl = dashboardNoteActionsRef.current;
+      if (!hostEl) return;
+      if (hostEl.contains(event.target)) return;
+      setIsDashboardNoteMenuOpen(false);
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [isDashboardNoteMenuOpen]);
+
+  const showPreviousDashboardNote = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (dashboardDisplayNoteCount < 2) return;
+      setDashboardDisplayNoteIndex(
+        (prev) => (prev - 1 + dashboardDisplayNoteCount) % dashboardDisplayNoteCount
+      );
+    },
+    [dashboardDisplayNoteCount]
+  );
+
+  const showNextDashboardNote = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (dashboardDisplayNoteCount < 2) return;
+      setDashboardDisplayNoteIndex((prev) => (prev + 1) % dashboardDisplayNoteCount);
+    },
+    [dashboardDisplayNoteCount]
+  );
+
+  const handleDashboardPinIconClick = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!topDashboardImportantNote?.id) return;
+      if (dashboardNotepadIsPinned) {
+        setIsDashboardUnpinConfirmOpen(true);
+        return;
+      }
+      toggleNotepadNotePinned(topDashboardImportantNote);
+    },
+    [topDashboardImportantNote, dashboardNotepadIsPinned, toggleNotepadNotePinned]
+  );
+
+  const toggleDashboardNoteMenu = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDashboardNoteMenuOpen((prev) => !prev);
+  }, []);
+
+  const stopDashboardMenuPropagation = useCallback((event) => {
+    event.stopPropagation();
+  }, []);
+
+  const closeDashboardNoteMenuOnMouseLeave = useCallback(() => {
+    setIsDashboardNoteMenuOpen(false);
+  }, []);
+
+  const runDashboardNoteAction = useCallback(
+    (actionKey, event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const note = topDashboardImportantNote;
+      if (!note?.id) {
+        setIsDashboardNoteMenuOpen(false);
+        return;
+      }
+
+      setIsDashboardNoteMenuOpen(false);
+      if (actionKey === "pin") {
+        if (note?.isPinned) setIsDashboardUnpinConfirmOpen(true);
+        else toggleNotepadNotePinned(note);
+        return;
+      }
+      if (actionKey === "edit") {
+        const noteId = String(note?.id || "").trim();
+        if (!noteId) return;
+        setIsBreakLogsDrawerOpen(false);
+        setIsTaskListDrawerOpen(false);
+        setIsAnnouncementDrawerOpen(false);
+        setIsNotepadGroupCreatorOpen(false);
+        setNotepadViewMode(
+          normalizeNotepadScope(note?.noteScope) === "group" ? NOTEPAD_VIEW_GROUP : NOTEPAD_VIEW_MY
+        );
+        setSelectedNotepadNoteId(noteId);
+        setIsNotepadDrawerOpen(true);
+        return;
+      }
+      if (actionKey === "complete") {
+        if (!note?.isCompleted) {
+          toggleNotepadNoteCompleted(note);
+        }
+        return;
+      }
+      if (actionKey === "delete") {
+        openNotepadConfirm("trash", note);
+      }
+    },
+    [
+      topDashboardImportantNote,
+      toggleNotepadNotePinned,
+      toggleNotepadNoteCompleted,
+      openNotepadConfirm,
+    ]
+  );
+
+  const persistDashboardNoteColor = useCallback(
+    async (payload = {}) => {
+      const nextColorKey = normalizeNotepadColorKey(payload?.nextColorKey);
+      const actorUserId = String(payload?.actorUserId || "").trim();
+      const preferredNoteId = String(payload?.preferredNoteId || "").trim();
+      const targetNoteId = String(payload?.targetNoteId || "").trim();
+      if (!targetNoteId) return;
+
+      setDashboardNoteColorUpdatingId(targetNoteId);
+      setNotepadError("");
+      try {
+        await updateDoc(doc(db, EMPLOYEE_NOTEPAD_COLLECTION, targetNoteId), {
+          noteColorKey: nextColorKey,
+          updatedAt: serverTimestamp(),
+          updatedByUserId: actorUserId || "",
+        });
+
+        await refreshNotepadIconMeta({ force: true });
+        await loadNotepadNotes(preferredNoteId || dashboardDisplayNoteId || targetNoteId, { force: true });
+      } catch (err) {
+        setNotepadError(err?.message || "Failed to update notepad color.");
+        await loadNotepadNotes(dashboardDisplayNoteId, { force: true });
+      } finally {
+        setDashboardNoteColorUpdatingId("");
+      }
+    },
+    [
+      refreshNotepadIconMeta,
+      loadNotepadNotes,
+      dashboardDisplayNoteId,
+    ]
+  );
+
+  const setDashboardNoteColor = useCallback(
+    (colorKey, event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const nextColorKey = normalizeNotepadColorKey(colorKey);
+      const currentPreviewColorKey = normalizeNotepadColorKey(dashboardNotepadPreviewColorKey);
+      if (nextColorKey === currentPreviewColorKey && !dashboardColorSaveTimerRef.current) return;
+
+      setDashboardNotepadPreviewColorKey(nextColorKey);
+
+      const actorUserId =
+        viewerUserId ||
+        String(effectiveSelectedId || "").trim() ||
+        String(topDashboardImportantNote?.employeeUserId || "").trim();
+      const targetNoteId = String(topDashboardImportantNote?.id || "").trim();
+      if (!targetNoteId) return;
+
+      dashboardColorPendingPayloadRef.current = {
+        nextColorKey,
+        actorUserId,
+        targetNoteId,
+        preferredNoteId: dashboardDisplayNoteId,
+      };
+      setNotepadError("");
+
+      if (dashboardColorSaveTimerRef.current) {
+        window.clearTimeout(dashboardColorSaveTimerRef.current);
+      }
+      dashboardColorSaveTimerRef.current = window.setTimeout(() => {
+        const payload = dashboardColorPendingPayloadRef.current;
+        dashboardColorPendingPayloadRef.current = null;
+        dashboardColorSaveTimerRef.current = null;
+        if (!payload) return;
+        persistDashboardNoteColor(payload);
+      }, 3000);
+    },
+    [
+      dashboardNotepadPreviewColorKey,
+      viewerUserId,
+      effectiveSelectedId,
+      topDashboardImportantNote,
+      dashboardDisplayNoteId,
+      persistDashboardNoteColor,
+    ]
+  );
+
+  const confirmDashboardUnpin = useCallback(async () => {
+    if (!topDashboardImportantNote?.id) {
+      setIsDashboardUnpinConfirmOpen(false);
+      return;
+    }
+    await toggleNotepadNotePinned(topDashboardImportantNote);
+    setIsDashboardUnpinConfirmOpen(false);
+  }, [topDashboardImportantNote, toggleNotepadNotePinned]);
+
+  useEffect(() => {
+    setDashboardDisplayHtml(dashboardDisplaySourceHtml);
+    setDashboardDisplayDirty(false);
+    setDashboardDisplayStatus("");
+  }, [dashboardDisplayNoteId, dashboardDisplaySourceHtml]);
+
+  const handleDashboardDisplayCheckboxChange = useCallback(
+    (event) => {
+      const checkboxEl = event?.target;
+      if (String(checkboxEl?.tagName || "").toLowerCase() !== "input") return;
+      if (String(checkboxEl?.type || "").toLowerCase() !== "checkbox") return;
+
+      event.stopPropagation();
+      const hostEl = dashboardDisplayRef.current;
+      if (!hostEl) return;
+
+      const rawHtml = String(hostEl.innerHTML || "");
+      const checkedStates = Array.from(hostEl.querySelectorAll('input[type="checkbox"]')).map(
+        (checkbox) => !!checkbox?.checked
+      );
+      const nextHtml = persistChecklistStateInHtml(rawHtml, checkedStates);
+      setDashboardDisplayHtml(nextHtml);
+      setDashboardDisplayDirty(true);
+      setDashboardDisplayStatus("Unsaved checklist changes");
+      setDashboardDisplayChangeVersion((prev) => prev + 1);
+    },
+    []
+  );
+
+  const saveDashboardDisplayNote = useCallback(async () => {
+    if (dashboardDisplaySaving) return;
+    if (!dashboardDisplayDirty) return;
+    if (!dashboardDisplayNoteId) return;
+
+    const actorUserId =
+      viewerUserId || String(effectiveSelectedId || "").trim() || String(topDashboardImportantNote?.employeeUserId || "").trim();
+
+    setDashboardDisplaySaving(true);
+    setDashboardDisplayStatus("Saving...");
+    setNotepadError("");
+    try {
+      await updateDoc(doc(db, EMPLOYEE_NOTEPAD_COLLECTION, dashboardDisplayNoteId), {
+        contentHtml: String(dashboardDisplayHtml || EMPTY_NOTEPAD_HTML),
+        updatedAt: serverTimestamp(),
+        updatedByUserId: actorUserId || "",
+      });
+      setDashboardDisplayDirty(false);
+      setDashboardDisplayStatus("Saved");
+      await refreshNotepadIconMeta({ force: true });
+      await loadNotepadNotes(dashboardDisplayNoteId, { force: true });
+    } catch (err) {
+      setDashboardDisplayStatus("Could not save");
+      setNotepadError(err?.message || "Failed to save dashboard note checklist changes.");
+    } finally {
+      setDashboardDisplaySaving(false);
+    }
+  }, [
+    dashboardDisplaySaving,
+    dashboardDisplayDirty,
+    dashboardDisplayNoteId,
+    dashboardDisplayHtml,
+    viewerUserId,
+    effectiveSelectedId,
+    topDashboardImportantNote,
+    refreshNotepadIconMeta,
+    loadNotepadNotes,
+  ]);
+
+  useEffect(() => {
+    saveDashboardDisplayNoteRef.current = saveDashboardDisplayNote;
+  }, [saveDashboardDisplayNote]);
+
+  useEffect(() => {
+    if (!dashboardDisplayDirty) return;
+    if (dashboardDisplaySaving) return;
+    if (!dashboardDisplayNoteId) return;
+
+    const autosaveTimerId = window.setTimeout(() => {
+      saveDashboardDisplayNoteRef.current?.();
+    }, 10000);
+
+    return () => window.clearTimeout(autosaveTimerId);
+  }, [
+    dashboardDisplayDirty,
+    dashboardDisplaySaving,
+    dashboardDisplayNoteId,
+    dashboardDisplayChangeVersion,
+  ]);
+
+  const openDashboardImportantNote = useCallback(
+    (note) => {
+      const noteId = String(note?.id || "").trim();
+      if (!noteId) return;
+
+      setIsBreakLogsDrawerOpen(false);
+      setIsTaskListDrawerOpen(false);
+      setIsAnnouncementDrawerOpen(false);
+      setIsNotepadGroupCreatorOpen(false);
+      setNotepadViewMode(
+        normalizeNotepadScope(note?.noteScope) === "group" ? NOTEPAD_VIEW_GROUP : NOTEPAD_VIEW_MY
+      );
+      setSelectedNotepadNoteId(noteId);
+      setIsNotepadDrawerOpen(true);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!isNotepadRecycleBinView) return;
     setIsNotepadCompletedOpen(false);
   }, [isNotepadRecycleBinView]);
 
+  useEffect(() => {
+    const selectedEmployeeUserId = String(effectiveSelectedId || "").trim();
+    if (!selectedEmployeeUserId) return;
+    loadNotepadNotes();
+  }, [effectiveSelectedId, loadNotepadNotes]);
+
+  const clearNotepadSelectedTableCell = useCallback(() => {
+    const prevCell = notepadSelectedTableCellRef.current;
+    if (prevCell?.classList) {
+      prevCell.classList.remove("notepadTableCellActive");
+    }
+    notepadSelectedTableCellRef.current = null;
+  }, []);
+
+  const clearNotepadTableSelection = useCallback(() => {
+    const selectedCells = Array.isArray(notepadSelectedTableCellsRef.current)
+      ? notepadSelectedTableCellsRef.current
+      : [];
+    selectedCells.forEach((cellEl) => {
+      if (cellEl?.classList) {
+        cellEl.classList.remove("notepadTableCellSelected");
+      }
+    });
+    notepadSelectedTableCellsRef.current = [];
+    notepadTableSelectionAnchorRef.current = null;
+    setNotepadTableSelectedCount(0);
+  }, []);
+
+  const setNotepadTableSelection = useCallback((cells = []) => {
+    const editorEl = notepadEditorRef.current;
+    const normalizedCells = Array.from(new Set(Array.isArray(cells) ? cells : []))
+      .filter(Boolean)
+      .filter(
+        (cellEl) =>
+          editorEl?.contains(cellEl) && ["td", "th"].includes(String(cellEl?.tagName || "").toLowerCase())
+      );
+
+    const previousCells = Array.isArray(notepadSelectedTableCellsRef.current)
+      ? notepadSelectedTableCellsRef.current
+      : [];
+    previousCells.forEach((cellEl) => {
+      if (cellEl?.classList) {
+        cellEl.classList.remove("notepadTableCellSelected");
+      }
+    });
+    normalizedCells.forEach((cellEl) => {
+      if (cellEl?.classList) {
+        cellEl.classList.add("notepadTableCellSelected");
+      }
+    });
+
+    notepadSelectedTableCellsRef.current = normalizedCells;
+    setNotepadTableSelectedCount(normalizedCells.length);
+  }, []);
+
+  const highlightNotepadTableCell = useCallback(
+    (cellEl) => {
+      const nextCell =
+        cellEl &&
+        ["td", "th"].includes(String(cellEl.tagName || "").toLowerCase()) &&
+        notepadEditorRef.current?.contains(cellEl)
+          ? cellEl
+          : null;
+
+      const prevCell = notepadSelectedTableCellRef.current;
+      if (prevCell === nextCell) return;
+      if (prevCell?.classList) {
+        prevCell.classList.remove("notepadTableCellActive");
+      }
+      if (nextCell?.classList) {
+        nextCell.classList.add("notepadTableCellActive");
+      }
+      notepadSelectedTableCellRef.current = nextCell;
+    },
+    []
+  );
+
+  const runNotepadTableContextAction = useCallback(
+    (commandKey, commandValue = null) => {
+      if (commandKey === "tableMergeSelected" && notepadTableSelectedCount < 2) return;
+      runNotepadCommand(commandKey, commandValue);
+      setNotepadTableMenuState((prev) => ({ ...prev, open: false }));
+      if (commandKey === "tableDelete") {
+        clearNotepadSelectedTableCell();
+        clearNotepadTableSelection();
+        return;
+      }
+      if (commandKey === "tableMergeSelected") {
+        const activeCell = notepadSelectedTableCellRef.current;
+        clearNotepadTableSelection();
+        if (activeCell && notepadEditorRef.current?.contains(activeCell)) {
+          setNotepadTableSelection([activeCell]);
+        }
+      }
+    },
+    [
+      runNotepadCommand,
+      clearNotepadSelectedTableCell,
+      clearNotepadTableSelection,
+      setNotepadTableSelection,
+      notepadTableSelectedCount,
+    ]
+  );
+
+  const handleNotepadEditorContextMenu = useCallback(
+    (event) => {
+      setIsNotepadTablePickerOpen(false);
+      const editorEl = notepadEditorRef.current;
+      const eventTarget = event?.target;
+      if (!editorEl || !eventTarget) return;
+
+      const cellEl = eventTarget.closest?.("td,th");
+      if (!cellEl || !editorEl.contains(cellEl)) {
+        setNotepadTableMenuState((prev) => (prev.open ? { ...prev, open: false } : prev));
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      const currentlySelected = Array.isArray(notepadSelectedTableCellsRef.current)
+        ? notepadSelectedTableCellsRef.current
+        : [];
+      if (!currentlySelected.includes(cellEl)) {
+        setNotepadTableSelection([cellEl]);
+      }
+      highlightNotepadTableCell(cellEl);
+      notepadTableSelectionAnchorRef.current = cellEl;
+      setNotepadTableMenuState({
+        open: true,
+        x: Number(event.clientX) || 0,
+        y: Number(event.clientY) || 0,
+      });
+    },
+    [highlightNotepadTableCell, setNotepadTableSelection]
+  );
+
+  const clearNotepadTableMoveHandleHideTimer = useCallback(() => {
+    if (!notepadTableMoveHandleHideTimerRef.current) return;
+    window.clearTimeout(notepadTableMoveHandleHideTimerRef.current);
+    notepadTableMoveHandleHideTimerRef.current = null;
+  }, []);
+
+  const scheduleNotepadTableMoveHandleHide = useCallback(() => {
+    clearNotepadTableMoveHandleHideTimer();
+    notepadTableMoveHandleHideTimerRef.current = window.setTimeout(() => {
+      setNotepadTableMoveHandleState((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      notepadTableMoveHandleTableRef.current = null;
+      notepadTableMoveHandleHideTimerRef.current = null;
+    }, 320);
+  }, [clearNotepadTableMoveHandleHideTimer]);
+
+  const getNotepadTableMenuBounds = useCallback(() => {
+    const margin = 8;
+    const viewportBounds = {
+      left: margin,
+      top: margin,
+      right: Math.max(margin, Number(window?.innerWidth) - margin),
+      bottom: Math.max(margin, Number(window?.innerHeight) - margin),
+    };
+
+    const drawerEl = notepadEditorRef.current?.closest?.(".empNotepadDrawer");
+    if (!drawerEl) return viewportBounds;
+
+    const drawerRect = drawerEl.getBoundingClientRect();
+    return {
+      left: clampNotepadMenuCoordinate(drawerRect.left + margin, margin, viewportBounds.right),
+      top: clampNotepadMenuCoordinate(drawerRect.top + margin, margin, viewportBounds.bottom),
+      right: clampNotepadMenuCoordinate(drawerRect.right - margin, margin, viewportBounds.right),
+      bottom: clampNotepadMenuCoordinate(drawerRect.bottom - margin, margin, viewportBounds.bottom),
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!notepadTableMenuState.open) return;
+
+    const closeMenu = () => {
+      setNotepadTableMenuState((prev) => ({ ...prev, open: false }));
+    };
+    const handlePointerDown = (event) => {
+      const menuEl = notepadTableMenuRef.current;
+      if (menuEl && menuEl.contains(event.target)) return;
+      closeMenu();
+    };
+    const handleKeyDown = (event) => {
+      if (event?.key === "Escape") closeMenu();
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [notepadTableMenuState.open]);
+
+  useEffect(() => {
+    if (!notepadTableMenuState.open) return;
+    const menuEl = notepadTableMenuRef.current;
+    if (!menuEl) return;
+
+    const menuRect = menuEl.getBoundingClientRect();
+    const bounds = getNotepadTableMenuBounds();
+    const maxX = bounds.right - menuRect.width;
+    const maxY = bounds.bottom - menuRect.height;
+    const nextX = Math.round(clampNotepadMenuCoordinate(notepadTableMenuState.x, bounds.left, maxX));
+    const nextY = Math.round(clampNotepadMenuCoordinate(notepadTableMenuState.y, bounds.top, maxY));
+
+    if (nextX === notepadTableMenuState.x && nextY === notepadTableMenuState.y) return;
+    setNotepadTableMenuState((prev) => (prev.open ? { ...prev, x: nextX, y: nextY } : prev));
+  }, [
+    getNotepadTableMenuBounds,
+    notepadTableMenuState.open,
+    notepadTableMenuState.x,
+    notepadTableMenuState.y,
+  ]);
+
+  useEffect(() => {
+    if (isNotepadDrawerOpen) return;
+    clearNotepadTableMoveHandleHideTimer();
+    setNotepadTableMenuState((prev) => ({ ...prev, open: false }));
+    setNotepadTableMoveHandleState((prev) => ({ ...prev, visible: false }));
+    notepadTableMoveHandleTableRef.current = null;
+    clearNotepadSelectedTableCell();
+    clearNotepadTableSelection();
+    setIsNotepadTablePickerOpen(false);
+    notepadTableResizeStateRef.current = null;
+    if (notepadEditorRef.current) notepadEditorRef.current.style.cursor = "";
+  }, [isNotepadDrawerOpen, clearNotepadSelectedTableCell, clearNotepadTableSelection, clearNotepadTableMoveHandleHideTimer]);
+
+  useEffect(() => {
+    clearNotepadTableMoveHandleHideTimer();
+    clearNotepadSelectedTableCell();
+    clearNotepadTableSelection();
+    setNotepadTableMenuState((prev) => ({ ...prev, open: false }));
+    setNotepadTableMoveHandleState((prev) => ({ ...prev, visible: false }));
+    notepadTableMoveHandleTableRef.current = null;
+    setIsNotepadTablePickerOpen(false);
+    notepadTableResizeStateRef.current = null;
+    if (notepadEditorRef.current) notepadEditorRef.current.style.cursor = "";
+  }, [
+    selectedNotepadNoteId,
+    clearNotepadSelectedTableCell,
+    clearNotepadTableSelection,
+    clearNotepadTableMoveHandleHideTimer,
+  ]);
+
+  const getNotepadTableMoveOffsets = useCallback((tableEl) => {
+    if (!tableEl) return { x: 0, y: 0 };
+    const x = Number(tableEl.dataset?.notepadMoveX);
+    const y = Number(tableEl.dataset?.notepadMoveY);
+    return {
+      x: Number.isFinite(x) ? x : 0,
+      y: Number.isFinite(y) ? y : 0,
+    };
+  }, []);
+
+  const applyNotepadTableMoveOffsets = useCallback((tableEl, x, y) => {
+    if (!tableEl) return;
+    const safeX = Math.round(Number(x) || 0);
+    const safeY = Math.round(Number(y) || 0);
+    tableEl.dataset.notepadMoveX = String(safeX);
+    tableEl.dataset.notepadMoveY = String(safeY);
+    tableEl.style.transform = safeX === 0 && safeY === 0 ? "" : `translate(${safeX}px, ${safeY}px)`;
+  }, []);
+
+  const getNotepadTableCornerHoverHit = useCallback((event) => {
+    const editorEl = notepadEditorRef.current;
+    const targetEl = event?.target;
+    if (!editorEl || !targetEl || !editorEl.contains(targetEl)) return null;
+    const tableEl = targetEl.closest?.("table");
+    if (!tableEl || !editorEl.contains(tableEl)) return null;
+
+    const rect = tableEl.getBoundingClientRect();
+    const px = Number(event.clientX) || 0;
+    const py = Number(event.clientY) || 0;
+    const threshold = 10;
+    const nearLeft = Math.abs(px - rect.left) <= threshold;
+    const nearRight = Math.abs(px - rect.right) <= threshold;
+    const nearTop = Math.abs(py - rect.top) <= threshold;
+    const nearBottom = Math.abs(py - rect.bottom) <= threshold;
+
+    let corner = "";
+    if (nearLeft && nearTop) corner = "topLeft";
+    else if (nearRight && nearTop) corner = "topRight";
+    else if (nearLeft && nearBottom) corner = "bottomLeft";
+    else if (nearRight && nearBottom) corner = "bottomRight";
+    if (!corner) return null;
+
+    const moveHandleOffset = 10;
+    let x = rect.left - moveHandleOffset;
+    let y = rect.top - moveHandleOffset;
+    if (corner === "topRight") {
+      x = rect.right - moveHandleOffset;
+      y = rect.top - moveHandleOffset;
+    } else if (corner === "bottomLeft") {
+      x = rect.left - moveHandleOffset;
+      y = rect.bottom - moveHandleOffset;
+    } else if (corner === "bottomRight") {
+      x = rect.right - moveHandleOffset;
+      y = rect.bottom - moveHandleOffset;
+    }
+
+    return {
+      tableEl,
+      x,
+      y,
+    };
+  }, []);
+
+  const getNotepadTableResizeHit = useCallback((event) => {
+    const editorEl = notepadEditorRef.current;
+    const targetEl = event?.target;
+    if (!editorEl || !targetEl || !editorEl.contains(targetEl)) return null;
+
+    const borderThreshold = 6;
+    const tableEl = targetEl.closest?.("table");
+    if (tableEl && editorEl.contains(tableEl)) {
+      const tableOffsets = getNotepadTableMoveOffsets(tableEl);
+      const rect = tableEl.getBoundingClientRect();
+      const nearLeft = Math.abs((event.clientX || 0) - rect.left) <= borderThreshold;
+      const nearRight = Math.abs((event.clientX || 0) - rect.right) <= borderThreshold;
+      const nearTop = Math.abs((event.clientY || 0) - rect.top) <= borderThreshold;
+      const nearBottom = Math.abs((event.clientY || 0) - rect.bottom) <= borderThreshold;
+      if (nearLeft || nearRight || nearTop || nearBottom) {
+        let cursor = "default";
+        if ((nearLeft && nearTop) || (nearRight && nearBottom)) cursor = "nwse-resize";
+        else if ((nearRight && nearTop) || (nearLeft && nearBottom)) cursor = "nesw-resize";
+        else if (nearLeft || nearRight) cursor = "col-resize";
+        else if (nearTop || nearBottom) cursor = "row-resize";
+
+        return {
+          mode: "table",
+          cursor,
+          tableEl,
+          resizeLeft: !!nearLeft,
+          resizeRight: !!nearRight,
+          resizeTop: !!nearTop,
+          resizeBottom: !!nearBottom,
+          initialWidth: Math.max(120, Math.round(rect.width)),
+          initialHeight: Math.max(80, Math.round(rect.height)),
+          initialOffsetX: Number(tableOffsets.x) || 0,
+          initialOffsetY: Number(tableOffsets.y) || 0,
+          startX: Number(event.clientX) || 0,
+          startY: Number(event.clientY) || 0,
+        };
+      }
+    }
+
+    const cellEl = targetEl.closest?.("td,th");
+    if (cellEl && editorEl.contains(cellEl)) {
+      const rect = cellEl.getBoundingClientRect();
+      const nearRight = Math.abs((event.clientX || 0) - rect.right) <= borderThreshold;
+      const nearBottom = Math.abs((event.clientY || 0) - rect.bottom) <= borderThreshold;
+      if (nearRight) {
+        const position = getNotepadTableCellPosition(cellEl);
+        if (position) {
+          const nextColIndex = position.colIndex + 1;
+          const rowCells = getNotepadTableRowCells(position.rowEl);
+          const nextCell = rowCells[nextColIndex] || null;
+          return {
+            mode: "column",
+            cursor: "col-resize",
+            tableEl: position.tableEl,
+            colIndex: position.colIndex,
+            nextColIndex: nextCell ? nextColIndex : -1,
+            initialSize: Math.max(30, Math.round(rect.width)),
+            initialNextSize: nextCell
+              ? Math.max(30, Math.round(nextCell.getBoundingClientRect().width || 30))
+              : 0,
+            startX: Number(event.clientX) || 0,
+          };
+        }
+      }
+      if (nearBottom) {
+        const rowEl = cellEl.closest?.("tr") || null;
+        if (rowEl) {
+          const nextRowEl = rowEl.nextElementSibling?.tagName?.toLowerCase() === "tr" ? rowEl.nextElementSibling : null;
+          return {
+            mode: "row",
+            cursor: "row-resize",
+            rowEl,
+            nextRowEl,
+            initialSize: Math.max(22, Math.round(rowEl.getBoundingClientRect().height || rect.height || 22)),
+            initialNextSize: nextRowEl
+              ? Math.max(22, Math.round(nextRowEl.getBoundingClientRect().height || 22))
+              : 0,
+            startY: Number(event.clientY) || 0,
+          };
+        }
+      }
+    }
+
+    return null;
+  }, [getNotepadTableMoveOffsets]);
+
+  const handleNotepadEditorMouseMove = useCallback(
+    (event) => {
+      const editorEl = notepadEditorRef.current;
+      if (!editorEl) return;
+
+      const activeResize = notepadTableResizeStateRef.current;
+      if (activeResize) {
+        event.preventDefault();
+        if (activeResize.mode === "column" && activeResize.tableEl) {
+          const deltaX = (Number(event.clientX) || 0) - Number(activeResize.startX || 0);
+          const hasNeighbor = Number(activeResize.nextColIndex) >= 0;
+          const currentStart = Number(activeResize.initialSize || 40);
+          const neighborStart = Number(activeResize.initialNextSize || 40);
+          const minColSize = 40;
+          const maxDeltaRight = hasNeighbor ? neighborStart - minColSize : Number.POSITIVE_INFINITY;
+          const maxDeltaLeft = currentStart - minColSize;
+          const clampedDelta = Math.max(-maxDeltaLeft, Math.min(deltaX, maxDeltaRight));
+          const nextWidth = Math.max(minColSize, Math.round(currentStart + clampedDelta));
+          const nextNeighborWidth = Math.max(minColSize, Math.round(neighborStart - clampedDelta));
+
+          const rows = Array.from(activeResize.tableEl.querySelectorAll("tr"));
+          rows.forEach((rowEl) => {
+            const rowCells = getNotepadTableRowCells(rowEl);
+            const cellEl = rowCells[activeResize.colIndex];
+            if (cellEl) {
+              cellEl.style.width = `${nextWidth}px`;
+              cellEl.style.minWidth = `${nextWidth}px`;
+            }
+            if (hasNeighbor) {
+              const neighborCellEl = rowCells[activeResize.nextColIndex];
+              if (neighborCellEl) {
+                neighborCellEl.style.width = `${nextNeighborWidth}px`;
+                neighborCellEl.style.minWidth = `${nextNeighborWidth}px`;
+              }
+            }
+          });
+        } else if (activeResize.mode === "row" && activeResize.rowEl) {
+          const deltaY = (Number(event.clientY) || 0) - Number(activeResize.startY || 0);
+          const hasNeighbor = !!activeResize.nextRowEl;
+          const currentStart = Number(activeResize.initialSize || 24);
+          const neighborStart = Number(activeResize.initialNextSize || 24);
+          const minRowSize = 24;
+          const maxDeltaDown = hasNeighbor ? neighborStart - minRowSize : Number.POSITIVE_INFINITY;
+          const maxDeltaUp = currentStart - minRowSize;
+          const clampedDelta = Math.max(-maxDeltaUp, Math.min(deltaY, maxDeltaDown));
+          const nextHeight = Math.max(minRowSize, Math.round(currentStart + clampedDelta));
+          activeResize.rowEl.style.height = `${nextHeight}px`;
+          if (hasNeighbor && activeResize.nextRowEl) {
+            const nextNeighborHeight = Math.max(minRowSize, Math.round(neighborStart - clampedDelta));
+            activeResize.nextRowEl.style.height = `${nextNeighborHeight}px`;
+          }
+        } else if (activeResize.mode === "table" && activeResize.tableEl) {
+          if (activeResize.resizeLeft || activeResize.resizeRight) {
+            const deltaX = (Number(event.clientX) || 0) - Number(activeResize.startX || 0);
+            const widthDelta = activeResize.resizeLeft ? -deltaX : deltaX;
+            const nextWidth = Math.max(140, Math.round(Number(activeResize.initialWidth || 140) + widthDelta));
+            activeResize.tableEl.style.width = `${nextWidth}px`;
+            if (activeResize.resizeLeft) {
+              const nextOffsetX = Math.round(Number(activeResize.initialOffsetX || 0) + deltaX);
+              applyNotepadTableMoveOffsets(
+                activeResize.tableEl,
+                nextOffsetX,
+                Number(activeResize.initialOffsetY || 0)
+              );
+            }
+          }
+          if (activeResize.resizeTop || activeResize.resizeBottom) {
+            const deltaY = (Number(event.clientY) || 0) - Number(activeResize.startY || 0);
+            const heightDelta = activeResize.resizeTop ? -deltaY : deltaY;
+            const nextHeight = Math.max(80, Math.round(Number(activeResize.initialHeight || 80) + heightDelta));
+            activeResize.tableEl.style.height = `${nextHeight}px`;
+            if (activeResize.resizeTop) {
+              const baseOffsetX = activeResize.resizeLeft
+                ? Math.round(Number(activeResize.initialOffsetX || 0) + ((Number(event.clientX) || 0) - Number(activeResize.startX || 0)))
+                : Number(activeResize.initialOffsetX || 0);
+              const nextOffsetY = Math.round(Number(activeResize.initialOffsetY || 0) + deltaY);
+              applyNotepadTableMoveOffsets(activeResize.tableEl, baseOffsetX, nextOffsetY);
+            }
+          }
+        }
+        editorEl.style.cursor = activeResize.cursor || "default";
+        return;
+      }
+
+      const resizeHit = getNotepadTableResizeHit(event);
+      editorEl.style.cursor = resizeHit?.cursor || "";
+      const cornerHit = getNotepadTableCornerHoverHit(event);
+      if (cornerHit) {
+        clearNotepadTableMoveHandleHideTimer();
+        notepadTableMoveHandleTableRef.current = cornerHit.tableEl;
+        setNotepadTableMoveHandleState({
+          visible: true,
+          x: cornerHit.x,
+          y: cornerHit.y,
+        });
+      } else {
+        scheduleNotepadTableMoveHandleHide();
+      }
+    },
+    [
+      getNotepadTableResizeHit,
+      getNotepadTableCornerHoverHit,
+      clearNotepadTableMoveHandleHideTimer,
+      scheduleNotepadTableMoveHandleHide,
+    ]
+  );
+
+  const handleNotepadEditorMouseDown = useCallback(
+    (event) => {
+      if (Number(event?.button) !== 0) return;
+      const editorEl = notepadEditorRef.current;
+      if (!editorEl) return;
+      const resizeHit = getNotepadTableResizeHit(event);
+      if (!resizeHit) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setNotepadTableMenuState((prev) => (prev.open ? { ...prev, open: false } : prev));
+      setIsNotepadTablePickerOpen(false);
+      notepadTableResizeStateRef.current = resizeHit;
+      editorEl.style.cursor = resizeHit.cursor || "";
+    },
+    [getNotepadTableResizeHit]
+  );
+
+  const handleNotepadTableMoveHandleMouseDown = useCallback(
+    (event) => {
+      if (Number(event?.button) !== 0) return;
+      const editorEl = notepadEditorRef.current;
+      const tableEl = notepadTableMoveHandleTableRef.current;
+      if (!editorEl || !tableEl || !editorEl.contains(tableEl)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      clearNotepadTableMoveHandleHideTimer();
+      const offsets = getNotepadTableMoveOffsets(tableEl);
+      setNotepadTableMenuState((prev) => (prev.open ? { ...prev, open: false } : prev));
+      setIsNotepadTablePickerOpen(false);
+      notepadTableResizeStateRef.current = {
+        mode: "tableMove",
+        cursor: "move",
+        tableEl,
+        startX: Number(event.clientX) || 0,
+        startY: Number(event.clientY) || 0,
+        initialOffsetX: Number(offsets.x) || 0,
+        initialOffsetY: Number(offsets.y) || 0,
+      };
+      editorEl.style.cursor = "move";
+    },
+    [getNotepadTableMoveOffsets, clearNotepadTableMoveHandleHideTimer]
+  );
+
+  const handleNotepadTableMoveHandleMouseEnter = useCallback(() => {
+    clearNotepadTableMoveHandleHideTimer();
+  }, [clearNotepadTableMoveHandleHideTimer]);
+
+  const handleNotepadTableMoveHandleMouseLeave = useCallback(() => {
+    if (notepadTableResizeStateRef.current?.mode === "tableMove") return;
+    scheduleNotepadTableMoveHandleHide();
+  }, [scheduleNotepadTableMoveHandleHide]);
+
+  const handleNotepadEditorMouseLeave = useCallback(() => {
+    const editorEl = notepadEditorRef.current;
+    if (!editorEl) return;
+    if (notepadTableResizeStateRef.current) return;
+    editorEl.style.cursor = "";
+    scheduleNotepadTableMoveHandleHide();
+  }, [scheduleNotepadTableMoveHandleHide]);
+
+  useEffect(() => {
+    const handlePointerUp = () => {
+      const editorEl = notepadEditorRef.current;
+      const activeResize = notepadTableResizeStateRef.current;
+      if (!activeResize) return;
+
+      notepadTableResizeStateRef.current = null;
+      if (editorEl) {
+        editorEl.style.cursor = "";
+      }
+      syncNotepadDraftFromEditor();
+      setNotepadStatusText("Unsaved table layout changes");
+    };
+
+    window.addEventListener("mouseup", handlePointerUp);
+    return () => {
+      window.removeEventListener("mouseup", handlePointerUp);
+    };
+  }, [syncNotepadDraftFromEditor]);
+
+  useEffect(() => {
+    const handleGlobalMouseMove = (event) => {
+      const activeResize = notepadTableResizeStateRef.current;
+      if (!activeResize || activeResize.mode !== "tableMove" || !activeResize.tableEl) return;
+      const deltaX = (Number(event.clientX) || 0) - Number(activeResize.startX || 0);
+      const deltaY = (Number(event.clientY) || 0) - Number(activeResize.startY || 0);
+      const nextX = Math.round(Number(activeResize.initialOffsetX || 0) + deltaX);
+      const nextY = Math.round(Number(activeResize.initialOffsetY || 0) + deltaY);
+      applyNotepadTableMoveOffsets(activeResize.tableEl, nextX, nextY);
+      setNotepadTableMoveHandleState((prev) => ({
+        ...prev,
+        visible: true,
+        x: (Number(event.clientX) || 0) - 10,
+        y: (Number(event.clientY) || 0) - 10,
+      }));
+    };
+    window.addEventListener("mousemove", handleGlobalMouseMove);
+    return () => {
+      window.removeEventListener("mousemove", handleGlobalMouseMove);
+    };
+  }, [applyNotepadTableMoveOffsets]);
+
+  useEffect(() => {
+    return () => {
+      if (notepadTableMoveHandleHideTimerRef.current) {
+        window.clearTimeout(notepadTableMoveHandleHideTimerRef.current);
+      }
+      notepadTableMoveHandleHideTimerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!notepadTableMoveHandleState.visible) return;
+    const handlePointerDown = (event) => {
+      const targetEl = event?.target;
+      if (targetEl?.closest?.(".notepadTableMoveHandle")) return;
+      const editorEl = notepadEditorRef.current;
+      if (editorEl && targetEl && editorEl.contains(targetEl) && targetEl.closest?.("table")) return;
+      setNotepadTableMoveHandleState((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      notepadTableMoveHandleTableRef.current = null;
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [notepadTableMoveHandleState.visible]);
+
+  const toggleNotepadTablePicker = useCallback(() => {
+    setNotepadTableMenuState((prev) => (prev.open ? { ...prev, open: false } : prev));
+    setIsNotepadTablePickerOpen((prev) => !prev);
+  }, []);
+
+  const insertNotepadTableFromPicker = useCallback(
+    (rows, cols) => {
+      const safeRows = Math.max(1, Math.min(20, Number(rows) || 2));
+      const safeCols = Math.max(1, Math.min(20, Number(cols) || 2));
+      runNotepadCommand("insertTable", { rows: safeRows, cols: safeCols });
+      setNotepadTablePickerRows(safeRows);
+      setNotepadTablePickerCols(safeCols);
+      setIsNotepadTablePickerOpen(false);
+    },
+    [runNotepadCommand]
+  );
+
+  useEffect(() => {
+    if (!isNotepadTablePickerOpen) return;
+
+    const handlePointerDown = (event) => {
+      const hostEl = notepadTablePickerRef.current;
+      if (hostEl && hostEl.contains(event.target)) return;
+      setIsNotepadTablePickerOpen(false);
+    };
+    const handleEscape = (event) => {
+      if (event?.key === "Escape") setIsNotepadTablePickerOpen(false);
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [isNotepadTablePickerOpen]);
+
   const handleNotepadToolMouseDown = (event) => {
     event.preventDefault();
   };
+  const cacheNotepadEditorSelectionRange = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const editorEl = notepadEditorRef.current;
+    if (!editorEl) return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const anchorNode = selection.anchorNode;
+    const focusNode = selection.focusNode;
+    const anchorEl = anchorNode?.nodeType === Node.TEXT_NODE ? anchorNode.parentNode : anchorNode;
+    const focusEl = focusNode?.nodeType === Node.TEXT_NODE ? focusNode.parentNode : focusNode;
+    const isInEditor = (!!anchorEl && editorEl.contains(anchorEl)) || (!!focusEl && editorEl.contains(focusEl));
+    if (!isInEditor) return;
+    try {
+      notepadSelectionRangeRef.current = selection.getRangeAt(0).cloneRange();
+    } catch (_err) {
+      // Ignore stale selection cloning errors.
+    }
+  }, []);
   const placeCaretAfterChecklistCheckbox = useCallback((checkboxEl) => {
     if (!checkboxEl || typeof window === "undefined" || typeof document === "undefined") return;
     const editorEl = notepadEditorRef.current;
@@ -3050,12 +4904,53 @@ export default function EmployeeDashboard({
     });
   };
   const handleNotepadEditorClick = (event) => {
+    setIsNotepadTablePickerOpen(false);
+    const editorEl = notepadEditorRef.current;
+    const tableCell = event?.target?.closest?.("td,th");
+    if (editorEl && tableCell && editorEl.contains(tableCell)) {
+      const isShiftPressed = !!event?.shiftKey;
+      const isTogglePressed = !!event?.ctrlKey || !!event?.metaKey;
+      const anchorCell = notepadTableSelectionAnchorRef.current;
+
+      if (isShiftPressed && anchorCell && editorEl.contains(anchorCell)) {
+        const rangeCells = getNotepadTableRectCells(anchorCell, tableCell);
+        if (rangeCells.length > 0) {
+          setNotepadTableSelection(rangeCells);
+        } else {
+          setNotepadTableSelection([tableCell]);
+          notepadTableSelectionAnchorRef.current = tableCell;
+        }
+      } else if (isTogglePressed) {
+        const currentCells = Array.isArray(notepadSelectedTableCellsRef.current)
+          ? notepadSelectedTableCellsRef.current
+          : [];
+        const isAlreadySelected = currentCells.includes(tableCell);
+        const nextCells = isAlreadySelected
+          ? currentCells.filter((cellEl) => cellEl !== tableCell)
+          : [...currentCells, tableCell];
+        setNotepadTableSelection(nextCells);
+        if (!isAlreadySelected || !notepadTableSelectionAnchorRef.current) {
+          notepadTableSelectionAnchorRef.current = tableCell;
+        }
+      } else {
+        setNotepadTableSelection([tableCell]);
+        notepadTableSelectionAnchorRef.current = tableCell;
+      }
+      highlightNotepadTableCell(tableCell);
+    } else if (editorEl && event?.target && !event.target.closest?.("table")) {
+      clearNotepadSelectedTableCell();
+      clearNotepadTableSelection();
+    }
+    setNotepadTableMenuState((prev) => (prev.open ? { ...prev, open: false } : prev));
+
     if (event?.target?.tagName === "INPUT") {
       const input = event.target;
       if (String(input?.type || "").toLowerCase() === "checkbox") {
         window.requestAnimationFrame(() => {
           placeCaretAfterChecklistCheckbox(input);
           syncNotepadDraftFromEditor();
+          setNotepadStatusText("Unsaved checklist changes");
+          setNotepadChecklistChangeVersion((prev) => prev + 1);
           refreshNotepadToolbarState();
         });
         return;
@@ -3075,6 +4970,18 @@ export default function EmployeeDashboard({
     if (typeof window === "undefined" || typeof document === "undefined") return;
     const editorEl = notepadEditorRef.current;
     if (!editorEl) return;
+
+    if (event?.key === "Tab") {
+      event.preventDefault();
+      const handled = event.shiftKey
+        ? outdentNotepadTabIndentAtCaret(editorEl)
+        : insertNotepadTabIndentAtCaret(editorEl);
+      if (handled) {
+        syncNotepadDraftFromEditor();
+        refreshNotepadToolbarState();
+      }
+      return;
+    }
 
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
@@ -3175,7 +5082,7 @@ export default function EmployeeDashboard({
   }, [isNotepadDrawerOpen, refreshNotepadToolbarState]);
 
   useEffect(() => {
-    if (!isBreakLogsDrawerOpen && !isNotepadDrawerOpen) return;
+    if (!isBreakLogsDrawerOpen && !isNotepadDrawerOpen && !isTaskListDrawerOpen && !isAnnouncementDrawerOpen) return;
 
     const handleKeyDown = (event) => {
       if (event.key !== "Escape") return;
@@ -3186,13 +5093,20 @@ export default function EmployeeDashboard({
         setIsNotepadDrawerOpen(false);
       }
       if (isBreakLogsDrawerOpen) setIsBreakLogsDrawerOpen(false);
+      if (isTaskListDrawerOpen) {
+        setIsTaskFilterOpen(false);
+        setIsTaskListDrawerOpen(false);
+      }
+      if (isAnnouncementDrawerOpen) {
+        setIsAnnouncementDrawerOpen(false);
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isBreakLogsDrawerOpen, isNotepadDrawerOpen]);
+  }, [isBreakLogsDrawerOpen, isNotepadDrawerOpen, isTaskListDrawerOpen, isAnnouncementDrawerOpen]);
 
   const renderTaskListItem = (task, index, keyPrefix = "task") => {
     const meta = getTaskStatusMeta(task);
@@ -3271,8 +5185,10 @@ export default function EmployeeDashboard({
       : formatNotepadDeadlineLabel(note?.deadlineAtMs, deadlineTone);
     const updatedAtValue = note?.updatedAt || note?.createdAt || null;
     const isTogglingComplete = noteId === String(notepadCompletingNoteId || "");
+    const isPinning = noteId === String(notepadPinningNoteId || "");
     const isTrashing = noteId === String(notepadTrashingNoteId || "");
     const groupMembers = getNotepadGroupMembers(note);
+    const isPinned = !!note?.isPinned;
 
     return (
       <div
@@ -3314,6 +5230,16 @@ export default function EmployeeDashboard({
               ) : null}
             </div>
           ) : null}
+          <button
+            type="button"
+            className={`empNotepadPinBtn ${isPinned ? "pinned" : ""}`}
+            onClick={() => toggleNotepadNotePinned(note)}
+            disabled={savingNotepadNote || isTogglingComplete || isPinning || isTrashing || !!notepadBinActionNoteId}
+            title={isPinned ? "Unpin note" : "Pin note"}
+            aria-label={isPinned ? "Unpin note" : "Pin note"}
+          >
+            {isPinning ? "..." : <Pin size={13} aria-hidden="true" />}
+          </button>
           <button
             type="button"
             className="empNotepadTrashBtn"
@@ -3412,18 +5338,63 @@ export default function EmployeeDashboard({
                   type="button"
                   className="empBreakLogsBtn"
                   onClick={() => {
+                    setIsTaskListDrawerOpen(false);
+                    setIsAnnouncementDrawerOpen(false);
                     setIsNotepadDrawerOpen(false);
                     setBreakLogFilter("thisWeek");
                     setIsBreakLogsDrawerOpen(true);
                   }}
                 >
+                  <Coffee size={14} aria-hidden="true" />
                   Break Logs
+                </button>
+                <button
+                  type="button"
+                  className={`empTaskListBtn ${isTaskListDrawerOpen ? "active" : ""}`}
+                  onClick={() => {
+                    setIsBreakLogsDrawerOpen(false);
+                    setIsAnnouncementDrawerOpen(false);
+                    setIsNotepadDrawerOpen(false);
+                    setIsTaskListDrawerOpen((prev) => !prev);
+                  }}
+                  title="Open tasks"
+                  aria-label={`Open task list (${employeeTasks.length} tasks)`}
+                >
+                  <ClipboardList size={14} aria-hidden="true" />
+                  <span className="empTaskListBtnLabel">Tasks</span>
+                  {employeeTasks.length > 0 ? (
+                    <span className="empTaskListBtnCount" aria-hidden="true">
+                      {taskIconCountLabel}
+                    </span>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  className={`empAnnouncementBtn ${isAnnouncementDrawerOpen ? "active" : ""}`}
+                  onClick={() => {
+                    setIsBreakLogsDrawerOpen(false);
+                    setIsTaskListDrawerOpen(false);
+                    setIsNotepadDrawerOpen(false);
+                    setIsAnnouncementDrawerOpen((prev) => !prev);
+                  }}
+                  title="Open announcements"
+                  aria-label={`Open announcements (${visitorAnnouncements.length} items)`}
+                >
+                  <Megaphone size={14} aria-hidden="true" />
+                  <span className="empAnnouncementBtnLabel">Announcements</span>
+                  {visitorAnnouncements.length > 0 ? (
+                    <span className="empAnnouncementBtnCount" aria-hidden="true">
+                      {visitorAnnouncements.length > 99 ? "99+" : visitorAnnouncements.length}
+                    </span>
+                  ) : null}
                 </button>
                 <button
                   type="button"
                   className={`empNotepadBtn ${notepadHasDueSoonNote ? "isDueSoon" : ""}`}
                   onClick={() => {
+                    setIsTaskListDrawerOpen(false);
                     setIsBreakLogsDrawerOpen(false);
+                    setIsAnnouncementDrawerOpen(false);
                     setNotepadViewMode(NOTEPAD_VIEW_MY);
                     setIsNotepadDrawerOpen(true);
                   }}
@@ -3434,7 +5405,10 @@ export default function EmployeeDashboard({
                   }
                   aria-label={`Open notepad (${notepadIconCount} notes)`}
                 >
-                  <FileText size={14} aria-hidden="true" />
+                  <span className="empNotepadBtnIconStack" aria-hidden="true">
+                    <FileText size={14} className="empNotepadBtnIcon" />
+                    <Pencil size={11} className="empNotepadBtnPencil" />
+                  </span>
                   {notepadIconCount > 0 ? (
                     <span className="empNotepadBtnCount" aria-hidden="true">
                       {notepadIconBadgeLabel}
@@ -3552,124 +5526,225 @@ export default function EmployeeDashboard({
                 </div>
 
                 <div className="empSideColumn">
-                  <div className="clockedCard">
-                    <div className="clockedInner">
-                      <div className="clockedTitle">
-                        {isOnBreak ? "Currently On Break" : "Current Time"}
-                      </div>
-                      <div className="clockedTimeValue">
-                        {now.toLocaleTimeString(undefined, {
-                          timeZone: clockReferenceTimeZone,
-                        })}
-                      </div>
-                      <div className="clockedTimeZoneRef">Time Zone: {clockReferenceLabel}</div>
-                    </div>
-
-                    {isOnBreak ? (
-                      <div className="infoPillRow">
-                        <div className="infoPill">
-                          <span>Current Break</span>
-                          <span>{breakMinutesActive.toFixed(1)} min</span>
-                        </div>
-                      </div>
-                    ) : null}
+                  <div>
+                    <h3>
+                      My Notes:
+                    </h3>
                   </div>
-
-                  <div className="taskListCard">
-                    <div className="taskListHead">
-                      <span>Tasks</span>
-                      <div className="taskListHeadRight">
-                        <div className="taskFilterDrawer" ref={taskFilterDrawerRef}>
-                          <button
-                            type="button"
-                            className={`taskFilterTrigger ${isTaskFilterOpen ? "open" : ""}`}
-                            aria-haspopup="listbox"
-                            aria-expanded={isTaskFilterOpen}
-                            onClick={() => setIsTaskFilterOpen((prev) => !prev)}
-                          >
-                            <span>{activeTaskFilterLabel}</span>
-                          </button>
-                          <span className="taskFilterDrawerCount">
-                            {taskFilterCounts[taskStatusFilter] ?? 0}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {isTaskFilterOpen ? (
+                  <div className="dashboardNotepadCard">
+                    <div
+                      className={`dashboardNotepadStack${dashboardHasNoPages ? " isEmpty" : ""}`}
+                      aria-label="Interactive dashboard notepad"
+                    >
+                      <span className="dashboardNotepadClip" aria-hidden="true" />
+                      {dashboardHasBackPage ? (
+                        <span
+                          className="dashboardNotepadPage dashboardNotepadPageBack"
+                          aria-hidden="true"
+                          style={dashboardBackThemeVars}
+                        />
+                      ) : null}
+                      {dashboardHasMidPage ? (
+                        <span
+                          className="dashboardNotepadPage dashboardNotepadPageMid"
+                          aria-hidden="true"
+                          style={dashboardMidThemeVars}
+                        />
+                      ) : null}
                       <div
-                        ref={taskFilterMenuRef}
-                        className="taskFilterMenu"
-                        role="listbox"
-                        aria-label="Task status filters"
+                        className="dashboardNotepadActions"
+                        ref={dashboardNoteActionsRef}
+                        onClick={stopDashboardMenuPropagation}
+                        onMouseDown={stopDashboardMenuPropagation}
                       >
-                        {TASK_FILTER_OPTIONS.map((option) => {
-                          const isActive = taskStatusFilter === option.key;
-                          return (
-                            <button
-                              key={option.key}
-                              type="button"
-                              role="option"
-                              aria-selected={isActive}
-                              className={`taskFilterMenuItem ${isActive ? "active" : ""}`}
-                              onClick={() => handleTaskFilterSelect(option.key)}
-                            >
-                              <span>{option.label}</span>
-                              <span className="taskFilterMenuItemCount">
-                                {taskFilterCounts[option.key] ?? 0}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-
-                    <div className="taskListBody">
-                      {tasksLoading ? (
-                        <div className="taskListEmpty">Loading tasks...</div>
-                      ) : tasksError ? (
-                        <div className="taskListEmpty">{tasksError}</div>
-                      ) : filteredEmployeeTasks.length === 0 ? (
-                        <div className="taskListEmpty">
-                          {employeeTasks.length === 0
-                            ? "No tasks available."
-                            : "No tasks match this filter."}
-                        </div>
-                      ) : (
-                        filteredEmployeeTasks.map((task, index) =>
-                          renderTaskListItem(task, index, "filtered")
-                        )
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="announcementCard">
-                    <div className="announcementHead">
-                      <span>Announcements</span>
-                      <span className="announcementCount">{visitorAnnouncements.length}</span>
-                    </div>
-
-                    <div className="announcementBody">
-                      {visitorAnnouncements.length ? (
-                        visitorAnnouncements.map((item) => (
+                        {dashboardNotepadIsPinned ? (
                           <button
                             type="button"
-                            key={item.id}
-                            className="announcementItem"
-                            onClick={() => setSelectedAnnouncement(item)}
+                            className="dashboardNotepadPinnedIconBtn pinned"
+                            onClick={handleDashboardPinIconClick}
+                            aria-label="Unpin note"
+                            title="Unpin note"
                           >
-                            <div className="announcementMeta">
-                              <span>{formatAnnouncementDate(item.createdAtMs)}</span>
-                              <span className="announcementAuthor">{item.createdBy}</span>
-                            </div>
-                            <div className="announcementHeadline">{item.headline}</div>
+                            <Pin size={13} aria-hidden="true" />
                           </button>
-                        ))
-                      ) : (
-                        <div className="announcementEmpty">
-                          No announcements yet.
+                        ) : null}
+                        <button
+                          type="button"
+                          className="dashboardNotepadMoreBtn"
+                          onClick={toggleDashboardNoteMenu}
+                          aria-haspopup="menu"
+                          aria-expanded={isDashboardNoteMenuOpen}
+                          aria-label="Note actions"
+                          title="Note actions"
+                        >
+                          <MoreVertical size={14} aria-hidden="true" />
+                        </button>
+                        {isDashboardNoteMenuOpen ? (
+                          <div
+                            className="dashboardNotepadMenu"
+                            role="menu"
+                            aria-label="Dashboard note actions"
+                            onClick={stopDashboardMenuPropagation}
+                            onMouseDown={stopDashboardMenuPropagation}
+                            onMouseLeave={closeDashboardNoteMenuOnMouseLeave}
+                          >
+                            <button
+                              type="button"
+                              className="dashboardNotepadMenuItem"
+                              role="menuitem"
+                              onClick={(event) => runDashboardNoteAction("pin", event)}
+                              disabled={!hasDashboardImportantNote}
+                            >
+                              <Pin size={13} className="dashboardNotepadMenuItemIcon" aria-hidden="true" />
+                              {dashboardNotepadIsPinned ? "Unpin this note" : "Pin this note"}
+                            </button>
+                            <button
+                              type="button"
+                              className="dashboardNotepadMenuItem"
+                              role="menuitem"
+                              onClick={(event) => runDashboardNoteAction("edit", event)}
+                              disabled={!hasDashboardImportantNote}
+                            >
+                              <Pencil size={13} className="dashboardNotepadMenuItemIcon" aria-hidden="true" />
+                              Edit note
+                            </button>
+                            <button
+                              type="button"
+                              className="dashboardNotepadMenuItem"
+                              role="menuitem"
+                              onClick={(event) => runDashboardNoteAction("complete", event)}
+                              disabled={!hasDashboardImportantNote || !!topDashboardImportantNote?.isCompleted}
+                            >
+                              <CheckSquare size={13} className="dashboardNotepadMenuItemIcon" aria-hidden="true" />
+                              Mark as complete
+                            </button>
+                            <button
+                              type="button"
+                              className="dashboardNotepadMenuItem danger"
+                              role="menuitem"
+                              onClick={(event) => runDashboardNoteAction("delete", event)}
+                              disabled={!hasDashboardImportantNote}
+                            >
+                              <Trash2 size={13} className="dashboardNotepadMenuItemIcon" aria-hidden="true" />
+                              Delete note
+                            </button>
+                            <div className="dashboardNotepadMenuColorSection">
+                              <div className="dashboardNotepadMenuColorLabel">
+                                <Palette size={13} className="dashboardNotepadMenuItemIcon" aria-hidden="true" />
+                                Customize color
+                              </div>
+                              <div className="dashboardNotepadMenuColorOptions">
+                                {NOTEPAD_COLOR_OPTIONS.map((option) => {
+                                  const optionKey = String(option?.key || "").trim();
+                                  const isActive = optionKey === dashboardNotepadColorKey;
+                                  const swatchColor =
+                                    NOTEPAD_COLOR_THEMES[optionKey]?.vars?.["--dash-note-page-base"] || "#f4d15d";
+                                  return (
+                                    <button
+                                      key={optionKey}
+                                      type="button"
+                                      className={`dashboardNotepadMenuColorOption${isActive ? " active" : ""}`}
+                                      onClick={(event) => setDashboardNoteColor(optionKey, event)}
+                                      disabled={dashboardColorUpdateBusy}
+                                      title={option?.label || optionKey}
+                                      aria-label={`Use ${option?.label || optionKey} note color`}
+                                    >
+                                      <span
+                                        className="dashboardNotepadMenuColorSwatch"
+                                        style={{ backgroundColor: swatchColor }}
+                                        aria-hidden="true"
+                                      />
+                                      <span className="dashboardNotepadMenuColorName">
+                                        {option?.label || optionKey}
+                                      </span>
+                                      {isActive ? (
+                                        <span className="dashboardNotepadMenuColorSelected" aria-hidden="true">
+                                          ✓
+                                        </span>
+                                      ) : null}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                      <div
+                        className={`dashboardNotepadPage dashboardNotepadPageFront${
+                          dashboardHasNoPages ? " isEmpty" : ""
+                        }`}
+                        style={dashboardHasFrontPage ? dashboardFrontThemeVars : undefined}
+                        onClick={() => {
+                          setIsBreakLogsDrawerOpen(false);
+                          setIsTaskListDrawerOpen(false);
+                          setIsAnnouncementDrawerOpen(false);
+                          setNotepadViewMode(NOTEPAD_VIEW_MY);
+                          if (topDashboardImportantNote?.id) {
+                            openDashboardImportantNote(topDashboardImportantNote);
+                          } else {
+                            setIsNotepadDrawerOpen(true);
+                          }
+                        }}
+                      >
+                        <div className="dashboardNotepadTopRow">
+                          <div className="dashboardNotepadTitleBlock">
+                            <span className="dashboardNotepadTitle">{dashboardNotepadTitle}</span>
+                            {dashboardNotepadHasDeadline ? (
+                              <span className={`dashboardNotepadDueMeta tone-${dashboardNotepadDeadlineTone}`}>
+                                {dashboardNotepadDeadlineLabel}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
-                      )}
+
+                        {topDashboardImportantNote ? (
+                          <div
+                            ref={dashboardDisplayRef}
+                            className={`dashboardNotepadPreview${dashboardPreviewHasTable ? " hasTable" : ""}`}
+                            onClick={handleDashboardDisplayCheckboxChange}
+                            dangerouslySetInnerHTML={{
+                              __html: String(dashboardDisplayHtml || EMPTY_NOTEPAD_HTML),
+                            }}
+                          />
+                        ) : (
+                          <div className="dashboardNotepadPreview dashboardNotepadPreviewEmpty">
+                            {notepadLoading ? "Loading notes..." : "No notes yet. Click to open notepad."}
+                          </div>
+                        )}
+
+                        <div className="dashboardNotepadHint">
+                          {dashboardDisplaySaving
+                            ? "Saving..."
+                            : dashboardDisplayStatus || (topDashboardImportantNote ? "Click to open this note" : "Click to open notepad")}
+                        </div>
+                      </div>
+
+                      {dashboardDisplayNoteCount > 1 ? (
+                        <div className="dashboardNotepadFrontNav" aria-label="Dashboard note navigation">
+                          <button
+                            type="button"
+                            className="dashboardNotepadSideNav"
+                            onClick={showPreviousDashboardNote}
+                            aria-label="Show previous note"
+                            title="Previous note"
+                          >
+                            <ChevronLeft size={14} aria-hidden="true" />
+                          </button>
+                          <span className="dashboardNotepadNavCount" aria-live="polite">
+                            {dashboardDisplayNoteIndex + 1}/{dashboardDisplayNoteCount}
+                          </span>
+                          <button
+                            type="button"
+                            className="dashboardNotepadSideNav"
+                            onClick={showNextDashboardNote}
+                            aria-label="Show next note"
+                            title="Next note"
+                          >
+                            <ChevronRight size={14} aria-hidden="true" />
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -3743,125 +5818,318 @@ export default function EmployeeDashboard({
             )}
           </div>
 
-          {isBreakLogsDrawerOpen ? (
-            <div
-              className="empBreakLogsBackdrop"
-              role="button"
-              tabIndex={0}
-              aria-label="Close break logs drawer"
-              onClick={closeBreakLogsDrawer}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") closeBreakLogsDrawer();
-              }}
-            />
-          ) : null}
+          {portalRoot
+            ? createPortal(
+                <>
+                  {isAnnouncementDrawerOpen ? (
+                    <div
+                      className="empAnnouncementBackdrop"
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close announcement drawer"
+                      onClick={closeAnnouncementDrawer}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") closeAnnouncementDrawer();
+                      }}
+                    />
+                  ) : null}
 
-          <div
-            className={`empBreakLogsDrawer ${isBreakLogsDrawerOpen ? "open" : ""}`}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Employee break logs"
-          >
-            <div className="empBreakLogsDrawerHead">
-              <div className="empBreakLogsDrawerIdentity">
-                <div className="empBreakLogsDrawerTitle">Break Logs</div>
-                <div className="empBreakLogsDrawerSub">
-                  {employee?.name || employee?.email || effectiveSelectedId || "Employee"}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="empBreakLogsDrawerClose"
-                onClick={closeBreakLogsDrawer}
-                aria-label="Close break logs drawer"
-              >
-                x
-              </button>
-            </div>
-
-            <div className="empBreakLogsDrawerBody">
-              <div className="empBreakLogsToolbar">
-                <div className="empBreakLogsSummary">
-                  {breakLogLoading
-                    ? "Loading break logs..."
-                    : `${filteredBreakLogRows.length} log${filteredBreakLogRows.length === 1 ? "" : "s"}`}
-                </div>
-                <div className="empBreakLogsFilters" role="tablist" aria-label="Break log filters">
-                  {BREAK_LOG_FILTER_OPTIONS.map((option) => {
-                    const isActive = breakLogFilter === option.key;
-                    return (
-                      <button
-                        key={option.key}
-                        type="button"
-                        role="tab"
-                        aria-selected={isActive}
-                        className={`empBreakLogsFilterBtn ${isActive ? "active" : ""}`}
-                        onClick={() => setBreakLogFilter(option.key)}
-                      >
-                        {option.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {breakLogError ? (
-                <div className="empBreakLogsError">{breakLogError}</div>
-              ) : breakLogLoading ? (
-                <div className="empBreakLogsEmpty">Fetching break logs...</div>
-              ) : filteredBreakLogRows.length === 0 ? (
-                <div className="empBreakLogsEmpty">{breakLogEmptyText}</div>
-              ) : (
-                <div className="empBreakLogsList">
-                  {filteredBreakLogRows.map((row, index) => {
-                    const startedAt = row?.startedAt ?? row?.createdAt ?? null;
-                    const endedAt = row?.endedAt ?? null;
-                    const isActiveBreak = !endedAt || !!row?.isActive;
-                    const startedAtMs = toMillis(startedAt);
-                    const key =
-                      toText(row?.id) ||
-                      `${effectiveSelectedId}-break-${Number.isFinite(startedAtMs) ? startedAtMs : index}`;
-
-                    return (
-                      <div key={key} className="empBreakLogsItem">
-                        <div className="empBreakLogsItemTop">
-                          <div className="empBreakLogsItemType">
-                            {formatBreakLogLabel(row?.breakType, "Break")}
-                          </div>
-                          <span className={`empBreakLogsItemState ${isActiveBreak ? "active" : ""}`}>
-                            {isActiveBreak ? "Active" : "Completed"}
-                          </span>
-                        </div>
-
-                        <div className="empBreakLogsItemMeta">
-                          <span>Start</span>
-                          <strong>{formatBreakLogDateTime(startedAt, businessTimeZone)}</strong>
-                        </div>
-                        <div className="empBreakLogsItemMeta">
-                          <span>End</span>
-                          <strong>
-                            {isActiveBreak ? "In progress" : formatBreakLogDateTime(endedAt, businessTimeZone)}
-                          </strong>
-                        </div>
-                        <div className="empBreakLogsItemMeta">
-                          <span>Duration</span>
-                          <strong>
-                            {formatBreakLogDuration(
-                              startedAt,
-                              endedAt,
-                              Number.isFinite(liveNowMs) ? liveNowMs : Date.now()
-                            )}
-                          </strong>
+                  <div
+                    className={`empAnnouncementDrawer ${isAnnouncementDrawerOpen ? "open" : ""}`}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Announcements"
+                  >
+                    <div className="empAnnouncementDrawerHead">
+                      <div className="empAnnouncementDrawerIdentity">
+                        <div className="empAnnouncementDrawerTitle">Announcements</div>
+                        <div className="empAnnouncementDrawerSub">
+                          {employee?.name || employee?.email || effectiveSelectedId || "Employee"}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
+                      <button
+                        type="button"
+                        className="empAnnouncementDrawerClose"
+                        onClick={closeAnnouncementDrawer}
+                        aria-label="Close announcements drawer"
+                      >
+                        x
+                      </button>
+                    </div>
 
-          {isNotepadDrawerOpen ? (
+                    <div className="empAnnouncementDrawerBody">
+                      <div className="announcementCard announcementCardDrawer">
+                        <div className="announcementHead">
+                          <span>Announcements</span>
+                          <span className="announcementCount">{visitorAnnouncements.length}</span>
+                        </div>
+                        <div className="announcementBody announcementBodyDrawer">
+                          {visitorAnnouncements.length ? (
+                            visitorAnnouncements.map((item) => (
+                              <button
+                                type="button"
+                                key={item.id}
+                                className="announcementItem"
+                                onClick={() => {
+                                  setSelectedAnnouncement(item);
+                                  setIsAnnouncementDrawerOpen(false);
+                                }}
+                              >
+                                <div className="announcementMeta">
+                                  <span>{formatAnnouncementDate(item.createdAtMs)}</span>
+                                  <span className="announcementAuthor">{item.createdBy}</span>
+                                </div>
+                                <div className="announcementHeadline">{item.headline}</div>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="announcementEmpty">No announcements yet.</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {isTaskListDrawerOpen ? (
+                    <div
+                      className="empTaskListBackdrop"
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close task list drawer"
+                      onClick={closeTaskListDrawer}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") closeTaskListDrawer();
+                      }}
+                    />
+                  ) : null}
+
+                  <div
+                    className={`empTaskListDrawer ${isTaskListDrawerOpen ? "open" : ""}`}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Employee tasks"
+                  >
+                    <div className="empTaskListDrawerHead">
+                      <div className="empTaskListDrawerIdentity">
+                        <div className="empTaskListDrawerTitle">Tasks</div>
+                        <div className="empTaskListDrawerSub">
+                          {employee?.name || employee?.email || effectiveSelectedId || "Employee"}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="empTaskListDrawerClose"
+                        onClick={closeTaskListDrawer}
+                        aria-label="Close task list drawer"
+                      >
+                        x
+                      </button>
+                    </div>
+
+                    <div className="empTaskListDrawerBody">
+                      <div className="taskListCard taskListCardDrawer">
+                        <div className="taskListHead">
+                          <span>Tasks</span>
+                          <div className="taskListHeadRight">
+                            <div className="taskFilterDrawer" ref={taskFilterDrawerRef}>
+                              <button
+                                type="button"
+                                className={`taskFilterTrigger ${isTaskFilterOpen ? "open" : ""}`}
+                                aria-haspopup="listbox"
+                                aria-expanded={isTaskFilterOpen}
+                                onClick={() => setIsTaskFilterOpen((prev) => !prev)}
+                              >
+                                <span>{activeTaskFilterLabel}</span>
+                              </button>
+                              <span className="taskFilterDrawerCount">
+                                {taskFilterCounts[taskStatusFilter] ?? 0}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {isTaskFilterOpen ? (
+                          <div
+                            ref={taskFilterMenuRef}
+                            className="taskFilterMenu"
+                            role="listbox"
+                            aria-label="Task status filters"
+                          >
+                            {TASK_FILTER_OPTIONS.map((option) => {
+                              const isActive = taskStatusFilter === option.key;
+                              return (
+                                <button
+                                  key={option.key}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={isActive}
+                                  className={`taskFilterMenuItem ${isActive ? "active" : ""}`}
+                                  onClick={() => handleTaskFilterSelect(option.key)}
+                                >
+                                  <span>{option.label}</span>
+                                  <span className="taskFilterMenuItemCount">
+                                    {taskFilterCounts[option.key] ?? 0}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+
+                        <div className="taskListBody taskListBodyDrawer">
+                          {tasksLoading ? (
+                            <div className="taskListEmpty">Loading tasks...</div>
+                          ) : tasksError ? (
+                            <div className="taskListEmpty">{tasksError}</div>
+                          ) : filteredEmployeeTasks.length === 0 ? (
+                            <div className="taskListEmpty">
+                              {employeeTasks.length === 0
+                                ? "No tasks available."
+                                : "No tasks match this filter."}
+                            </div>
+                          ) : (
+                            filteredEmployeeTasks.map((task, index) =>
+                              renderTaskListItem(task, index, "filtered")
+                            )
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>,
+                portalRoot
+              )
+            : null}
+
+          {portalRoot
+            ? createPortal(
+                <>
+                  {isBreakLogsDrawerOpen ? (
+                    <div
+                      className="empBreakLogsBackdrop"
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close break logs drawer"
+                      onClick={closeBreakLogsDrawer}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") closeBreakLogsDrawer();
+                      }}
+                    />
+                  ) : null}
+
+                  <div
+                    className={`empBreakLogsDrawer ${isBreakLogsDrawerOpen ? "open" : ""}`}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Employee break logs"
+                  >
+                    <div className="empBreakLogsDrawerHead">
+                      <div className="empBreakLogsDrawerIdentity">
+                        <div className="empBreakLogsDrawerTitle">Break Logs</div>
+                        <div className="empBreakLogsDrawerSub">
+                          {employee?.name || employee?.email || effectiveSelectedId || "Employee"}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="empBreakLogsDrawerClose"
+                        onClick={closeBreakLogsDrawer}
+                        aria-label="Close break logs drawer"
+                      >
+                        x
+                      </button>
+                    </div>
+
+                    <div className="empBreakLogsDrawerBody">
+                      <div className="empBreakLogsToolbar">
+                        <div className="empBreakLogsSummary">
+                          {breakLogLoading
+                            ? "Loading break logs..."
+                            : `${filteredBreakLogRows.length} log${filteredBreakLogRows.length === 1 ? "" : "s"}`}
+                        </div>
+                        <div className="empBreakLogsFilters" role="tablist" aria-label="Break log filters">
+                          {BREAK_LOG_FILTER_OPTIONS.map((option) => {
+                            const isActive = breakLogFilter === option.key;
+                            return (
+                              <button
+                                key={option.key}
+                                type="button"
+                                role="tab"
+                                aria-selected={isActive}
+                                className={`empBreakLogsFilterBtn ${isActive ? "active" : ""}`}
+                                onClick={() => setBreakLogFilter(option.key)}
+                              >
+                                {option.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {breakLogError ? (
+                        <div className="empBreakLogsError">{breakLogError}</div>
+                      ) : breakLogLoading ? (
+                        <div className="empBreakLogsEmpty">Fetching break logs...</div>
+                      ) : filteredBreakLogRows.length === 0 ? (
+                        <div className="empBreakLogsEmpty">{breakLogEmptyText}</div>
+                      ) : (
+                        <div className="empBreakLogsList">
+                          {filteredBreakLogRows.map((row, index) => {
+                            const startedAt = row?.startedAt ?? row?.createdAt ?? null;
+                            const endedAt = row?.endedAt ?? null;
+                            const isActiveBreak = !endedAt || !!row?.isActive;
+                            const startedAtMs = toMillis(startedAt);
+                            const key =
+                              toText(row?.id) ||
+                              `${effectiveSelectedId}-break-${Number.isFinite(startedAtMs) ? startedAtMs : index}`;
+
+                            return (
+                              <div key={key} className="empBreakLogsItem">
+                                <div className="empBreakLogsItemTop">
+                                  <div className="empBreakLogsItemType">
+                                    {formatBreakLogLabel(row?.breakType, "Break")}
+                                  </div>
+                                  <span className={`empBreakLogsItemState ${isActiveBreak ? "active" : ""}`}>
+                                    {isActiveBreak ? "Active" : "Completed"}
+                                  </span>
+                                </div>
+
+                                <div className="empBreakLogsItemMeta">
+                                  <span>Start</span>
+                                  <strong>{formatBreakLogDateTime(startedAt, businessTimeZone)}</strong>
+                                </div>
+                                <div className="empBreakLogsItemMeta">
+                                  <span>End</span>
+                                  <strong>
+                                    {isActiveBreak ? "In progress" : formatBreakLogDateTime(endedAt, businessTimeZone)}
+                                  </strong>
+                                </div>
+                                <div className="empBreakLogsItemMeta">
+                                  <span>Duration</span>
+                                  <strong>
+                                    {formatBreakLogDuration(
+                                      startedAt,
+                                      endedAt,
+                                      Number.isFinite(liveNowMs) ? liveNowMs : Date.now()
+                                    )}
+                                  </strong>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>,
+                portalRoot
+              )
+            : null}
+
+          {portalRoot
+            ? createPortal(
+                <>
+                  {isNotepadDrawerOpen ? (
             <div
               className="empNotepadBackdrop"
               role="button"
@@ -4227,6 +6495,25 @@ export default function EmployeeDashboard({
                       Clear
                     </button>
                   </div>
+                  <div className="empNotepadColorControl">
+                    <label htmlFor="emp-notepad-color">Color</label>
+                    <select
+                      id="emp-notepad-color"
+                      className="empNotepadColorSelect"
+                      value={notepadColorDraft}
+                      onChange={(event) => {
+                        setNotepadColorDraft(normalizeNotepadColorKey(event.target.value));
+                        setNotepadDirty(true);
+                        setNotepadStatusText("");
+                      }}
+                    >
+                      {NOTEPAD_COLOR_OPTIONS.map((option) => (
+                        <option key={`notepad-color-${option.key}`} value={option.key}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <div className="empNotepadEditorActions">
                     <span className={`empNotepadSaveState ${notepadDirty ? "dirty" : ""}`}>
                       {savingNotepadNote
@@ -4238,7 +6525,8 @@ export default function EmployeeDashboard({
                       type="button"
                       className="empNotepadSaveBtn"
                       onClick={saveNotepadNote}
-                      disabled={savingNotepadNote}
+                      disabled={savingNotepadNote || notepadEditorIsEmpty}
+                      title={notepadEditorIsEmpty ? "Add note content to enable save" : "Save note"}
                     >
                       Save
                     </button>
@@ -4246,6 +6534,33 @@ export default function EmployeeDashboard({
                 </div>
 
                 <div className="empNotepadToolbar" role="toolbar" aria-label="Notepad formatting toolbar">
+                  <select
+                    className="empNotepadToolSelect fontSize"
+                    value={String(notepadToolbarState.fontSizePx || NOTEPAD_TOOLBAR_DEFAULT.fontSizePx)}
+                    onMouseDown={cacheNotepadEditorSelectionRange}
+                    onChange={(event) =>
+                      runNotepadCommand("fontSizePx", Number(event.target.value), { forceRestoreSelection: true })
+                    }
+                    aria-label="Font size"
+                    title="Font size"
+                  >
+                    {NOTEPAD_FONT_SIZE_OPTIONS.map((sizeValue) => (
+                      <option key={`notepad-font-size-${sizeValue}`} value={sizeValue}>
+                        {sizeValue}px
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="color"
+                    className="empNotepadToolColorInput"
+                    value={notepadToolbarState.fontColor || NOTEPAD_TOOLBAR_DEFAULT.fontColor}
+                    onMouseDown={cacheNotepadEditorSelectionRange}
+                    onChange={(event) =>
+                      runNotepadCommand("foreColor", event.target.value, { forceRestoreSelection: true })
+                    }
+                    aria-label="Font color"
+                    title="Font color"
+                  />
                   <button
                     type="button"
                     className={`empNotepadToolBtn ${notepadToolbarState.bold ? "active" : ""}`}
@@ -4336,6 +6651,114 @@ export default function EmployeeDashboard({
                   >
                     <CheckSquare size={14} aria-hidden="true" />
                   </button>
+                  <div className="empNotepadTablePickerHost" ref={notepadTablePickerRef}>
+                    <button
+                      type="button"
+                      className={`empNotepadToolBtn tableAction${isNotepadTablePickerOpen ? " active" : ""}`}
+                      onMouseDown={handleNotepadToolMouseDown}
+                      onClick={toggleNotepadTablePicker}
+                      aria-label="Insert table"
+                      aria-expanded={isNotepadTablePickerOpen}
+                      title="Insert table"
+                    >
+                      <Table2 size={14} aria-hidden="true" />
+                    </button>
+                    {isNotepadTablePickerOpen ? (
+                      <div
+                        className="empNotepadTablePickerMenu"
+                        role="dialog"
+                        aria-label="Select table size"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className="empNotepadTablePickerGrid">
+                          {Array.from({ length: NOTEPAD_TABLE_PICKER_MAX_ROWS }).map((_, rowIndex) =>
+                            Array.from({ length: NOTEPAD_TABLE_PICKER_MAX_COLS }).map((__, colIndex) => {
+                              const rows = rowIndex + 1;
+                              const cols = colIndex + 1;
+                              const isActiveCell =
+                                rows <= notepadTablePickerRows && cols <= notepadTablePickerCols;
+                              return (
+                                <button
+                                  key={`notepad-table-picker-${rows}-${cols}`}
+                                  type="button"
+                                  className={`empNotepadTablePickerCell${isActiveCell ? " active" : ""}`}
+                                  onMouseEnter={() => {
+                                    setNotepadTablePickerRows(rows);
+                                    setNotepadTablePickerCols(cols);
+                                  }}
+                                  onFocus={() => {
+                                    setNotepadTablePickerRows(rows);
+                                    setNotepadTablePickerCols(cols);
+                                  }}
+                                  onClick={() => insertNotepadTableFromPicker(rows, cols)}
+                                  aria-label={`${rows} by ${cols} table`}
+                                  title={`${rows} x ${cols}`}
+                                />
+                              );
+                            })
+                          )}
+                        </div>
+                        <div className="empNotepadTablePickerMeta">
+                          {notepadTablePickerRows} x {notepadTablePickerCols}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    className="empNotepadToolBtn tableAction"
+                    onMouseDown={handleNotepadToolMouseDown}
+                    onClick={() => runNotepadCommand("tableAddRow")}
+                    aria-label="Add table row"
+                    title="Add row"
+                  >
+                    <TableRowsSplit size={14} aria-hidden="true" />
+                    <Plus size={12} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="empNotepadToolBtn tableAction"
+                    onMouseDown={handleNotepadToolMouseDown}
+                    onClick={() => runNotepadCommand("tableDeleteRow")}
+                    aria-label="Delete table row"
+                    title="Delete row"
+                  >
+                    <TableRowsSplit size={14} aria-hidden="true" />
+                    <Minus size={12} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="empNotepadToolBtn tableAction"
+                    onMouseDown={handleNotepadToolMouseDown}
+                    onClick={() => runNotepadCommand("tableAddColumn")}
+                    aria-label="Add table column"
+                    title="Add column"
+                  >
+                    <TableColumnsSplit size={14} aria-hidden="true" />
+                    <Plus size={12} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="empNotepadToolBtn tableAction"
+                    onMouseDown={handleNotepadToolMouseDown}
+                    onClick={() => runNotepadCommand("tableDeleteColumn")}
+                    aria-label="Delete table column"
+                    title="Delete column"
+                  >
+                    <TableColumnsSplit size={14} aria-hidden="true" />
+                    <Minus size={12} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="empNotepadToolBtn tableAction"
+                    onMouseDown={handleNotepadToolMouseDown}
+                    onClick={() => runNotepadCommand("tableDelete")}
+                    aria-label="Delete table"
+                    title="Delete table"
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
                   <button
                     type="button"
                     className="empNotepadToolBtn"
@@ -4360,47 +6783,189 @@ export default function EmployeeDashboard({
                   onKeyUp={handleNotepadEditorKeyUp}
                   onInput={handleNotepadEditorInput}
                   onClick={handleNotepadEditorClick}
+                  onMouseMove={handleNotepadEditorMouseMove}
+                  onMouseDown={handleNotepadEditorMouseDown}
+                  onMouseLeave={handleNotepadEditorMouseLeave}
+                  onContextMenu={handleNotepadEditorContextMenu}
                   aria-label="Notepad editor"
                 />
+                {portalRoot && notepadTableMoveHandleState.visible ? (
+                  createPortal(
+                    <button
+                      type="button"
+                      className="notepadTableMoveHandle"
+                      style={{
+                        left: `${Math.max(6, Number(notepadTableMoveHandleState.x) || 0)}px`,
+                        top: `${Math.max(6, Number(notepadTableMoveHandleState.y) || 0)}px`,
+                      }}
+                      onMouseEnter={handleNotepadTableMoveHandleMouseEnter}
+                      onMouseLeave={handleNotepadTableMoveHandleMouseLeave}
+                      onMouseDown={handleNotepadTableMoveHandleMouseDown}
+                      onClick={(event) => event.preventDefault()}
+                      title="Drag to move table"
+                      aria-label="Drag to move table"
+                    >
+                      ✥
+                    </button>,
+                    portalRoot
+                  )
+                ) : null}
+                {portalRoot && notepadTableMenuState.open
+                  ? createPortal(
+                      <div
+                        ref={notepadTableMenuRef}
+                        className="notepadTableContextMenu"
+                        style={{
+                          left: `${notepadTableMenuState.x}px`,
+                          top: `${notepadTableMenuState.y}px`,
+                        }}
+                        role="menu"
+                        aria-label="Table actions"
+                      >
+                        <button
+                          type="button"
+                          className="notepadTableContextMenuItem"
+                          onClick={() => runNotepadTableContextAction("tableAddRow")}
+                          role="menuitem"
+                        >
+                          Add Row
+                        </button>
+                        <button
+                          type="button"
+                          className="notepadTableContextMenuItem"
+                          onClick={() => runNotepadTableContextAction("tableDeleteRow")}
+                          role="menuitem"
+                        >
+                          Delete Row
+                        </button>
+                        <button
+                          type="button"
+                          className="notepadTableContextMenuItem"
+                          onClick={() => runNotepadTableContextAction("tableAddColumn")}
+                          role="menuitem"
+                        >
+                          Add Column
+                        </button>
+                        <button
+                          type="button"
+                          className="notepadTableContextMenuItem"
+                          onClick={() => runNotepadTableContextAction("tableDeleteColumn")}
+                          role="menuitem"
+                        >
+                          Delete Column
+                        </button>
+                        <button
+                          type="button"
+                          className="notepadTableContextMenuItem"
+                          onClick={() => runNotepadTableContextAction("tableMergeSelected")}
+                          disabled={notepadTableSelectedCount < 2}
+                          role="menuitem"
+                        >
+                          Merge Selected Cells
+                        </button>
+                        <button
+                          type="button"
+                          className="notepadTableContextMenuItem danger"
+                          onClick={() => runNotepadTableContextAction("tableDelete")}
+                          role="menuitem"
+                        >
+                          Delete Table
+                        </button>
+                        <div className="notepadTableContextMenuDivider" aria-hidden="true" />
+                        <div className="notepadTableContextMenuLabel">Cell Color</div>
+                        <div className="notepadTableColorRow" role="group" aria-label="Cell colors">
+                          {[
+                            "#fef3c7",
+                            "#dbeafe",
+                            "#dcfce7",
+                            "#fee2e2",
+                            "#ede9fe",
+                            "#f1f5f9",
+                          ].map((colorValue) => (
+                            <button
+                              key={`table-cell-color-${colorValue}`}
+                              type="button"
+                              className="notepadTableColorSwatch"
+                              style={{ backgroundColor: colorValue }}
+                              onClick={() => runNotepadTableContextAction("tableSetCellColor", colorValue)}
+                              title={`Set cell color ${colorValue}`}
+                              aria-label={`Set cell color ${colorValue}`}
+                            />
+                          ))}
+                          <button
+                            type="button"
+                            className="notepadTableColorResetBtn"
+                            onClick={() => runNotepadTableContextAction("tableClearCellColor")}
+                            title="Clear cell color"
+                            aria-label="Clear cell color"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>,
+                      portalRoot
+                    )
+                  : null}
               </section>
             </div>
           </div>
+                </>,
+                portalRoot
+              )
+            : null}
 
-          {selectedAnnouncement ? (
-            <div className="announcementModalOverlay" onClick={closeAnnouncementModal}>
-              <div
-                className="announcementModalCard"
-                role="dialog"
-                aria-modal="true"
-                aria-label="Announcement details"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="announcementModalHead">
-                  <div>
-                    <div className="announcementModalTitle">
-                      {selectedAnnouncement.headline || "Announcement"}
+          {selectedAnnouncement && portalRoot
+            ? createPortal(
+                <div className="announcementModalOverlay" onClick={closeAnnouncementModal}>
+                  <div
+                    className="announcementModalCard"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Announcement details"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="announcementModalHead">
+                      <div>
+                        <div className="announcementModalTitle">
+                          {selectedAnnouncement.headline || "Announcement"}
+                        </div>
+                        <div className="announcementModalMeta">
+                          <span>{selectedAnnouncement.createdBy}</span>
+                          <span>{formatAnnouncementDate(selectedAnnouncement.createdAtMs)}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="announcementModalClose"
+                        onClick={closeAnnouncementModal}
+                        aria-label="Close announcement"
+                      >
+                        x
+                      </button>
                     </div>
-                    <div className="announcementModalMeta">
-                      <span>{selectedAnnouncement.createdBy}</span>
-                      <span>{formatAnnouncementDate(selectedAnnouncement.createdAtMs)}</span>
+
+                    <div className="announcementModalBody">
+                      {selectedAnnouncement.text || "No announcement content."}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    className="announcementModalClose"
-                    onClick={closeAnnouncementModal}
-                    aria-label="Close announcement"
-                  >
-                    x
-                  </button>
-                </div>
+                </div>,
+                portalRoot
+              )
+            : null}
 
-                <div className="announcementModalBody">
-                  {selectedAnnouncement.text || "No announcement content."}
-                </div>
-              </div>
-            </div>
-          ) : null}
+          <ConfirmModal
+            open={isDashboardUnpinConfirmOpen}
+            title="Unpin Note?"
+            message={`Unpin "${toText(topDashboardImportantNote?.title) || "this note"}"?`}
+            confirmText="Unpin"
+            tone="danger"
+            busy={dashboardUnpinBusy}
+            onCancel={() => {
+              if (dashboardUnpinBusy) return;
+              setIsDashboardUnpinConfirmOpen(false);
+            }}
+            onConfirm={confirmDashboardUnpin}
+          />
 
           <ConfirmModal
             open={!!notepadConfirmState.open}

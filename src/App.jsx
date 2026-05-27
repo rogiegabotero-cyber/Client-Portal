@@ -4074,6 +4074,27 @@ export default function App() {
     return list.find((e) => String(getUserId(e) ?? "") === id) || null;
   }, [employeeDashboardEmployees, selectedEmployeeId]);
 
+  const headerClockData = useMemo(() => {
+    const targetUserId = String(getUserId(selectedEmployee) || selectedEmployeeId || "").trim();
+    const activeBreak = targetUserId ? activeBreaksByUserId?.[targetUserId] || null : null;
+    const fallbackName =
+      String(user?.name || "").trim() ||
+      `${user?.firstName || ""} ${user?.lastName || ""}`.trim() ||
+      String(user?.email || "").trim();
+    const employeeName =
+      String(selectedEmployee?.name || "").trim() ||
+      `${selectedEmployee?.firstName || ""} ${selectedEmployee?.lastName || ""}`.trim() ||
+      String(selectedEmployee?.email || "").trim() ||
+      fallbackName;
+
+    return {
+      name: employeeName,
+      timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
+      isOnBreak: !!activeBreak,
+      activeBreakStartedAt: activeBreak?.startedAt || null,
+    };
+  }, [selectedEmployee, selectedEmployeeId, activeBreaksByUserId, businessTimeZone, user]);
+
   const fetchFullHistoryForUser = useCallback(
     async (userId) => {
       if (!api || !userId) return [];
@@ -5542,6 +5563,7 @@ export default function App() {
         <Header
           employee={selectedEmployee}
           viewer={user}
+          clockData={headerClockData}
           profileImagesByUserId={profileImagesByUserId}
           notifications={notifications}
           onNotificationClick={handleNotificationClick}

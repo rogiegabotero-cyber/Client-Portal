@@ -115,7 +115,7 @@
 
 .empPanel{
   border-radius:var(--radius-lg);
-  overflow:hidden;
+  overflow:visible;
   border:1px solid var(--border);
   background:var(--card);
   box-shadow:var(--shadow);
@@ -170,6 +170,10 @@
 }
 
 .empBreakLogsBtn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
   height:30px;
   border-radius:999px;
   border:1px solid rgba(15,23,42,.12);
@@ -186,6 +190,8 @@
   transform:translateY(-1px);
   box-shadow:var(--shadow2);
   border-color:rgba(91,0,8,.2);
+  background-color: #04101f;
+  color: #ffffff;
 }
 
 .empNotepadBtn{
@@ -204,13 +210,93 @@
   overflow:visible;
 }
 
-.empNotepadBtn:not(.isDueSoon):hover{
+.empNotepadBtnIconStack{
+  position:relative;
+  width:16px;
+  height:16px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:4px;
+}
+
+.empNotepadBtnIcon{
+  color:#04101f;
+}
+
+.empNotepadBtnPencil{
+  position:absolute;
+  right:-2px;
+  bottom:-1px;
+  color:#04101f;
+  transform:rotate(-15deg);
+  pointer-events:none;
+}
+
+.empNotepadBtn:hover {
+  background-color: #04101f;
+  color: #ffffff;
+}
+
+.empTaskListBtn{
+  min-width:70px;
+  height:30px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.12);
+  background:#ffffff;
+  color:#0f172a;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  padding:0 12px 0 10px;
+  font-size:11px;
+  font-weight:700;
+  transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+  position:relative;
+  overflow:visible;
+}
+
+.empAnnouncementBtn{
+  min-width:116px;
+  height:30px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.12);
+  background:#ffffff;
+  color:#0f172a;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  padding:0 12px 0 10px;
+  font-size:11px;
+  font-weight:700;
+  transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
+  position:relative;
+  overflow:visible;
+}
+
+.empAnnouncementBtnLabel{
+  line-height:1;
+}
+
+.empAnnouncementBtn:hover,
+.empAnnouncementBtn.active{
   transform:translateY(-1px);
   box-shadow:var(--shadow2);
   border-color:rgba(91,0,8,.2);
+  background-color:#04101f;
+  color:#ffffff;
 }
 
-.empNotepadBtnCount{
+.empAnnouncementBtn.active{
+  background:rgba(91,0,8,.08);
+  color:#5b0008;
+}
+
+.empAnnouncementBtnCount{
   position:absolute;
   top:-6px;
   right:-6px;
@@ -230,6 +316,79 @@
   padding:0 3px;
 }
 
+.empTaskListBtnLabel{
+  line-height:1;
+}
+
+.empTaskListBtn:hover,
+.empTaskListBtn.active{
+  transform:translateY(-1px);
+  box-shadow:var(--shadow2);
+  border-color:rgba(91,0,8,.2);
+  background-color: #04101f;
+  color: #ffffff;
+}
+
+.empTaskListBtn.active{
+  background:rgba(91,0,8,.08);
+  color:#5b0008;
+}
+
+.empTaskListBtnCount{
+  position:absolute;
+  top:-6px;
+  right:-6px;
+  min-width:16px;
+  height:16px;
+  border-radius:999px;
+  background:#5b0008;
+  color:#ffffff;
+  border:1px solid #ffffff;
+  box-shadow:0 2px 5px rgba(15,23,42,.24);
+  font-size:9px;
+  font-weight:800;
+  line-height:1;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:0 3px;
+}
+
+.empNotepadBtn:not(.isDueSoon):hover{
+  transform:translateY(-1px);
+  box-shadow:var(--shadow2);
+  border-color:rgba(91,0,8,.2);
+}
+
+.empNotepadBtn:hover .empNotepadBtnIcon{
+  color:#ffffff;
+}
+
+.empNotepadBtn:hover .empNotepadBtnPencil{
+  color:#ffffff;
+}
+
+.empNotepadBtnCount{
+  position:absolute;
+  top:-5px;
+  right:-5px;
+  min-width:16px;
+  height:16px;
+  border-radius:999px;
+  background:#5b0008;
+  color:#ffffff;
+  border:1px solid #ffffff;
+  box-shadow:0 2px 5px rgba(15,23,42,.24);
+  font-size:9px;
+  font-weight:800;
+  z-index:12;
+  line-height:1;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:0 3px;
+}
+
 .empNotepadBtn.isDueSoon{
   border-color:rgba(245,158,11,.7);
   box-shadow:
@@ -238,7 +397,7 @@
   animation:empNotepadDueSoonHeartbeat 1.05s ease-in-out infinite;
 }
 
-.empNotepadBtn.isDueSoon svg{
+.empNotepadBtn.isDueSoon .empNotepadBtnIcon{
   transform-origin:center;
   animation:empNotepadIconBeat 1.05s ease-in-out infinite;
 }
@@ -331,16 +490,18 @@
 .empSideColumn{
   position:relative;
   z-index:2;
-  display:grid;
-  gap:12px;
-  align-content:stretch;
+  display:flex;
+  flex-direction:column;
+  justify-content:stretch;
+  align-self:stretch;
   min-width:0;
   min-height:0;
-  height:100%;
-  grid-template-rows:auto minmax(0, 1fr) minmax(0, 1fr);
+  height:auto;
   overflow:visible;
-  width: 100%;
-  max-width: 30%;
+  width:100%;
+  flex:0 0 30%;
+  max-width:30%;
+  padding: 20px;
 }
 
 
@@ -901,6 +1062,15 @@
   flex-direction:column;
 }
 
+.taskListCard.taskListCardDrawer{
+  height:100%;
+  max-height:none;
+  min-height:0;
+  border:none;
+  border-radius:0;
+  box-shadow:none;
+}
+
 .taskListHead{
   position:relative;
   z-index:3;
@@ -1002,8 +1172,8 @@
 
 .taskFilterMenu{
   position:absolute;
-  top:calc(100% + -90px);
-  left:160px;
+  top:calc(100% + -510px);
+  left:250px;
   min-width:170px;
   background:#ffffff;
   border:1px solid rgba(15,23,42,.18);
@@ -1067,6 +1237,16 @@
   gap:8px;
   flex:1;
   min-height:0;
+}
+
+.taskListBody.taskListBodyDrawer{
+  max-height:none;
+  height:100%;
+}
+
+.announcementBody.announcementBodyDrawer{
+  max-height:none;
+  height:100%;
 }
 
 .taskListItem{
@@ -1258,6 +1438,220 @@
   flex-direction:column;
 }
 
+.announcementCard.announcementCardDrawer{
+  height:100%;
+  min-height:0;
+  border:none;
+  border-radius:0;
+  box-shadow:none;
+}
+
+.importantNotesCard{
+  border-radius:var(--radius-md);
+  border:1px solid var(--border);
+  background:#ffffff;
+  box-shadow:var(--shadow2);
+  overflow:hidden;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
+
+.importantNotesHead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:10px 12px;
+  border-bottom:1px solid var(--borderSoft);
+  font-size:11px;
+  letter-spacing:.08em;
+  font-weight:700;
+  text-transform:uppercase;
+  color:var(--text);
+}
+
+.importantNotesCount{
+  min-width:24px;
+  padding:2px 8px;
+  border-radius:999px;
+  background:rgba(180, 83, 9, .12);
+  color:#92400e;
+  text-align:center;
+  font-weight:700;
+}
+
+.importantNotesBody{
+  max-height:100px;
+  overflow:auto;
+  padding:10px;
+  display:grid;
+  gap:8px;
+  flex:1;
+  min-height:0;
+}
+
+.importantNotesEmpty{
+  border:1px dashed var(--border);
+  border-radius:10px;
+  padding:12px;
+  font-size:12px;
+  color:var(--muted);
+  background:#f8fafc;
+}
+
+.stickyNoteItem{
+  border:none;
+  width:100%;
+  text-align:left;
+  border-radius:10px;
+  padding:10px 10px 9px;
+  background:linear-gradient(165deg, #f4d980 0%, #e8c765 75%);
+  color:#5f470e;
+  cursor:pointer;
+  position:relative;
+  box-shadow:0 4px 10px rgba(120, 96, 32, .24);
+  transition:transform .22s ease, box-shadow .22s ease, filter .22s ease;
+  transform-origin:50% 0;
+}
+
+.stickyNoteItem::before{
+  content:"";
+  position:absolute;
+  inset:3px -3px -3px 3px;
+  border-radius:10px;
+  background:linear-gradient(165deg, #e8c765 0%, #dab752 80%);
+  z-index:-1;
+  opacity:.75;
+}
+
+.stickyNoteItem::after{
+  content:"";
+  position:absolute;
+  top:0;
+  right:0;
+  width:13px;
+  height:13px;
+  background:linear-gradient(135deg, #fff4cd 0%, #f1db94 100%);
+  clip-path:polygon(0 0, 100% 0, 100% 100%);
+  border-top-right-radius:10px;
+}
+
+.stickyNoteItem:hover{
+  transform:translateY(-1px);
+  box-shadow:0 6px 14px rgba(120, 96, 32, .28);
+}
+
+.stickyNoteClip{
+  position:absolute;
+  top:-6px;
+  left:50%;
+  width:10px;
+  height:12px;
+  border:2px solid rgba(116,86,26,.74);
+  border-radius:8px;
+  transform:translateX(-50%);
+  background:transparent;
+}
+
+.stickyNoteTitle{
+  font-size:12px;
+  font-weight:800;
+  line-height:1.2;
+  color:#4a3610;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.stickyNotePreview{
+  margin-top:5px;
+  font-size:11px;
+  line-height:1.3;
+  color:#5f470e;
+  display:-webkit-box;
+  -webkit-line-clamp:2;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+}
+
+.stickyNoteMeta{
+  margin-top:6px;
+  font-size:10px;
+  font-weight:700;
+  color:#6b4f12;
+}
+
+.stickyNoteItemTop{
+  min-height:74px;
+  animation:stickyTopFloat 4.6s ease-in-out infinite;
+}
+
+.stickyNoteItemMini{
+  min-height:48px;
+  padding-top:8px;
+}
+
+.stickyNoteItemTop::after{
+  transform-origin:top right;
+  animation:stickyCornerLift 3.2s ease-in-out infinite;
+}
+
+.stickyNoteItemTop .stickyNoteClip{
+  transform-origin:center top;
+  animation:stickyClipWiggle 4.6s ease-in-out infinite;
+}
+
+.stickyNoteItemTop:hover,
+.stickyNoteItemTop:hover .stickyNoteClip,
+.stickyNoteItemTop:hover::after{
+  animation-play-state:paused;
+}
+
+@keyframes stickyTopFloat{
+  0%{
+    transform:translateY(0) rotate(-1.2deg);
+  }
+  50%{
+    transform:translateY(-2px) rotate(.6deg);
+  }
+  100%{
+    transform:translateY(0) rotate(-1.2deg);
+  }
+}
+
+@keyframes stickyCornerLift{
+  0%, 100%{
+    transform:scale(1) rotate(0deg);
+  }
+  50%{
+    transform:scale(1.06) rotate(-2deg);
+  }
+}
+
+@keyframes stickyClipWiggle{
+  0%{
+    transform:translateX(-50%) rotate(0deg);
+  }
+  35%{
+    transform:translateX(-50%) rotate(-4deg);
+  }
+  70%{
+    transform:translateX(-50%) rotate(3deg);
+  }
+  100%{
+    transform:translateX(-50%) rotate(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .stickyNoteItemTop,
+  .stickyNoteItemTop::after,
+  .stickyNoteItemTop .stickyNoteClip{
+    animation:none;
+  }
+}
+
 .announcementHead{
   display:flex;
   align-items:center;
@@ -1334,6 +1728,176 @@
 }
 
 /* ---------- Break Logs Drawer ---------- */
+
+.empAnnouncementBackdrop{
+  --portal-header-offset:84px;
+  position:fixed;
+  top:var(--portal-header-offset);
+  right:0;
+  bottom:0;
+  left:0;
+  height:calc(100dvh - var(--portal-header-offset));
+  background:rgba(15,23,42,.28);
+  backdrop-filter:blur(3px);
+  z-index:90;
+}
+
+.empAnnouncementDrawer{
+  --portal-header-offset:112px;
+  position:fixed;
+  top:var(--portal-header-offset);
+  right:0;
+  bottom:0;
+  width:min(460px, 100vw);
+  height:calc(100dvh - var(--portal-header-offset));
+  max-height:calc(100dvh - var(--portal-header-offset));
+  background:#ffffff;
+  border-left:1px solid var(--border);
+  box-shadow:-14px 0 34px rgba(15,23,42,.16);
+  transform:translateX(100%);
+  transition:transform .24s ease;
+  z-index:95;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+.empAnnouncementDrawer.open{
+  transform:translateX(0);
+}
+
+.empAnnouncementDrawerHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 14px;
+  border-bottom:1px solid var(--borderSoft);
+  background:#f8fafc;
+}
+
+.empAnnouncementDrawerIdentity{
+  min-width:0;
+}
+
+.empAnnouncementDrawerTitle{
+  font-size:14px;
+  font-weight:800;
+  color:var(--text);
+}
+
+.empAnnouncementDrawerSub{
+  margin-top:2px;
+  font-size:11px;
+  color:var(--muted);
+  font-weight:600;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.empAnnouncementDrawerClose{
+  width:28px;
+  height:28px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:#ffffff;
+  color:#64748b;
+  font-size:16px;
+  line-height:1;
+  cursor:pointer;
+}
+
+.empAnnouncementDrawerBody{
+  flex:1;
+  min-height:0;
+  overflow:auto;
+}
+
+.empTaskListBackdrop{
+  --portal-header-offset:84px;
+  position:fixed;
+  top:var(--portal-header-offset);
+  right:0;
+  bottom:0;
+  left:0;
+  height:calc(100dvh - var(--portal-header-offset));
+  background:rgba(15,23,42,.28);
+  backdrop-filter:blur(3px);
+  z-index:90;
+}
+
+.empTaskListDrawer{
+  --portal-header-offset:112px;
+  position:fixed;
+  top:var(--portal-header-offset);
+  right:0;
+  bottom:0;
+  width:min(460px, 100vw);
+  height:calc(100dvh - var(--portal-header-offset));
+  max-height:calc(100dvh - var(--portal-header-offset));
+  background:#ffffff;
+  border-left:1px solid var(--border);
+  box-shadow:-14px 0 34px rgba(15,23,42,.16);
+  transform:translateX(100%);
+  transition:transform .24s ease;
+  z-index:95;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+.empTaskListDrawer.open{
+  transform:translateX(0);
+}
+
+.empTaskListDrawerHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 14px;
+  border-bottom:1px solid var(--borderSoft);
+  background:#f8fafc;
+}
+
+.empTaskListDrawerIdentity{
+  min-width:0;
+}
+
+.empTaskListDrawerTitle{
+  font-size:14px;
+  font-weight:800;
+  color:var(--text);
+}
+
+.empTaskListDrawerSub{
+  margin-top:2px;
+  font-size:11px;
+  color:var(--muted);
+  font-weight:600;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.empTaskListDrawerClose{
+  width:28px;
+  height:28px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:#ffffff;
+  color:#64748b;
+  font-size:16px;
+  line-height:1;
+  cursor:pointer;
+}
+
+.empTaskListDrawerBody{
+  flex:1;
+  min-height:0;
+  overflow:auto;
+}
 
 .empBreakLogsBackdrop{
   position:fixed;
@@ -1532,28 +2096,33 @@
 }
 
 /* ---------- Notepad Drawer ---------- */
-
 .empNotepadBackdrop{
+  --portal-header-offset:84px;
   position:fixed;
-  inset:0;
+  top:var(--portal-header-offset);
+  right:0;
+  bottom:0;
+  left:0;
+  height:calc(100dvh - var(--portal-header-offset));
   background:rgba(15,23,42,.28);
   backdrop-filter:blur(3px);
-  z-index:1150;
+  z-index:90;
 }
 
 .empNotepadDrawer{
+  --portal-header-offset:112px;
   position:fixed;
-  top:0;
+  top:var(--portal-header-offset);
   right:0;
   bottom:0;
   width:min(980px, 100vw);
-  height:100%;
-  max-height:100%;
+  height:calc(100dvh - var(--portal-header-offset));
+  max-height:calc(100dvh - var(--portal-header-offset));
   background:#ffffff;
   border-left:1px solid var(--border);
   transform:translateX(100%);
   transition:transform .24s ease;
-  z-index:1155;
+  z-index:95;
   display:flex;
   flex-direction:column;
   overflow:hidden;
@@ -2183,6 +2752,37 @@
   cursor:not-allowed;
 }
 
+.empNotepadPinBtn{
+  border:1px solid rgba(15,23,42,.14);
+  background:#ffffff;
+  color:#475569;
+  border-radius:8px;
+  height:24px;
+  min-width:28px;
+  padding:0 7px;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  box-shadow:0 2px 6px rgba(15,23,42,.12);
+}
+
+.empNotepadPinBtn:hover{
+  border-color:rgba(37,99,235,.4);
+  color:#1d4ed8;
+}
+
+.empNotepadPinBtn.pinned{
+  border-color:rgba(180,83,9,.42);
+  background:rgba(255,247,237,.96);
+  color:#b45309;
+}
+
+.empNotepadPinBtn:disabled{
+  opacity:.7;
+  cursor:not-allowed;
+}
+
 .empNotepadCompleteBtn{
   border:1px solid rgba(15,23,42,.14);
   background:#ffffff;
@@ -2347,13 +2947,60 @@
   cursor:pointer;
 }
 
-.empNotepadSaveState{
+.empNotepadColorControl{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.empNotepadColorControl label{
+  font-size:10px;
+  font-weight:700;
+  color:#475569;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+}
+
+.empNotepadColorSelect{
+  height:30px;
+  border:1px solid rgba(15,23,42,.14);
+  border-radius:8px;
+  background:#ffffff;
+  color:#0f172a;
+  padding:0 8px;
   font-size:11px;
+  font-weight:600;
+  outline:none;
+}
+
+.empNotepadColorSelect:focus{
+  border-color:rgba(91,0,8,.35);
+  box-shadow:0 0 0 2px rgba(91,0,8,.12);
+}
+
+.empNotepadSaveState{
+  position:fixed;
+  right:18px;
+  bottom:14px;
+  z-index:12050;
+  pointer-events:none;
+  max-width:min(70vw, 320px);
+  padding:7px 10px;
+  border-radius:10px;
+  border:1px solid rgba(148, 163, 184, .42);
+  background:rgba(255, 255, 255, .96);
+  box-shadow:0 8px 20px rgba(2, 6, 23, .18);
+  backdrop-filter:blur(4px);
+  -webkit-backdrop-filter:blur(4px);
+  font-size:11px;
+  line-height:1.2;
   color:#64748b;
   font-weight:700;
 }
 
 .empNotepadSaveState.dirty{
+  border-color:rgba(217, 119, 6, .4);
+  background:rgba(255, 251, 235, .98);
   color:#9a3412;
 }
 
@@ -2370,7 +3017,7 @@
 }
 
 .empNotepadSaveBtn:disabled{
-  opacity:.7;
+  opacity:.55;
   cursor:not-allowed;
 }
 
@@ -2400,10 +3047,103 @@
   justify-content:center;
 }
 
+.empNotepadToolSelect{
+  height:28px;
+  border:1px solid rgba(15,23,42,.12);
+  border-radius:8px;
+  background:#ffffff;
+  color:#0f172a;
+  padding:0 8px;
+  font-size:11px;
+  font-weight:700;
+  outline:none;
+}
+
+.empNotepadToolSelect.fontSize{
+  min-width:72px;
+}
+
+.empNotepadToolSelect:focus{
+  border-color:rgba(91,0,8,.35);
+  box-shadow:0 0 0 2px rgba(91,0,8,.12);
+}
+
+.empNotepadToolColorInput{
+  width:30px;
+  height:28px;
+  border:1px solid rgba(15,23,42,.12);
+  border-radius:8px;
+  padding:2px;
+  background:#ffffff;
+  cursor:pointer;
+}
+
+.empNotepadToolColorInput::-webkit-color-swatch-wrapper{
+  padding:0;
+}
+
+.empNotepadToolColorInput::-webkit-color-swatch{
+  border:none;
+  border-radius:5px;
+}
+
 .empNotepadToolBtn svg{
   width:14px;
   height:14px;
   stroke-width:2.1;
+}
+
+.empNotepadToolBtn.tableAction{
+  width:auto;
+  min-width:40px;
+  padding:0 6px;
+  gap:2px;
+}
+
+.empNotepadTablePickerHost{
+  position:relative;
+  display:inline-flex;
+}
+
+.empNotepadTablePickerMenu{
+  position:absolute;
+  top:calc(100% + 8px);
+  left:0;
+  z-index:30;
+  border:1px solid rgba(15, 23, 42, .14);
+  border-radius:10px;
+  background:#ffffff;
+  box-shadow:0 14px 30px rgba(2, 6, 23, .2);
+  padding:8px;
+}
+
+.empNotepadTablePickerGrid{
+  display:grid;
+  grid-template-columns:repeat(8, 16px);
+  grid-template-rows:repeat(8, 16px);
+  gap:3px;
+}
+
+.empNotepadTablePickerCell{
+  border:1px solid rgba(15, 23, 42, .2);
+  border-radius:2px;
+  background:#ffffff;
+  padding:0;
+  cursor:pointer;
+}
+
+.empNotepadTablePickerCell:hover,
+.empNotepadTablePickerCell.active{
+  background:rgba(59, 130, 246, .14);
+  border-color:rgba(59, 130, 246, .58);
+}
+
+.empNotepadTablePickerMeta{
+  margin-top:8px;
+  font-size:11px;
+  font-weight:700;
+  color:#334155;
+  text-align:center;
 }
 
 .empNotepadToolBtn:hover{
@@ -2459,20 +3199,201 @@
   min-height:20px;
 }
 
+.empNotepadEditor table{
+  width:100%;
+  border-collapse:collapse;
+  margin:8px 0;
+  table-layout:fixed;
+}
+
+.empNotepadEditor th,
+.empNotepadEditor td{
+  border:1px solid rgba(15, 23, 42, .24);
+  padding:6px 8px;
+  vertical-align:top;
+  min-width:42px;
+}
+
+.empNotepadEditor th{
+  background:rgba(91, 0, 8, .08);
+  font-weight:700;
+}
+
+.empNotepadEditor td.notepadTableCellActive,
+.empNotepadEditor th.notepadTableCellActive{
+  box-shadow:inset 0 0 0 2px rgba(37, 99, 235, .6);
+}
+
+.empNotepadEditor td.notepadTableCellSelected,
+.empNotepadEditor th.notepadTableCellSelected{
+  box-shadow:inset 0 0 0 2px rgba(59, 130, 246, .32);
+}
+
+.notepadTableContextMenu{
+  position:fixed;
+  z-index:1500;
+  min-width:148px;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  padding:6px;
+  border:1px solid rgba(15, 23, 42, .14);
+  border-radius:10px;
+  background:#ffffff;
+  box-shadow:0 14px 34px rgba(2, 6, 23, .18);
+}
+
+.notepadTableMoveHandle{
+  position:fixed;
+  z-index:1510;
+  width:20px;
+  height:20px;
+  border:1px solid rgba(15, 23, 42, .28);
+  border-radius:999px;
+  background:#ffffff;
+  color:#0f172a;
+  font-size:14px;
+  font-weight:800;
+  line-height:1;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:move;
+  box-shadow:0 8px 20px rgba(2, 6, 23, .16);
+  user-select:none;
+}
+
+.notepadTableMoveHandle:hover{
+  border-color:rgba(37, 99, 235, .56);
+  color:#1d4ed8;
+}
+
+.notepadTableContextMenuItem{
+  border:0;
+  background:transparent;
+  color:#0f172a;
+  border-radius:8px;
+  text-align:left;
+  font-size:12px;
+  font-weight:600;
+  padding:7px 9px;
+  cursor:pointer;
+}
+
+.notepadTableContextMenuItem:hover{
+  background:rgba(15, 23, 42, .06);
+}
+
+.notepadTableContextMenuItem:disabled{
+  opacity:.45;
+  cursor:not-allowed;
+}
+
+.notepadTableContextMenuItem:disabled:hover{
+  background:transparent;
+}
+
+.notepadTableContextMenuItem.danger{
+  color:#b91c1c;
+}
+
+.notepadTableContextMenuItem.danger:hover{
+  background:rgba(239, 68, 68, .1);
+}
+
+.notepadTableContextMenuDivider{
+  height:1px;
+  margin:5px 2px;
+  background:rgba(15, 23, 42, .1);
+}
+
+.notepadTableContextMenuLabel{
+  font-size:11px;
+  font-weight:700;
+  color:#475569;
+  padding:2px 4px 4px;
+}
+
+.notepadTableColorRow{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+  padding:0 2px 2px;
+}
+
+.notepadTableColorSwatch{
+  width:18px;
+  height:18px;
+  border-radius:4px;
+  border:1px solid rgba(15, 23, 42, .2);
+  cursor:pointer;
+}
+
+.notepadTableColorSwatch:hover{
+  border-color:rgba(15, 23, 42, .42);
+}
+
+.notepadTableColorResetBtn{
+  border:1px solid rgba(15, 23, 42, .18);
+  background:#ffffff;
+  color:#0f172a;
+  border-radius:6px;
+  font-size:11px;
+  font-weight:700;
+  padding:2px 6px;
+  cursor:pointer;
+}
+
+.notepadTableColorResetBtn:hover{
+  border-color:rgba(15, 23, 42, .34);
+}
+
 .empNotepadEditor input[type="checkbox"]{
   width:14px;
+  min-width:14px;
+  max-width:14px;
   height:14px;
-  accent-color:#5b0008;
+  min-height:14px;
+  max-height:14px;
+  box-sizing:border-box;
+  appearance:none;
+  -webkit-appearance:none;
+  background:transparent;
+  border:1.5px solid #5b0008;
+  border-radius:3px;
+  display:inline-grid;
+  place-content:center;
   position:absolute;
   left:0;
   top:2px;
+}
+
+.empNotepadEditor input[type="checkbox"]::before{
+  content:"✓";
+  font-size:11px;
+  line-height:1;
+  font-weight:700;
+  color:#5b0008;
+  transform:translateY(-1px) scale(0);
+  transform-origin:center;
+  transition:transform .12s ease;
+}
+
+.empNotepadEditor input[type="checkbox"]:checked::before{
+  transform:translateY(-1px) scale(1);
+}
+
+.empNotepadEditor input[type="checkbox"]:focus-visible{
+  outline:2px solid rgba(91, 0, 8, .25);
+  outline-offset:1px;
 }
 
 .announcementModalOverlay{
   position:fixed;
   inset:0;
   background:rgba(15,23,42,.5);
-  z-index:1100;
+  z-index:1200;
   display:flex;
   align-items:center;
   justify-content:center;
@@ -2804,17 +3725,18 @@
     height:auto;
     min-height:auto;
     overflow:visible;
-    align-content:start;
-    grid-template-rows:auto;
+    justify-content:flex-start;
   }
 
   .taskListCard,
-  .announcementCard{
+  .announcementCard,
+  .importantNotesCard{
     min-height:260px;
   }
 
   .taskListBody,
-  .announcementBody{
+  .announcementBody,
+  .importantNotesBody{
     max-height:240px;
     flex:unset;
   }
@@ -2824,6 +3746,14 @@
   }
 
   .empBreakLogsDrawer{
+    width:min(460px, 100vw);
+  }
+
+  .empAnnouncementDrawer{
+    width:min(460px, 100vw);
+  }
+
+  .empTaskListDrawer{
     width:min(460px, 100vw);
   }
 
@@ -2905,6 +3835,14 @@
     width:100vw;
   }
 
+  .empAnnouncementDrawer{
+    width:100vw;
+  }
+
+  .empTaskListDrawer{
+    width:100vw;
+  }
+
   .empNotepadDrawer{
     width:100vw;
   }
@@ -2951,6 +3889,12 @@
     justify-content:space-between;
     margin-left:0;
   }
+
+  .empNotepadSaveState{
+    right:12px;
+    bottom:12px;
+    max-width:min(86vw, 300px);
+  }
 }
 
 /* Compact spacing pass for employee dashboard */
@@ -2979,10 +3923,6 @@
 
 .empGrid2 {
   gap: 10px;
-}
-
-.empSideColumn {
-  gap: 9px;
 }
 
 .scheduleCard,
@@ -3072,7 +4012,16 @@
   padding: 9px 10px;
 }
 
+.importantNotesHead {
+  padding: 9px 10px;
+}
+
 .announcementBody {
+  padding: 8px;
+  gap: 7px;
+}
+
+.importantNotesBody {
   padding: 8px;
   gap: 7px;
 }
@@ -3081,11 +4030,15 @@
   padding: 8px;
 }
 
+.empTaskListDrawerHead,
+.empAnnouncementDrawerHead,
 .empBreakLogsDrawerHead,
 .empNotepadDrawerHead {
   padding: 10px 12px;
 }
 
+.empAnnouncementDrawerBody,
+.empTaskListDrawerBody,
 .empBreakLogsDrawerBody {
   padding: 10px 12px;
   gap: 8px;
@@ -3183,4 +4136,563 @@
 
 .agentAttendanceStrip {
   padding: 4px 7px;
+}
+
+
+/* ---------- Dashboard Sticky Notepad ---------- */
+.dashboardNotepadCard{
+  position:relative;
+  flex:1 1 auto;
+  min-height:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow:visible;
+}
+
+.dashboardNotepadStack{
+  position:relative;
+  width:min(250px, 100%);
+  min-height:176px;
+  transform:rotate(-1.5deg);
+  filter:drop-shadow(0 10px 10px rgba(120, 96, 32, .22));
+}
+
+.dashboardNotepadStack.isEmpty{
+  filter:none;
+}
+
+.dashboardNotepadPage{
+  position:absolute;
+  border-radius:2px 2px 14px 2px;
+  background:var(--dash-note-page-base, #f4d15d);
+  box-shadow:0 2px 4px rgba(120, 96, 32, .18);
+}
+
+.dashboardNotepadPageBack{
+  inset:8px 10px -8px -9px;
+  background:var(--dash-note-page-back, #e7bf45);
+  transform:rotate(-3deg);
+}
+
+.dashboardNotepadPageMid{
+  inset:3px 5px -3px -4px;
+  background:var(--dash-note-page-mid, #edc84f);
+  transform:rotate(-1.2deg);
+}
+
+.dashboardNotepadPageFront{
+  inset:0;
+  min-height:176px;
+  padding:10px 14px 8px;
+  display:flex;
+  flex-direction:column;
+  background:linear-gradient(
+    160deg,
+    var(--dash-note-front-0, #f8d76b) 0%,
+    var(--dash-note-front-1, #f1ca55) 72%,
+    var(--dash-note-front-2, #e6bd49) 100%
+  );
+  color:#5b4210;
+  overflow:visible;
+  z-index:20;
+  cursor:pointer;
+  transition:transform .2s ease, box-shadow .2s ease, filter .2s ease;
+}
+
+.dashboardNotepadPageFront:hover{
+  transform:translateY(-6px) rotate(1.4deg);
+  box-shadow:0 10px 18px rgba(120, 96, 32, .26);
+  filter:saturate(1.05);
+}
+
+.dashboardNotepadPageFront.isEmpty{
+  background:transparent;
+  border:2px dashed rgba(91, 66, 16, .45);
+  color:#7c6a3a;
+  box-shadow:none;
+  filter:none;
+}
+
+.dashboardNotepadPageFront.isEmpty:hover{
+  transform:none;
+  box-shadow:none;
+  filter:none;
+}
+
+.dashboardNotepadPageFront::after{
+  content:"";
+  position:absolute;
+  right:0;
+  bottom:0;
+  width:32px;
+  height:32px;
+  background:linear-gradient(
+    135deg,
+    var(--dash-note-corner-0, rgba(255,246,197,.96)),
+    var(--dash-note-corner-1, #d9ae39) 72%
+  );
+  clip-path:polygon(100% 0, 0 100%, 100% 100%);
+  box-shadow:-2px -2px 4px rgba(120, 96, 32, .16);
+}
+
+.dashboardNotepadPageFront.isEmpty::after{
+  display:none;
+}
+
+.dashboardNotepadClip{
+  position:absolute;
+  top:-18px;
+  left:50%;
+  width:16px;
+  height:32px;
+  border:3px solid #8c846c;
+  border-bottom-color:transparent;
+  border-radius:9px 9px 5px 5px;
+  transform:translateX(-50%) rotate(1deg);
+  z-index:25;
+  box-shadow:inset 0 0 0 2px rgba(255,255,255,.38);
+}
+
+.dashboardNotepadTopRow{
+  position:relative;
+  z-index:2;
+  display:flex;
+  align-items:flex-start;
+  justify-content:flex-start;
+  gap:8px;
+  margin-bottom:2px;
+}
+
+.dashboardNotepadActions{
+  position:absolute;
+  top:6px;
+  right:10px;
+  z-index:30;
+  display:flex;
+  align-items:center;
+}
+
+.dashboardNotepadPinnedIconBtn{
+  width:20px;
+  height:20px;
+  border:none;
+  background:transparent;
+  color:#7c2d12;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  transform:rotate(34deg);
+  transform-origin:center;
+  filter:drop-shadow(0 1px 1px rgba(0,0,0,.18));
+}
+
+.dashboardNotepadPinnedIconBtn:hover{
+  color:#9a3412;
+}
+
+.dashboardNotepadPinnedIconBtn.pinned{
+  color:#7c2d12;
+}
+
+.dashboardNotepadMoreBtn{
+  width:20px;
+  height:20px;
+  border:none;
+  border-radius:6px;
+  background:none;
+  color:#7c2d12;
+  display:flex;
+  flex-direction: row;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+}
+
+.dashboardNotepadMoreBtn:hover{
+  background:rgba(91,66,16,.12);
+}
+
+.dashboardNotepadMenu{
+  position:absolute;
+  top:24px;
+  right:0;
+  min-width:150px;
+  border:1px solid rgba(91, 66, 16, .28);
+  border-radius:10px;
+  background:#fffaf0;
+  box-shadow:0 8px 16px rgba(15,23,42,.16);
+  padding:4px;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  z-index:60;
+  transform:rotate(2deg);
+  transform-origin:top right;
+}
+
+.dashboardNotepadMenuItem{
+  border:none;
+  background:transparent;
+  border-radius:8px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  text-align:left;
+  padding:7px 8px;
+  font-size:11px;
+  font-weight:700;
+  color:#5b4210;
+  cursor:pointer;
+}
+
+.dashboardNotepadMenuItemIcon{
+  flex:0 0 auto;
+}
+
+.dashboardNotepadMenuItem:hover{
+  background:rgba(91,66,16,.1);
+}
+
+.dashboardNotepadMenuItem:disabled{
+  opacity:.5;
+  cursor:not-allowed;
+}
+
+.dashboardNotepadMenuItem.danger{
+  color:#991b1b;
+}
+
+.dashboardNotepadMenuItem.danger:hover{
+  background:rgba(220,38,38,.12);
+}
+
+.dashboardNotepadMenuColorSection{
+  margin-top:2px;
+  padding:6px 6px 4px;
+  border-top:1px solid rgba(91,66,16,.16);
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.dashboardNotepadMenuColorLabel{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  font-size:10px;
+  font-weight:800;
+  color:#7c2d12;
+  text-transform:uppercase;
+  letter-spacing:.05em;
+}
+
+.dashboardNotepadMenuColorOptions{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+
+.dashboardNotepadMenuColorOption{
+  border:none;
+  background:transparent;
+  border-radius:8px;
+  min-height:24px;
+  padding:4px 6px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  text-align:left;
+  color:#5b4210;
+  font-size:11px;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.dashboardNotepadMenuColorOption:hover{
+  background:rgba(91,66,16,.1);
+}
+
+.dashboardNotepadMenuColorOption.active{
+  background:rgba(91,66,16,.14);
+}
+
+.dashboardNotepadMenuColorOption:disabled{
+  opacity:1;
+  cursor:not-allowed;
+}
+
+.dashboardNotepadMenuColorSwatch{
+  width:14px;
+  height:14px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.35);
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.38),
+    0 1px 2px rgba(15,23,42,.2);
+  flex:0 0 auto;
+}
+
+.dashboardNotepadMenuColorName{
+  flex:1 1 auto;
+}
+
+.dashboardNotepadMenuColorSelected{
+  font-size:11px;
+  color:#7c2d12;
+  flex:0 0 auto;
+}
+
+.dashboardNotepadTitleBlock{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:1px;
+}
+
+.dashboardNotepadTitle{
+  display:flex;
+  align-items:center;
+  font-size:13px;
+  font-weight:900;
+  color:#4b360d;
+  letter-spacing:.04em;
+}
+
+.dashboardNotepadDueMeta{
+  margin-left:0;
+  max-width:100%;
+  padding:1px 6px;
+  border-radius:999px;
+  border:1px solid rgba(91, 66, 16, .28);
+  background:rgba(255, 246, 197, .7);
+  color:#5b4210;
+  font-size:10px;
+  font-weight:800;
+  line-height:1.35;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.dashboardNotepadDueMeta.tone-due{
+  margin-left:0;
+  max-width:none;
+  padding:0;
+  border:none;
+  border-radius:0;
+  background:transparent;
+  color:#7c2d12;
+}
+
+.dashboardNotepadDueMeta.tone-overdue{
+  color:#7f1d1d;
+  border-color:rgba(127, 29, 29, .42);
+  background:rgba(254, 202, 202, .72);
+}
+
+.dashboardNotepadSideNav{
+  width:24px;
+  height:24px;
+  border:none;
+  border-radius:999px;
+  background:none;
+  color:#5b4210;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 auto;
+  cursor:pointer;
+  padding:0;
+  line-height:1;
+  transition:background .16s ease, color .16s ease, transform .16s ease;
+}
+
+.dashboardNotepadSideNav:hover{
+  background:#5b4210;
+  color:#fff8dc;
+  transform:translateY(-1px);
+}
+
+.dashboardNotepadSideNav:active{
+  transform:translateY(0);
+}
+
+.dashboardNotepadFrontNav{
+  position:absolute;
+  right:8px;
+  bottom:-23px;
+  z-index:25;
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.dashboardNotepadNavCount{
+  text-align:center;
+  font-size:11px;
+  font-weight:700;
+  color:#5b4210;
+  line-height:1;
+}
+
+.dashboardNotepadPreview{
+  position:relative;
+  z-index:2;
+  flex:1;
+  width:100%;
+  min-height:108px;
+  border-radius:8px;
+  background:repeating-linear-gradient(
+    transparent 0,
+    transparent 20px,
+    rgba(128, 93, 21, .16) 21px
+  );
+  color:#5a420f;
+  font:600 12px/1.45 ui-rounded, "Comic Sans MS", "Segoe Print", cursive;
+  padding:4px 6px;
+  box-sizing:border-box;
+  overflow-x:hidden;
+  overflow-y:auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(91, 66, 16, .28) transparent;
+}
+
+.dashboardNotepadPreview.hasTable{
+  font-size:8px;
+  line-height:1.35;
+}
+
+.dashboardNotepadPreview.hasTable table{
+  width:100% !important;
+  max-width:100% !important;
+  min-width:0 !important;
+  height:auto !important;
+  max-height:none !important;
+  transform:none !important;
+  border-collapse:collapse;
+  table-layout:fixed;
+  margin:0;
+  font-size:inherit;
+  line-height:1.3;
+  border:1px solid rgba(91, 66, 16, .46);
+}
+
+.dashboardNotepadPreview.hasTable tr{
+  height:auto;
+}
+
+.dashboardNotepadPreview.hasTable th,
+.dashboardNotepadPreview.hasTable td{
+  border:1px solid rgba(91, 66, 16, .42);
+  padding:2px 4px;
+  width:auto !important;
+  min-width:0 !important;
+  max-width:none !important;
+  height:auto;
+  min-height:0;
+  vertical-align:top;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  word-break:break-word;
+  white-space:normal;
+}
+
+.dashboardNotepadPreview.hasTable th{
+  background:rgba(255, 246, 197, .36);
+}
+
+.dashboardNotepadPreview::-webkit-scrollbar{
+  width:8px;
+}
+
+.dashboardNotepadPreview::-webkit-scrollbar-track{
+  background:transparent;
+}
+
+.dashboardNotepadPreview::-webkit-scrollbar-thumb{
+  background:rgba(91, 66, 16, .28);
+  border-radius:999px;
+}
+
+.dashboardNotepadPreview p,
+.dashboardNotepadPreview ul,
+.dashboardNotepadPreview ol{
+  margin:0 0 6px;
+}
+
+.dashboardNotepadPreview p:last-child,
+.dashboardNotepadPreview ul:last-child,
+.dashboardNotepadPreview ol:last-child{
+  margin-bottom:0;
+}
+
+.dashboardNotepadPreview ul,
+.dashboardNotepadPreview ol{
+  padding-left:18px;
+}
+
+.dashboardNotepadPreview input[type="checkbox"]{
+  cursor:pointer;
+  width:14px;
+  min-width:14px;
+  max-width:14px;
+  height:14px;
+  min-height:14px;
+  max-height:14px;
+  flex:0 0 14px;
+  box-sizing:border-box;
+  appearance:none;
+  -webkit-appearance:none;
+  background:transparent;
+  border:1.5px solid #7c2d12;
+  border-radius:3px;
+  display:inline-grid;
+  place-content:center;
+  transform:translateY(1px);
+  margin-right:6px;
+}
+
+.dashboardNotepadPreview input[type="checkbox"]::before{
+  content:"✓";
+  font-size:11px;
+  line-height:1;
+  font-weight:700;
+  color:#7c2d12;
+  transform:translateY(-1px) scale(0);
+  transform-origin:center;
+  transition:transform .12s ease;
+}
+
+.dashboardNotepadPreview input[type="checkbox"]:checked::before{
+  transform:translateY(-1px) scale(1);
+}
+
+.dashboardNotepadPreview input[type="checkbox"]:focus-visible{
+  outline:2px solid rgba(124, 45, 18, .25);
+  outline-offset:1px;
+}
+
+.dashboardNotepadPreview .notepad-check-item{
+  display:flex;
+  align-items:flex-start;
+}
+
+.dashboardNotepadPreviewEmpty{
+  display:flex;
+  align-items:center;
+  color:rgba(91, 66, 16, .72);
+}
+
+.dashboardNotepadHint{
+  position:relative;
+  z-index:2;
+  margin-top:2px;
+  padding-right: 8px;
+  color:#6b4f12;
+  font-size:10px;
+  font-weight:800;
+  text-align:right;
 }

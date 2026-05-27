@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { createPortal } from "react-dom";
 import "./confirmModal.css";
 
 export default function ConfirmModal({
@@ -28,7 +29,7 @@ export default function ConfirmModal({
 
   if (!open) return null;
 
-  return (
+  const modalNode = (
     <div className="confirmModalRoot">
       <div
         className="confirmModalBackdrop"
@@ -64,4 +65,10 @@ export default function ConfirmModal({
       </div>
     </div>
   );
+
+  if (typeof document !== "undefined" && document.body) {
+    return createPortal(modalNode, document.body);
+  }
+
+  return modalNode;
 }

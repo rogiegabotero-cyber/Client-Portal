@@ -799,6 +799,7 @@
 .assignment-drawer.open .assignment-drawer-panel {
   transform: translateX(0);
   display: block;
+  overflow: auto;
 }
 
 .assignment-create-drawer {

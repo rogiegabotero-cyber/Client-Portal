@@ -13,6 +13,7 @@ const formatProfileDate = (value) => {
 const Header = ({
   employee,
   viewer,
+  clockData = null,
   profileImagesByUserId = {},
   notifications = [],
   onNotificationClick,
@@ -35,6 +36,7 @@ const Header = ({
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [avatarErrored, setAvatarErrored] = useState(false);
   const [markAllNotificationsLoading, setMarkAllNotificationsLoading] = useState(false);
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const notifRef = useRef(null);
   const settingsMenuRef = useRef(null);
 
@@ -49,6 +51,23 @@ const Header = ({
     .toLowerCase()
     .replace(/\s+/g, "_");
   const showViewAllNotifications = viewerRole !== "employee";
+  const clockReferenceTimeZone =
+    String(clockData?.timeZone || "").trim() ||
+    Intl.DateTimeFormat().resolvedOptions().timeZone ||
+    "America/Chicago";
+  const isClockOnBreak = !!clockData?.isOnBreak;
+  const clockBreakStartMs = toMillis(clockData?.activeBreakStartedAt);
+  const clockBreakMinutesActive =
+    isClockOnBreak && Number.isFinite(clockBreakStartMs)
+      ? Math.max(0, (clockNowMs - clockBreakStartMs) / 60000)
+      : 0;
+  const clockDisplayName = String(clockData?.name || "").trim();
+  const clockTimeLabel = new Date(clockNowMs).toLocaleTimeString(undefined, {
+    timeZone: clockReferenceTimeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -59,6 +78,11 @@ const Header = ({
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    const timerId = setInterval(() => setClockNowMs(Date.now()), 1000);
+    return () => clearInterval(timerId);
   }, []);
 
   const profileSource = viewer || employee || null;
@@ -364,8 +388,32 @@ const Header = ({
 
   return (
     <header className="top-header">
+      <div className="header-left">
+        <div className={`top-header-clock-card ${isClockOnBreak ? "is-on-break" : ""}`}>
+          <div className="top-header-clock-title">
+            {isClockOnBreak ? "Currently On Break" : "Current Time"}
+          </div>
+          <div className="top-header-clock-time">{clockTimeLabel}</div>
+          <div className="top-header-clock-meta">
+            <span>{clockReferenceTimeZone}</span>
+          </div>
+        </div>
+      </div>
       <div className="header-right">
         <div className="notif-wrapper" ref={notifRef}>
+          <button
+            type="button"
+            className={`icon-btn ${notifOpen ? "active" : ""}`}
+            onClick={() => setNotifOpen((prev) => !prev)}
+            aria-label="Open notifications"
+            aria-expanded={notifOpen}
+          >
+            <Bell size={20} />
+            {unreadCount > 0 ? (
+              <span className="badge">{unreadCount > 9 ? "9+" : unreadCount}</span>
+            ) : null}
+          </button>
+
           <div className="profile-box">
             <div className="name">
               <div className="profile-name">{displayName}</div>
@@ -394,18 +442,7 @@ const Header = ({
             </button>
           </div>
 
-          <button
-            type="button"
-            className={`icon-btn ${notifOpen ? "active" : ""}`}
-            onClick={() => setNotifOpen((prev) => !prev)}
-            aria-label="Open notifications"
-            aria-expanded={notifOpen}
-          >
-            <Bell size={20} />
-            {unreadCount > 0 ? (
-              <span className="badge">{unreadCount > 9 ? "9+" : unreadCount}</span>
-            ) : null}
-          </button>
+          
 
           {notifOpen && (
             <div className="notif-panel">
