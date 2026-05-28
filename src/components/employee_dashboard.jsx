@@ -31,12 +31,14 @@ import {
   Pencil,
   Pin,
   Plus,
+  RefreshCw,
   RotateCcw,
   Table2,
   TableColumnsSplit,
   TableRowsSplit,
   Trash2,
   Underline,
+  UserPlus,
   Users,
 } from "lucide-react";
 import ConfirmModal from "./ConfirmModal";
@@ -46,8 +48,10 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   query,
+  setDoc,
   serverTimestamp,
   updateDoc,
   where,
@@ -467,6 +471,10 @@ const NOTEPAD_TABLE_PICKER_MAX_ROWS = 8;
 const NOTEPAD_TABLE_PICKER_MAX_COLS = 8;
 const NOTEPAD_DOCS_CACHE_BY_EMPLOYEE = new Map();
 const NOTEPAD_NOTIFICATION_EVENT_CACHE = new Set();
+const NOTEPAD_REFRESH_SIGNAL_COLLECTION = "employee_notepad_refresh_signals";
+const EMP_SIDE_COLUMN_MIN_WIDTH_PX = 220;
+const EMP_SIDE_COLUMN_MAX_WIDTH_RATIO = 0.6;
+const EMP_SIDE_COLUMN_WIDTH_STORAGE_PREFIX = "emp_dash_side_col_width";
 
 const sanitizeNotepadMemberUserIds = (value = []) =>
   Array.from(
@@ -629,6 +637,26 @@ const serializeNotepadEditorHtml = (editorEl, fallbackHtml = "") => {
     (checkbox) => !!checkbox?.checked
   );
   return persistChecklistStateInHtml(rawHtml, checkedStates);
+};
+
+const extractChecklistItemTextFromCheckbox = (checkboxEl) => {
+  if (!checkboxEl || typeof checkboxEl.closest !== "function") return "";
+  const checklistItemEl = checkboxEl.closest(".notepad-check-item");
+  if (!checklistItemEl) return "";
+
+  const cloneEl = checklistItemEl.cloneNode(true);
+  cloneEl.querySelectorAll('input[type="checkbox"]').forEach((inputEl) => inputEl.remove());
+  return String(cloneEl.textContent || "")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
+const isLikelyPlaceholderPersonLabel = (value = "") => {
+  const normalized = toText(value).toLowerCase();
+  if (!normalized) return true;
+  if (normalized === "user" || normalized === "employee" || normalized === "a teammate") return true;
+  if (/^user(?:\s+.+)?$/.test(normalized) && !normalized.includes("@")) return true;
+  return false;
 };
 
 const stripHtmlForPreview = (html = "") =>
@@ -1148,6 +1176,7 @@ export default function EmployeeDashboard({
   const [notepadContentDraft, setNotepadContentDraft] = useState(EMPTY_NOTEPAD_HTML);
   const [notepadDirty, setNotepadDirty] = useState(false);
   const [notepadChecklistChangeVersion, setNotepadChecklistChangeVersion] = useState(0);
+  const [notepadLastChecklistChange, setNotepadLastChecklistChange] = useState(null);
   const [savingNotepadNote, setSavingNotepadNote] = useState(false);
   const [notepadStatusText, setNotepadStatusText] = useState("");
   const [isNotepadTyping, setIsNotepadTyping] = useState(false);
@@ -1157,6 +1186,10 @@ export default function EmployeeDashboard({
   const [isNotepadGroupCreatorOpen, setIsNotepadGroupCreatorOpen] = useState(false);
   const [creatingGroupNotepadNote, setCreatingGroupNotepadNote] = useState(false);
   const [notepadGroupMemberDraft, setNotepadGroupMemberDraft] = useState([]);
+  const [notepadAddMemberNoteId, setNotepadAddMemberNoteId] = useState("");
+  const [notepadAddMemberDraft, setNotepadAddMemberDraft] = useState([]);
+  const [notepadAddMemberSavingNoteId, setNotepadAddMemberSavingNoteId] = useState("");
+  const [notepadSideRefreshLoading, setNotepadSideRefreshLoading] = useState(false);
   const [notepadConfirmState, setNotepadConfirmState] = useState({
     open: false,
     mode: "",
@@ -1168,6 +1201,7 @@ export default function EmployeeDashboard({
   const [dashboardDisplaySaving, setDashboardDisplaySaving] = useState(false);
   const [dashboardDisplayStatus, setDashboardDisplayStatus] = useState("");
   const [dashboardDisplayChangeVersion, setDashboardDisplayChangeVersion] = useState(0);
+  const [dashboardLastChecklistChange, setDashboardLastChecklistChange] = useState(null);
   const [dashboardDisplayNoteIndex, setDashboardDisplayNoteIndex] = useState(0);
   const [isDashboardNoteMenuOpen, setIsDashboardNoteMenuOpen] = useState(false);
   const [isDashboardUnpinConfirmOpen, setIsDashboardUnpinConfirmOpen] = useState(false);
@@ -1189,8 +1223,14 @@ export default function EmployeeDashboard({
   const [dashboardNotepadPreviewColorKey, setDashboardNotepadPreviewColorKey] = useState(
     DEFAULT_NOTEPAD_COLOR_KEY
   );
+  const [empSideColumnWidthPx, setEmpSideColumnWidthPx] = useState(null);
+  const empSideColumnWidthPxRef = useRef(null);
+  const empGridRef = useRef(null);
+  const empSideColumnRef = useRef(null);
+  const empSideColumnResizeStateRef = useRef(null);
   const taskFilterDrawerRef = useRef(null);
   const taskFilterMenuRef = useRef(null);
+  const notepadListRef = useRef(null);
   const notepadEditorRef = useRef(null);
   const dashboardDisplayRef = useRef(null);
   const dashboardNoteActionsRef = useRef(null);
@@ -1209,6 +1249,8 @@ export default function EmployeeDashboard({
   const dashboardColorPendingPayloadRef = useRef(null);
   const notepadDueSoonNotifyInFlightRef = useRef(new Set());
   const notepadNotificationEventCacheRef = useRef(NOTEPAD_NOTIFICATION_EVENT_CACHE);
+  const notepadRefreshSignalSeenRef = useRef("");
+  const notepadRefreshSignalCheckBusyRef = useRef(false);
   const portalRoot = typeof document !== "undefined" ? document.body : null;
 
   const viewerRole = normalize(
@@ -2147,6 +2189,119 @@ export default function EmployeeDashboard({
     [employeesByUserId]
   );
 
+  const notifyGroupChecklistUpdated = useCallback(
+    async ({
+      noteId = "",
+      noteTitle = "",
+      noteScope = "group",
+      deadlineAt = null,
+      memberUserIds = [],
+      actorUserId = "",
+      actorName = "",
+      checklistItemText = "",
+      checklistItemChecked = null,
+    } = {}) => {
+      const normalizedNoteId = String(noteId || "").trim();
+      if (!normalizedNoteId) return;
+      if (normalizeNotepadScope(noteScope) !== "group") return;
+
+      const normalizedActorUserId = String(actorUserId || "").trim();
+      const recipients = sanitizeNotepadMemberUserIds(memberUserIds).filter(
+        (userId) => !normalizedActorUserId || userId !== normalizedActorUserId
+      );
+      if (!recipients.length) return;
+
+      const actorEmployee = normalizedActorUserId
+        ? employeesByUserId.get(normalizedActorUserId)
+        : null;
+      const viewerNameFallback = toText(
+        pageData?.viewer?.name ||
+          pageData?.viewer?.displayName ||
+          pageData?.currentUser?.name ||
+          pageData?.currentUser?.displayName ||
+          pageData?.user?.name ||
+          pageData?.user?.displayName
+      );
+      const providedActorName = toText(actorName);
+      const actorDisplayName = toText(getDisplayName(actorEmployee));
+      const normalizedViewerEmail = toText(viewerEmail);
+      const actorNameCandidates = [
+        providedActorName,
+        actorDisplayName,
+        viewerNameFallback,
+        normalizedViewerEmail,
+        normalizedActorUserId,
+      ];
+      const resolvedActorName =
+        actorNameCandidates.find((candidate) => !isLikelyPlaceholderPersonLabel(candidate)) || "A teammate";
+      const safeTitle = toText(noteTitle) || "Untitled group note";
+      const safeChecklistText = toText(checklistItemText).replace(/\s+/g, " ").trim();
+      const checklistAction =
+        checklistItemChecked === true ? "checked" : checklistItemChecked === false ? "unchecked" : "updated";
+      const checklistDetail = safeChecklistText
+        ? `${checklistAction} checklist item "${safeChecklistText}"`
+        : `${checklistAction} a checklist item`;
+      const dueLabel = formatNotepadDueLabel(deadlineAt);
+      const checklistKey = String(Math.floor(Date.now() / 60000));
+
+      await Promise.all(
+        recipients.map((recipientUserId) =>
+          createNotepadNotificationIfMissing({
+            eventKey: `notepad:notepad_group_checklist_updated:${normalizedNoteId}:${recipientUserId}:${checklistKey}`,
+            userId: recipientUserId,
+            type: "notepad_group_checklist_updated",
+            title: "Group Note Checklist Updated",
+            message: `${checklistDetail} by ${resolvedActorName} in group note "${safeTitle}". Due: ${dueLabel}.`,
+            noteId: normalizedNoteId,
+            noteScope: "group",
+            noteTitle: safeTitle,
+            deadlineAt: deadlineAt || null,
+            actorUserId: normalizedActorUserId,
+            actorName: resolvedActorName,
+          })
+        )
+      );
+    },
+    [
+      createNotepadNotificationIfMissing,
+      employeesByUserId,
+      formatNotepadDueLabel,
+      pageData,
+      viewerUserId,
+      viewerEmail,
+    ]
+  );
+
+  const emitNotepadRefreshSignal = useCallback(
+    async ({ recipientUserIds = [], noteId = "", reason = "" } = {}) => {
+      const normalizedRecipients = sanitizeNotepadMemberUserIds(recipientUserIds);
+      if (!normalizedRecipients.length) return;
+      const actorUserId = String(viewerUserId || effectiveSelectedId || "").trim();
+      const safeReason = String(reason || "").trim();
+      const safeNoteId = String(noteId || "").trim();
+      const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      await Promise.all(
+        normalizedRecipients.map((recipientUserId) =>
+          setDoc(
+            doc(db, NOTEPAD_REFRESH_SIGNAL_COLLECTION, recipientUserId),
+            {
+              userId: recipientUserId,
+              actorUserId,
+              noteId: safeNoteId,
+              reason: safeReason,
+              nonce,
+              changedAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          )
+        )
+      );
+    },
+    [viewerUserId, effectiveSelectedId]
+  );
+
   const syncNotepadDraftFromEditor = useCallback(() => {
     if (!notepadEditorRef.current) return;
     setIsNotepadTyping(true);
@@ -2697,6 +2852,8 @@ export default function EmployeeDashboard({
     setNotepadViewMode(NOTEPAD_VIEW_MY);
     setIsNotepadGroupCreatorOpen(false);
     setNotepadGroupMemberDraft([]);
+    setNotepadAddMemberNoteId("");
+    setNotepadAddMemberDraft([]);
     setSelectedNotepadNoteId("");
     setNotepadTitleDraft("");
     setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
@@ -2728,6 +2885,8 @@ export default function EmployeeDashboard({
     setNotepadDirty(false);
     setNotepadStatusText("");
     setNotepadError("");
+    setNotepadAddMemberNoteId("");
+    setNotepadAddMemberDraft([]);
     setNotepadGroupMemberDraft(defaultMemberIds);
     setIsNotepadGroupCreatorOpen(true);
   }, [effectiveSelectedId]);
@@ -2748,6 +2907,166 @@ export default function EmployeeDashboard({
       });
     },
     [effectiveSelectedId]
+  );
+
+  const getNotepadNoteMemberUserIds = useCallback(
+    (note) => {
+      const ownerUserId =
+        toText(note?.employeeUserId) || String(effectiveSelectedId || "").trim() || toText(viewerUserId);
+      const scopeMembers =
+        normalizeNotepadScope(note?.noteScope) === "group"
+          ? sanitizeNotepadMemberUserIds(note?.memberUserIds)
+          : [];
+      return sanitizeNotepadMemberUserIds([ownerUserId, ...scopeMembers]);
+    },
+    [effectiveSelectedId, viewerUserId]
+  );
+
+  const openAddUsersToNotepad = useCallback(
+    (note) => {
+      const noteId = String(note?.id || "").trim();
+      if (!noteId) return;
+      if (savingNotepadNote || notepadTrashingNoteId || notepadBinActionNoteId) return;
+      const nextMembers = getNotepadNoteMemberUserIds(note);
+      setIsNotepadGroupCreatorOpen(false);
+      setNotepadGroupMemberDraft([]);
+      setNotepadAddMemberNoteId(noteId);
+      setNotepadAddMemberDraft(nextMembers);
+      setNotepadError("");
+      setNotepadStatusText("");
+    },
+    [
+      savingNotepadNote,
+      notepadTrashingNoteId,
+      notepadBinActionNoteId,
+      getNotepadNoteMemberUserIds,
+    ]
+  );
+
+  const closeAddUsersToNotepad = useCallback(() => {
+    if (notepadAddMemberSavingNoteId) return;
+    setNotepadAddMemberNoteId("");
+    setNotepadAddMemberDraft([]);
+  }, [notepadAddMemberSavingNoteId]);
+
+  const toggleNotepadAddMemberDraftUser = useCallback(
+    (note, memberUserId) => {
+      const noteId = String(note?.id || "").trim();
+      if (!noteId || noteId !== String(notepadAddMemberNoteId || "")) return;
+      const targetUserId = String(memberUserId || "").trim();
+      if (!targetUserId) return;
+
+      const lockedMemberIds = getNotepadNoteMemberUserIds(note);
+      if (lockedMemberIds.includes(targetUserId)) return;
+
+      setNotepadAddMemberDraft((current) => {
+        const normalized = sanitizeNotepadMemberUserIds(current);
+        if (normalized.includes(targetUserId)) {
+          return normalized.filter((id) => id !== targetUserId);
+        }
+        return sanitizeNotepadMemberUserIds([...normalized, targetUserId]);
+      });
+    },
+    [notepadAddMemberNoteId, getNotepadNoteMemberUserIds]
+  );
+
+  const saveNotepadAddedMembers = useCallback(
+    async (note) => {
+      const noteId = String(note?.id || "").trim();
+      if (!noteId) return;
+      if (savingNotepadNote || notepadTrashingNoteId || notepadBinActionNoteId || notepadAddMemberSavingNoteId) return;
+      if (String(notepadAddMemberNoteId || "") !== noteId) return;
+
+      const existingMemberUserIds = getNotepadNoteMemberUserIds(note);
+      const nextMemberUserIds = sanitizeNotepadMemberUserIds([
+        ...existingMemberUserIds,
+        ...notepadAddMemberDraft,
+      ]);
+      const addedUserIds = nextMemberUserIds.filter((userId) => !existingMemberUserIds.includes(userId));
+      if (addedUserIds.length === 0) {
+        setNotepadStatusText("No new users selected.");
+        setNotepadError("");
+        return;
+      }
+
+      const actorUserId =
+        viewerUserId || String(effectiveSelectedId || "").trim() || String(note?.employeeUserId || "").trim();
+      const ownerUserId = toText(note?.employeeUserId);
+      const ownerEmployee = ownerUserId ? employeesByUserId.get(ownerUserId) : null;
+      const actorEmployee = actorUserId ? employeesByUserId.get(actorUserId) : null;
+      const actorName =
+        toText(getDisplayName(actorEmployee)) ||
+        toText(note?.updatedByName) ||
+        toText(getDisplayName(ownerEmployee)) ||
+        toText(note?.employeeName) ||
+        actorUserId ||
+        "A teammate";
+      const noteTitle = toText(note?.title) || "Untitled group note";
+      const dueLabel = formatNotepadDueLabel(note?.deadlineAt || note?.deadlineAtMs);
+      const memberProfiles = resolveNotepadMemberProfiles(nextMemberUserIds, note?.memberProfiles);
+
+      setNotepadAddMemberSavingNoteId(noteId);
+      setNotepadError("");
+      setNotepadStatusText("");
+      try {
+        await updateDoc(doc(db, EMPLOYEE_NOTEPAD_COLLECTION, noteId), {
+          noteScope: "group",
+          memberUserIds: nextMemberUserIds,
+          memberProfiles,
+          updatedAt: serverTimestamp(),
+          updatedByUserId: actorUserId || "",
+        });
+
+        await Promise.all(
+          addedUserIds.map((recipientUserId) =>
+            createNotepadNotificationIfMissing({
+              eventKey: `notepad:notepad_group_added:${noteId}:${recipientUserId}`,
+              userId: recipientUserId,
+              type: "notepad_group_added",
+              title: "Added To Group Note",
+              message: `${actorName} added you to group note "${noteTitle}". Due: ${dueLabel}.`,
+              noteId,
+              noteScope: "group",
+              noteTitle,
+              deadlineAt: note?.deadlineAt || null,
+              actorUserId,
+              actorName,
+            })
+          )
+        );
+
+        setNotepadStatusText(
+          addedUserIds.length === 1
+            ? "1 user added to group note."
+            : `${addedUserIds.length} users added to group note.`
+        );
+        setNotepadAddMemberNoteId("");
+        setNotepadAddMemberDraft([]);
+        await refreshNotepadIconMeta({ force: true });
+        await loadNotepadNotes(noteId, { force: true });
+      } catch (err) {
+        setNotepadError(err?.message || "Failed to add users to note.");
+      } finally {
+        setNotepadAddMemberSavingNoteId("");
+      }
+    },
+    [
+      savingNotepadNote,
+      notepadTrashingNoteId,
+      notepadBinActionNoteId,
+      notepadAddMemberSavingNoteId,
+      notepadAddMemberNoteId,
+      notepadAddMemberDraft,
+      getNotepadNoteMemberUserIds,
+      viewerUserId,
+      effectiveSelectedId,
+      employeesByUserId,
+      formatNotepadDueLabel,
+      resolveNotepadMemberProfiles,
+      createNotepadNotificationIfMissing,
+      refreshNotepadIconMeta,
+      loadNotepadNotes,
+    ]
   );
 
   const cancelCreateGroupNotepad = useCallback(() => {
@@ -2980,6 +3299,86 @@ export default function EmployeeDashboard({
     ]
   );
 
+  const notifyGroupNoteDeleted = useCallback(
+    async ({ note = {}, actorUserId = "", permanent = false, movedToBin = false } = {}) => {
+      const noteId = String(note?.id || "").trim();
+      if (!noteId) return;
+
+      const normalizedActorUserId = String(actorUserId || "").trim();
+      const noteDocRef = doc(db, EMPLOYEE_NOTEPAD_COLLECTION, noteId);
+      let latestData = {};
+      try {
+        const snap = await getDoc(noteDocRef);
+        if (snap.exists()) latestData = snap.data() || {};
+      } catch {
+        latestData = {};
+      }
+
+      const ownerUserId = toText(latestData?.employeeUserId || note?.employeeUserId);
+      const memberIdsFromProfiles = sanitizeNotepadMemberUserIds(
+        [
+          ...(Array.isArray(latestData?.memberProfiles) ? latestData.memberProfiles : []),
+          ...(Array.isArray(note?.memberProfiles) ? note.memberProfiles : []),
+        ].map((item) => item?.userId || item?.employeeUserId || item?.uid || item?.id)
+      );
+      const recipientUserIds = sanitizeNotepadMemberUserIds(
+        Array.isArray(latestData?.memberUserIds) && latestData.memberUserIds.length
+          ? [...latestData.memberUserIds, ...memberIdsFromProfiles, ownerUserId]
+          : Array.isArray(note?.memberUserIds) && note.memberUserIds.length
+            ? [...note.memberUserIds, ...memberIdsFromProfiles, ownerUserId]
+          : [...memberIdsFromProfiles, ownerUserId]
+      ).filter((recipientId) => !normalizedActorUserId || recipientId !== normalizedActorUserId);
+      if (!recipientUserIds.length) return;
+
+      const ownerEmployee = ownerUserId ? employeesByUserId.get(ownerUserId) : null;
+      const actorEmployee = normalizedActorUserId ? employeesByUserId.get(normalizedActorUserId) : null;
+      const actorName =
+        toText(getDisplayName(actorEmployee)) ||
+        toText(note?.updatedByName) ||
+        toText(getDisplayName(ownerEmployee)) ||
+        toText(note?.employeeName) ||
+        normalizedActorUserId ||
+        "A teammate";
+      const noteTitle = toText(note?.title) || "Untitled group note";
+      const dueLabel = formatNotepadDueLabel(note?.deadlineAt || note?.deadlineAtMs);
+      const eventMinuteKey = String(Math.floor(Date.now() / 60000));
+      const eventType = movedToBin
+        ? "notepad_group_moved_to_bin"
+        : permanent
+          ? "notepad_group_permanently_deleted"
+          : "notepad_group_deleted";
+      const eventTitle = movedToBin
+        ? "Group Note Moved To Recycle Bin"
+        : permanent
+          ? "Group Note Permanently Deleted"
+          : "Group Note Deleted";
+      const eventMessage = movedToBin
+        ? `${actorName} moved group note "${noteTitle}" to recycle bin. Due: ${dueLabel}.`
+        : permanent
+          ? `${actorName} permanently deleted group note "${noteTitle}". Due: ${dueLabel}.`
+          : `${actorName} deleted group note "${noteTitle}". Due: ${dueLabel}.`;
+
+      await Promise.all(
+        recipientUserIds.map((recipientUserId) =>
+          createNotepadNotificationIfMissing({
+            eventKey: `notepad:${eventType}:${noteId}:${recipientUserId}:${eventMinuteKey}`,
+            userId: recipientUserId,
+            type: eventType,
+            title: eventTitle,
+            message: eventMessage,
+            noteId,
+            noteScope: "group",
+            noteTitle,
+            deadlineAt: note?.deadlineAt || null,
+            actorUserId: normalizedActorUserId,
+            actorName,
+          })
+        )
+      );
+    },
+    [createNotepadNotificationIfMissing, employeesByUserId, formatNotepadDueLabel]
+  );
+
   const moveNotepadNoteToTrash = useCallback(
     async (note) => {
       const noteId = String(note?.id || "").trim();
@@ -2998,6 +3397,60 @@ export default function EmployeeDashboard({
           trashedAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
           updatedByUserId: actorUserId,
+        });
+        const groupRecipientIds = sanitizeNotepadMemberUserIds([
+          note?.employeeUserId,
+          ...(Array.isArray(note?.memberUserIds) ? note.memberUserIds : []),
+          ...(Array.isArray(note?.memberProfiles)
+            ? note.memberProfiles.map((item) => item?.userId || item?.employeeUserId || item?.uid || item?.id)
+            : []),
+        ]);
+        const ownerUserId = toText(note?.employeeUserId);
+        const ownerEmployee = ownerUserId ? employeesByUserId.get(ownerUserId) : null;
+        const actorEmployee = actorUserId ? employeesByUserId.get(actorUserId) : null;
+        const actorName =
+          toText(getDisplayName(actorEmployee)) ||
+          toText(note?.updatedByName) ||
+          toText(getDisplayName(ownerEmployee)) ||
+          toText(note?.employeeName) ||
+          actorUserId ||
+          "A teammate";
+        const noteTitle = toText(note?.title) || "Untitled group note";
+        const dueLabel = formatNotepadDueLabel(note?.deadlineAt || note?.deadlineAtMs);
+        const eventKeySeed = String(Date.now());
+        const recipients = groupRecipientIds.filter((recipientId) => recipientId && recipientId !== actorUserId);
+
+        await Promise.all(
+          recipients.map(async (recipientUserId) => {
+            const recipient = employeesByUserId.get(recipientUserId);
+            await addDoc(collection(db, NOTIFICATIONS_COLLECTION), {
+              eventKey: `notepad:notepad_group_moved_to_bin:${noteId}:${recipientUserId}:${eventKeySeed}`,
+              audience: "employee",
+              userId: recipientUserId,
+              role: "employee",
+              name: toText(getDisplayName(recipient)),
+              email: toText(recipient?.email || ""),
+              type: "notepad_group_moved_to_bin",
+              title: "Group Note Moved To Recycle Bin",
+              message: `${actorName} moved group note "${noteTitle}" to recycle bin. Due: ${dueLabel}.`,
+              targetPage: "employee_dashboard",
+              noteId,
+              noteScope: "group",
+              noteTitle,
+              deadlineAt: note?.deadlineAt || null,
+              createdByUserId: String(actorUserId || "").trim(),
+              createdByName: toText(actorName),
+              read: false,
+              archived: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          })
+        );
+        await emitNotepadRefreshSignal({
+          recipientUserIds: groupRecipientIds,
+          noteId,
+          reason: "note_moved_to_bin",
         });
 
         if (String(selectedNotepadNoteId || "") === noteId) {
@@ -3019,6 +3472,9 @@ export default function EmployeeDashboard({
       viewerUserId,
       effectiveSelectedId,
       selectedNotepadNoteId,
+      employeesByUserId,
+      formatNotepadDueLabel,
+      emitNotepadRefreshSignal,
       refreshNotepadIconMeta,
       loadNotepadNotes,
     ]
@@ -3043,6 +3499,60 @@ export default function EmployeeDashboard({
           updatedAt: serverTimestamp(),
           updatedByUserId: actorUserId,
         });
+        const groupRecipientIds = sanitizeNotepadMemberUserIds([
+          note?.employeeUserId,
+          ...(Array.isArray(note?.memberUserIds) ? note.memberUserIds : []),
+          ...(Array.isArray(note?.memberProfiles)
+            ? note.memberProfiles.map((item) => item?.userId || item?.employeeUserId || item?.uid || item?.id)
+            : []),
+        ]);
+        const ownerUserId = toText(note?.employeeUserId);
+        const ownerEmployee = ownerUserId ? employeesByUserId.get(ownerUserId) : null;
+        const actorEmployee = actorUserId ? employeesByUserId.get(actorUserId) : null;
+        const actorName =
+          toText(getDisplayName(actorEmployee)) ||
+          toText(note?.updatedByName) ||
+          toText(getDisplayName(ownerEmployee)) ||
+          toText(note?.employeeName) ||
+          actorUserId ||
+          "A teammate";
+        const noteTitle = toText(note?.title) || "Untitled group note";
+        const dueLabel = formatNotepadDueLabel(note?.deadlineAt || note?.deadlineAtMs);
+        const eventKeySeed = String(Date.now());
+        const recipients = groupRecipientIds.filter((recipientId) => recipientId && recipientId !== actorUserId);
+
+        await Promise.all(
+          recipients.map(async (recipientUserId) => {
+            const recipient = employeesByUserId.get(recipientUserId);
+            await addDoc(collection(db, NOTIFICATIONS_COLLECTION), {
+              eventKey: `notepad:notepad_group_restored:${noteId}:${recipientUserId}:${eventKeySeed}`,
+              audience: "employee",
+              userId: recipientUserId,
+              role: "employee",
+              name: toText(getDisplayName(recipient)),
+              email: toText(recipient?.email || ""),
+              type: "notepad_group_restored",
+              title: "Group Note Restored",
+              message: `${actorName} restored group note "${noteTitle}" from recycle bin. Due: ${dueLabel}.`,
+              targetPage: "employee_dashboard",
+              noteId,
+              noteScope: "group",
+              noteTitle,
+              deadlineAt: note?.deadlineAt || null,
+              createdByUserId: String(actorUserId || "").trim(),
+              createdByName: toText(actorName),
+              read: false,
+              archived: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          })
+        );
+        await emitNotepadRefreshSignal({
+          recipientUserIds: groupRecipientIds,
+          noteId,
+          reason: "note_restored",
+        });
 
         setNotepadStatusText("Note restored.");
         await refreshNotepadIconMeta({ force: true });
@@ -3059,6 +3569,9 @@ export default function EmployeeDashboard({
       notepadBinActionNoteId,
       viewerUserId,
       effectiveSelectedId,
+      employeesByUserId,
+      formatNotepadDueLabel,
+      emitNotepadRefreshSignal,
       refreshNotepadIconMeta,
       loadNotepadNotes,
     ]
@@ -3074,6 +3587,25 @@ export default function EmployeeDashboard({
       setNotepadError("");
 
       try {
+        const actorUserId =
+          viewerUserId || String(effectiveSelectedId || "").trim() || String(note?.employeeUserId || "").trim();
+        const groupRecipientIds = sanitizeNotepadMemberUserIds([
+          note?.employeeUserId,
+          ...(Array.isArray(note?.memberUserIds) ? note.memberUserIds : []),
+          ...(Array.isArray(note?.memberProfiles)
+            ? note.memberProfiles.map((item) => item?.userId || item?.employeeUserId || item?.uid || item?.id)
+            : []),
+        ]);
+        await notifyGroupNoteDeleted({
+          note,
+          actorUserId,
+          permanent: true,
+        });
+        await emitNotepadRefreshSignal({
+          recipientUserIds: groupRecipientIds,
+          noteId,
+          reason: "note_permanently_deleted",
+        });
         await deleteDoc(doc(db, EMPLOYEE_NOTEPAD_COLLECTION, noteId));
         setNotepadStatusText("Note permanently deleted.");
         await refreshNotepadIconMeta({ force: true });
@@ -3088,6 +3620,10 @@ export default function EmployeeDashboard({
       savingNotepadNote,
       notepadTrashingNoteId,
       notepadBinActionNoteId,
+      viewerUserId,
+      effectiveSelectedId,
+      notifyGroupNoteDeleted,
+      emitNotepadRefreshSignal,
       refreshNotepadIconMeta,
       loadNotepadNotes,
     ]
@@ -3264,12 +3800,48 @@ export default function EmployeeDashboard({
         keepSelectedId = docRef.id;
       }
 
+      const shouldBroadcastChecklistRefresh =
+        notepadChecklistChangeVersion > 0 &&
+        normalizeNotepadScope(selectedNotepadNote?.noteScope) === "group" &&
+        Array.isArray(selectedNotepadNote?.memberUserIds);
+      const isGroupNoteSave =
+        normalizeNotepadScope(selectedNotepadNote?.noteScope) === "group" &&
+        Array.isArray(selectedNotepadNote?.memberUserIds);
+      const didGroupNoteColorChange =
+        isGroupNoteSave &&
+        normalizeNotepadColorKey(selectedNotepadNote?.noteColorKey) !== finalColorKey;
+      if (shouldBroadcastChecklistRefresh) {
+        await notifyGroupChecklistUpdated({
+          noteId: keepSelectedId,
+          noteTitle: finalTitle,
+          noteScope: selectedNotepadNote?.noteScope,
+          deadlineAt: deadlineAtValue || selectedNotepadNote?.deadlineAt || null,
+          memberUserIds: selectedNotepadNote?.memberUserIds,
+          actorUserId: nowBy,
+          checklistItemText: notepadLastChecklistChange?.itemText || "",
+          checklistItemChecked: notepadLastChecklistChange?.checked,
+        });
+        await emitNotepadRefreshSignal({
+          recipientUserIds: sanitizeNotepadMemberUserIds(selectedNotepadNote?.memberUserIds),
+          noteId: keepSelectedId,
+          reason: "checklist_saved",
+        });
+      }
+      if (didGroupNoteColorChange) {
+        await emitNotepadRefreshSignal({
+          recipientUserIds: sanitizeNotepadMemberUserIds(selectedNotepadNote?.memberUserIds),
+          noteId: keepSelectedId,
+          reason: "color_changed",
+        });
+      }
+
       setNotepadDirty(false);
       setNotepadTitleDraft(finalTitle);
       setNotepadColorDraft(finalColorKey);
       setNotepadDeadlineDraft(toLocalDateTimeInputValue(deadlineAtValue));
       setNotepadContentDraft(finalContentHtml);
       setNotepadChecklistChangeVersion(0);
+      setNotepadLastChecklistChange(null);
       if (notepadEditorRef.current) {
         notepadEditorRef.current.innerHTML = finalContentHtml;
       }
@@ -3285,6 +3857,8 @@ export default function EmployeeDashboard({
     savingNotepadNote,
     effectiveSelectedId,
     notepadContentDraft,
+    notepadChecklistChangeVersion,
+    notepadLastChecklistChange,
     notepadDeadlineDraft,
     notepadTitleDraft,
     notepadColorDraft,
@@ -3294,6 +3868,8 @@ export default function EmployeeDashboard({
     selectedNotepadNote,
     employee,
     resolveNotepadMemberProfiles,
+    notifyGroupChecklistUpdated,
+    emitNotepadRefreshSignal,
     refreshNotepadIconMeta,
     loadNotepadNotes,
   ]);
@@ -3312,6 +3888,72 @@ export default function EmployeeDashboard({
     notepadMetaLoadedRef.current = true;
     refreshNotepadIconMeta();
   }, [refreshNotepadIconMeta]);
+
+  const processNotepadChecklistRefreshSignal = useCallback(async (options = {}) => {
+    const showBusy = options?.showBusy !== false;
+    const employeeUserId = String(effectiveSelectedId || "").trim();
+    if (!employeeUserId) return false;
+    const signalDocRef = doc(db, NOTEPAD_REFRESH_SIGNAL_COLLECTION, employeeUserId);
+    if (notepadRefreshSignalCheckBusyRef.current) return false;
+    notepadRefreshSignalCheckBusyRef.current = true;
+    if (showBusy) setNotepadSideRefreshLoading(true);
+    try {
+      const snapshot = await getDoc(signalDocRef);
+      if (!snapshot.exists()) return false;
+      const data = snapshot.data() || {};
+      const actorUserId = String(data?.actorUserId || "").trim();
+      const nonce = String(data?.nonce || "").trim();
+      const reason = String(data?.reason || "").trim();
+      const changedAtMs = toMillis(data?.changedAt);
+      const signalKey = `${actorUserId}|${nonce}|${Number.isFinite(changedAtMs) ? changedAtMs : "na"}`;
+      if (!signalKey || signalKey === notepadRefreshSignalSeenRef.current) return false;
+      if (
+        reason !== "checklist_saved" &&
+        reason !== "color_changed" &&
+        reason !== "note_moved_to_bin" &&
+        reason !== "note_restored" &&
+        reason !== "note_deleted" &&
+        reason !== "note_permanently_deleted"
+      ) {
+        return false;
+      }
+      notepadRefreshSignalSeenRef.current = signalKey;
+
+      if (isNotepadDrawerOpen && (notepadDirty || savingNotepadNote)) {
+        await refreshNotepadIconMeta({ force: true });
+        setNotepadStatusText("New note update available.");
+        return true;
+      }
+      await loadNotepadNotes("", { force: true });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      notepadRefreshSignalCheckBusyRef.current = false;
+      if (showBusy) setNotepadSideRefreshLoading(false);
+    }
+  }, [
+    effectiveSelectedId,
+    isNotepadDrawerOpen,
+    loadNotepadNotes,
+    notepadDirty,
+    refreshNotepadIconMeta,
+    savingNotepadNote,
+  ]);
+
+  useEffect(() => {
+    const handleChecklistNotificationRefresh = () => {
+      const refreshButton = document.querySelector(".empSideColumnRefreshBtn");
+      if (refreshButton instanceof HTMLButtonElement && !refreshButton.disabled) {
+        refreshButton.click();
+      }
+      processNotepadChecklistRefreshSignal({ showBusy: false });
+    };
+    window.addEventListener("notepadChecklistNotificationReceived", handleChecklistNotificationRefresh);
+    return () => {
+      window.removeEventListener("notepadChecklistNotificationReceived", handleChecklistNotificationRefresh);
+    };
+  }, [processNotepadChecklistRefreshSignal]);
 
   useEffect(() => {
     if (!isNotepadDrawerOpen) return;
@@ -3657,6 +4299,9 @@ export default function EmployeeDashboard({
     setNotepadViewMode(NOTEPAD_VIEW_MY);
     setIsNotepadGroupCreatorOpen(false);
     setNotepadGroupMemberDraft([]);
+    setNotepadAddMemberNoteId("");
+    setNotepadAddMemberDraft([]);
+    setNotepadAddMemberSavingNoteId("");
     setIsNotepadDrawerOpen(false);
   };
   const closeAnnouncementModal = () => setSelectedAnnouncement(null);
@@ -3752,8 +4397,7 @@ export default function EmployeeDashboard({
         if (aUpdatedMs !== bUpdatedMs) return bUpdatedMs - aUpdatedMs;
 
         return String(a?.title || "").localeCompare(String(b?.title || ""));
-      })
-      .slice(0, 5);
+      });
   }, [notepadNotes, nowMsForNotepad]);
   useEffect(() => {
     if (!dashboardImportantNotes.length) {
@@ -3962,6 +4606,8 @@ export default function EmployeeDashboard({
       const actorUserId = String(payload?.actorUserId || "").trim();
       const preferredNoteId = String(payload?.preferredNoteId || "").trim();
       const targetNoteId = String(payload?.targetNoteId || "").trim();
+      const noteScope = String(payload?.noteScope || "").trim();
+      const memberUserIds = sanitizeNotepadMemberUserIds(payload?.memberUserIds);
       if (!targetNoteId) return;
 
       setDashboardNoteColorUpdatingId(targetNoteId);
@@ -3972,6 +4618,13 @@ export default function EmployeeDashboard({
           updatedAt: serverTimestamp(),
           updatedByUserId: actorUserId || "",
         });
+        if (normalizeNotepadScope(noteScope) === "group" && memberUserIds.length > 0) {
+          await emitNotepadRefreshSignal({
+            recipientUserIds: memberUserIds,
+            noteId: targetNoteId,
+            reason: "color_changed",
+          });
+        }
 
         await refreshNotepadIconMeta({ force: true });
         await loadNotepadNotes(preferredNoteId || dashboardDisplayNoteId || targetNoteId, { force: true });
@@ -3983,6 +4636,7 @@ export default function EmployeeDashboard({
       }
     },
     [
+      emitNotepadRefreshSignal,
       refreshNotepadIconMeta,
       loadNotepadNotes,
       dashboardDisplayNoteId,
@@ -4012,6 +4666,8 @@ export default function EmployeeDashboard({
         actorUserId,
         targetNoteId,
         preferredNoteId: dashboardDisplayNoteId,
+        noteScope: topDashboardImportantNote?.noteScope || "",
+        memberUserIds: topDashboardImportantNote?.memberUserIds || [],
       };
       setNotepadError("");
 
@@ -4049,6 +4705,7 @@ export default function EmployeeDashboard({
     setDashboardDisplayHtml(dashboardDisplaySourceHtml);
     setDashboardDisplayDirty(false);
     setDashboardDisplayStatus("");
+    setDashboardLastChecklistChange(null);
   }, [dashboardDisplayNoteId, dashboardDisplaySourceHtml]);
 
   const handleDashboardDisplayCheckboxChange = useCallback(
@@ -4069,6 +4726,10 @@ export default function EmployeeDashboard({
       setDashboardDisplayHtml(nextHtml);
       setDashboardDisplayDirty(true);
       setDashboardDisplayStatus("Unsaved checklist changes");
+      setDashboardLastChecklistChange({
+        itemText: extractChecklistItemTextFromCheckbox(checkboxEl),
+        checked: !!checkboxEl?.checked,
+      });
       setDashboardDisplayChangeVersion((prev) => prev + 1);
     },
     []
@@ -4091,7 +4752,32 @@ export default function EmployeeDashboard({
         updatedAt: serverTimestamp(),
         updatedByUserId: actorUserId || "",
       });
+      const isGroupDashboardNote =
+        normalizeNotepadScope(topDashboardImportantNote?.noteScope) === "group";
+      const refreshRecipients = isGroupDashboardNote
+        ? sanitizeNotepadMemberUserIds(topDashboardImportantNote?.memberUserIds)
+        : sanitizeNotepadMemberUserIds([
+            topDashboardImportantNote?.employeeUserId || effectiveSelectedId || actorUserId,
+          ]);
+      if (isGroupDashboardNote) {
+        await notifyGroupChecklistUpdated({
+          noteId: dashboardDisplayNoteId,
+          noteTitle: toText(topDashboardImportantNote?.title) || "Untitled group note",
+          noteScope: topDashboardImportantNote?.noteScope,
+          deadlineAt: topDashboardImportantNote?.deadlineAt || topDashboardImportantNote?.deadlineAtMs || null,
+          memberUserIds: topDashboardImportantNote?.memberUserIds,
+          actorUserId,
+          checklistItemText: dashboardLastChecklistChange?.itemText || "",
+          checklistItemChecked: dashboardLastChecklistChange?.checked,
+        });
+      }
+      await emitNotepadRefreshSignal({
+        recipientUserIds: refreshRecipients,
+        noteId: dashboardDisplayNoteId,
+        reason: "checklist_saved",
+      });
       setDashboardDisplayDirty(false);
+      setDashboardLastChecklistChange(null);
       setDashboardDisplayStatus("Saved");
       await refreshNotepadIconMeta({ force: true });
       await loadNotepadNotes(dashboardDisplayNoteId, { force: true });
@@ -4106,9 +4792,12 @@ export default function EmployeeDashboard({
     dashboardDisplayDirty,
     dashboardDisplayNoteId,
     dashboardDisplayHtml,
+    dashboardLastChecklistChange,
     viewerUserId,
     effectiveSelectedId,
     topDashboardImportantNote,
+    notifyGroupChecklistUpdated,
+    emitNotepadRefreshSignal,
     refreshNotepadIconMeta,
     loadNotepadNotes,
   ]);
@@ -4156,6 +4845,43 @@ export default function EmployeeDashboard({
     if (!isNotepadRecycleBinView) return;
     setIsNotepadCompletedOpen(false);
   }, [isNotepadRecycleBinView]);
+
+  useEffect(() => {
+    if (!isNotepadDrawerOpen) return undefined;
+    const noteId = String(selectedNotepadNoteId || "").trim();
+    if (!noteId) return undefined;
+
+    const selectedNote = notepadNotes.find((note) => String(note?.id || "").trim() === noteId) || null;
+    if (selectedNote?.isCompleted && !isNotepadCompletedOpen && !isNotepadRecycleBinView) {
+      setIsNotepadCompletedOpen(true);
+    }
+
+    let rafIdA = 0;
+    let rafIdB = 0;
+    const scrollToSelectedNote = () => {
+      const listEl = notepadListRef.current;
+      if (!listEl) return;
+      const noteItemEls = Array.from(listEl.querySelectorAll(".empNotepadListItem[data-note-id]"));
+      const targetEl = noteItemEls.find((itemEl) => String(itemEl?.dataset?.noteId || "").trim() === noteId);
+      if (!targetEl) return;
+      targetEl.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+    };
+
+    rafIdA = window.requestAnimationFrame(() => {
+      rafIdB = window.requestAnimationFrame(scrollToSelectedNote);
+    });
+
+    return () => {
+      if (rafIdA) window.cancelAnimationFrame(rafIdA);
+      if (rafIdB) window.cancelAnimationFrame(rafIdB);
+    };
+  }, [
+    isNotepadDrawerOpen,
+    selectedNotepadNoteId,
+    notepadNotes,
+    isNotepadCompletedOpen,
+    isNotepadRecycleBinView,
+  ]);
 
   useEffect(() => {
     const selectedEmployeeUserId = String(effectiveSelectedId || "").trim();
@@ -4947,6 +5673,10 @@ export default function EmployeeDashboard({
       const input = event.target;
       if (String(input?.type || "").toLowerCase() === "checkbox") {
         window.requestAnimationFrame(() => {
+          setNotepadLastChecklistChange({
+            itemText: extractChecklistItemTextFromCheckbox(input),
+            checked: !!input.checked,
+          });
           placeCaretAfterChecklistCheckbox(input);
           syncNotepadDraftFromEditor();
           setNotepadStatusText("Unsaved checklist changes");
@@ -5089,6 +5819,9 @@ export default function EmployeeDashboard({
       if (isNotepadDrawerOpen) {
         setIsNotepadGroupCreatorOpen(false);
         setNotepadGroupMemberDraft([]);
+        setNotepadAddMemberNoteId("");
+        setNotepadAddMemberDraft([]);
+        setNotepadAddMemberSavingNoteId("");
         setNotepadViewMode(NOTEPAD_VIEW_MY);
         setIsNotepadDrawerOpen(false);
       }
@@ -5107,6 +5840,158 @@ export default function EmployeeDashboard({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isBreakLogsDrawerOpen, isNotepadDrawerOpen, isTaskListDrawerOpen, isAnnouncementDrawerOpen]);
+
+  useEffect(() => {
+    if (!notepadAddMemberNoteId) return;
+    const targetId = String(notepadAddMemberNoteId || "").trim();
+    const exists = (Array.isArray(notepadNotes) ? notepadNotes : []).some(
+      (note) => String(note?.id || "").trim() === targetId
+    );
+    if (exists) return;
+    setNotepadAddMemberNoteId("");
+    setNotepadAddMemberDraft([]);
+  }, [notepadAddMemberNoteId, notepadNotes]);
+
+  const handleEmpSideColumnResizeMouseDown = useCallback((event) => {
+    if (Number(event?.button) !== 0) return;
+    if (typeof window === "undefined" || window.innerWidth <= 1000) return;
+
+    const gridEl = empGridRef.current;
+    const sideEl = empSideColumnRef.current;
+    if (!gridEl || !sideEl) return;
+
+    const gridRect = gridEl.getBoundingClientRect();
+    const sideRect = sideEl.getBoundingClientRect();
+    empSideColumnResizeStateRef.current = {
+      startX: Number(event.clientX) || 0,
+      startWidth: Math.round(sideRect.width),
+      gridWidth: Math.max(0, Math.round(gridRect.width)),
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  const getEmpSideColumnStorageKey = useCallback(() => {
+    const userKey = String(normalizedSelectedUserId || "default").trim() || "default";
+    return `${EMP_SIDE_COLUMN_WIDTH_STORAGE_PREFIX}:${userKey}`;
+  }, [normalizedSelectedUserId]);
+
+  const resolveEmpSideColumnClampedWidth = useCallback((value) => {
+    const raw = Number(value);
+    if (!Number.isFinite(raw) || raw <= 0) return NaN;
+    const maxByViewport = Math.round(Math.max(EMP_SIDE_COLUMN_MIN_WIDTH_PX + 20, window.innerWidth * EMP_SIDE_COLUMN_MAX_WIDTH_RATIO));
+    return Math.round(Math.max(EMP_SIDE_COLUMN_MIN_WIDTH_PX, Math.min(maxByViewport, raw)));
+  }, []);
+
+  const restoreEmpSideColumnWidthFromStorage = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (window.innerWidth <= 1000) {
+      setEmpSideColumnWidthPx(null);
+      return;
+    }
+    const storageKey = getEmpSideColumnStorageKey();
+    const storedRaw = window.localStorage.getItem(storageKey);
+    const restoredWidth = resolveEmpSideColumnClampedWidth(storedRaw);
+    if (Number.isFinite(restoredWidth)) {
+      setEmpSideColumnWidthPx(restoredWidth);
+      return;
+    }
+    setEmpSideColumnWidthPx(null);
+  }, [getEmpSideColumnStorageKey, resolveEmpSideColumnClampedWidth]);
+
+  useEffect(() => {
+    restoreEmpSideColumnWidthFromStorage();
+  }, [restoreEmpSideColumnWidthFromStorage]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.innerWidth <= 1000) return;
+    const widthPx = Number(empSideColumnWidthPx);
+    if (!Number.isFinite(widthPx) || widthPx <= 0) return;
+    const storageKey = getEmpSideColumnStorageKey();
+    const clampedWidth = resolveEmpSideColumnClampedWidth(widthPx);
+    if (!Number.isFinite(clampedWidth)) return;
+    window.localStorage.setItem(storageKey, String(clampedWidth));
+  }, [empSideColumnWidthPx, getEmpSideColumnStorageKey, resolveEmpSideColumnClampedWidth]);
+
+  useEffect(() => {
+    empSideColumnWidthPxRef.current = empSideColumnWidthPx;
+  }, [empSideColumnWidthPx]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const clearResizeState = () => {
+      if (!empSideColumnResizeStateRef.current) return;
+      empSideColumnResizeStateRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    const handlePointerMove = (event) => {
+      const activeState = empSideColumnResizeStateRef.current;
+      if (!activeState) return;
+      const deltaX = (Number(event.clientX) || 0) - Number(activeState.startX || 0);
+      const minWidthPx = EMP_SIDE_COLUMN_MIN_WIDTH_PX;
+      const maxWidthPx = Math.max(
+        minWidthPx + 20,
+        Math.round(Number(activeState.gridWidth || 0) * EMP_SIDE_COLUMN_MAX_WIDTH_RATIO)
+      );
+      const nextWidthPx = Math.round(
+        Math.max(minWidthPx, Math.min(maxWidthPx, Number(activeState.startWidth || minWidthPx) - deltaX))
+      );
+      setEmpSideColumnWidthPx(nextWidthPx);
+      event.preventDefault();
+    };
+
+    const handleWindowResize = () => {
+      if (window.innerWidth <= 1000) {
+        setEmpSideColumnWidthPx(null);
+        clearResizeState();
+        return;
+      }
+      const currentWidthPx = Number(empSideColumnWidthPxRef.current);
+      if (!Number.isFinite(currentWidthPx) || currentWidthPx <= 0) {
+        restoreEmpSideColumnWidthFromStorage();
+      } else {
+        const clampedWidth = resolveEmpSideColumnClampedWidth(currentWidthPx);
+        if (Number.isFinite(clampedWidth) && clampedWidth !== currentWidthPx) {
+          setEmpSideColumnWidthPx(clampedWidth);
+        }
+      }
+    };
+
+    window.addEventListener("mousemove", handlePointerMove);
+    window.addEventListener("mouseup", clearResizeState);
+    window.addEventListener("mouseleave", clearResizeState);
+    window.addEventListener("resize", handleWindowResize);
+
+    return () => {
+      window.removeEventListener("mousemove", handlePointerMove);
+      window.removeEventListener("mouseup", clearResizeState);
+      window.removeEventListener("mouseleave", clearResizeState);
+      window.removeEventListener("resize", handleWindowResize);
+      clearResizeState();
+    };
+  }, [resolveEmpSideColumnClampedWidth, restoreEmpSideColumnWidthFromStorage]);
+
+  const empSideColumnInlineStyle = useMemo(() => {
+    const widthPx = Number(empSideColumnWidthPx);
+    if (!Number.isFinite(widthPx) || widthPx <= 0) return undefined;
+    const widthDelta = widthPx - 300;
+    const nextNotepadWidth = Math.round(Math.max(220, Math.min(320, 250 + widthDelta * 0.2)));
+    const nextNotepadHeight = Math.round(Math.max(164, Math.min(228, 176 + widthDelta * 0.18)));
+    return {
+      width: `${widthPx}px`,
+      flex: `0 0 ${widthPx}px`,
+      maxWidth: `${widthPx}px`,
+      "--dashboard-note-stack-width": `${nextNotepadWidth}px`,
+      "--dashboard-note-stack-min-height": `${nextNotepadHeight}px`,
+      "--dashboard-note-front-min-height": `${nextNotepadHeight}px`,
+    };
+  }, [empSideColumnWidthPx]);
 
   const renderTaskListItem = (task, index, keyPrefix = "task") => {
     const meta = getTaskStatusMeta(task);
@@ -5189,11 +6074,23 @@ export default function EmployeeDashboard({
     const isTrashing = noteId === String(notepadTrashingNoteId || "");
     const groupMembers = getNotepadGroupMembers(note);
     const isPinned = !!note?.isPinned;
+    const isAddMemberOpen = noteId === String(notepadAddMemberNoteId || "");
+    const isAddingMembers = noteId === String(notepadAddMemberSavingNoteId || "");
+    const noteMemberUserIds = getNotepadNoteMemberUserIds(note);
+    const draftMemberUserIds = isAddMemberOpen
+      ? sanitizeNotepadMemberUserIds(notepadAddMemberDraft)
+      : noteMemberUserIds;
+    const addableMembersCount = Math.max(
+      0,
+      draftMemberUserIds.filter((memberUserId) => !noteMemberUserIds.includes(memberUserId)).length
+    );
+    const ownerUserId = toText(note?.employeeUserId);
 
     return (
       <div
         key={`${keyPrefix}-${noteId || index}`}
         className={`empNotepadListItem deadline-${deadlineTone} ${isCompleted ? "completed" : ""} ${isActive ? "active" : ""}`}
+        data-note-id={noteId}
       >
         <button
           type="button"
@@ -5207,6 +6104,16 @@ export default function EmployeeDashboard({
           <div className="empNotepadListItemDate">Updated: {formatNotepadDateLabel(updatedAtValue)}</div>
         </button>
         <div className="empNotepadCardActions">
+          <button
+            type="button"
+            className="empNotepadAddMemberBtn"
+            onClick={() => openAddUsersToNotepad(note)}
+            disabled={savingNotepadNote || isTogglingComplete || isTrashing || !!notepadBinActionNoteId || isAddingMembers}
+            title="Add users to note"
+            aria-label="Add users to note"
+          >
+            {isAddingMembers ? "..." : <UserPlus size={13} aria-hidden="true" />}
+          </button>
           {groupMembers.length > 0 ? (
             <div className="empNotepadGroupMembers" aria-label="Group note members">
               {groupMembers.slice(0, 4).map((member) => (
@@ -5261,9 +6168,85 @@ export default function EmployeeDashboard({
             {isTogglingComplete ? "..." : isCompleted ? <RotateCcw size={13} aria-hidden="true" /> : <CheckSquare size={13} aria-hidden="true" />}
           </button>
         </div>
+        {isAddMemberOpen ? (
+          <div className="empNotepadMemberAddPane">
+            <div className="empNotepadGroupCreateTitle">Add Users To Note</div>
+            <div className="empNotepadGroupCreateSub">
+              Adding a user will convert this note into a group note.
+            </div>
+            <div className="empNotepadGroupCreateList">
+              {notepadGroupMemberOptions.length === 0 ? (
+                <div className="empNotepadGroupCreateEmpty">No employees available.</div>
+              ) : (
+                notepadGroupMemberOptions.map((member) => {
+                  const userId = String(member?.userId || "");
+                  const isOwner = userId === ownerUserId;
+                  const isExisting = noteMemberUserIds.includes(userId);
+                  const isChecked = draftMemberUserIds.includes(userId) || isExisting;
+                  const isDisabled = isOwner || isExisting || isAddingMembers;
+                  const suffixLabel = isOwner ? " (Owner)" : isExisting ? " (Already added)" : "";
+                  return (
+                    <label
+                      key={`${noteId}-add-member-${userId}`}
+                      className={`empNotepadGroupCreateItem ${isChecked ? "checked" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        disabled={isDisabled}
+                        onChange={() => toggleNotepadAddMemberDraftUser(note, userId)}
+                      />
+                      <span className="empNotepadGroupCreateAvatar" aria-hidden="true">
+                        {member?.profileImg ? <img src={member.profileImg} alt="" /> : initialsFromName(member?.name)}
+                      </span>
+                      <span className="empNotepadGroupCreateName">
+                        {member?.name || userId}
+                        {suffixLabel}
+                      </span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+            <div className="empNotepadGroupCreateActions">
+              <button
+                type="button"
+                className="empNotepadGroupCreateBtn cancel"
+                onClick={closeAddUsersToNotepad}
+                disabled={isAddingMembers}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="empNotepadGroupCreateBtn create"
+                onClick={() => saveNotepadAddedMembers(note)}
+                disabled={isAddingMembers || addableMembersCount < 1}
+                title={addableMembersCount < 1 ? "Select at least one new user" : "Add selected users"}
+              >
+                {isAddingMembers ? "Adding..." : "Add Selected Users"}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   };
+
+  const refreshSideNotepadDisplay = useCallback(async () => {
+    if (notepadSideRefreshLoading) return;
+    setNotepadSideRefreshLoading(true);
+    setNotepadError("");
+    try {
+      await loadNotepadNotes("", { force: true });
+      await refreshNotepadIconMeta({ force: true });
+      setNotepadStatusText("Notes refreshed.");
+    } catch (err) {
+      setNotepadError(err?.message || "Failed to refresh notes.");
+    } finally {
+      setNotepadSideRefreshLoading(false);
+    }
+  }, [notepadSideRefreshLoading, loadNotepadNotes, refreshNotepadIconMeta]);
 
   return (
     <div className="empDash">
@@ -5419,7 +6402,7 @@ export default function EmployeeDashboard({
             </div>
 
             <div className="empPanelBody">
-              <div className="empGrid2">
+              <div className="empGrid2" ref={empGridRef}>
                 <div className="scheduleCard">
                   <div className="scheduleTopRow">
                     <div className="scheduleDay">{todaySchedule?.dayLabel || "Today"}</div>
@@ -5525,11 +6508,26 @@ export default function EmployeeDashboard({
                   </div>
                 </div>
 
-                <div className="empSideColumn">
-                  <div>
-                    <h3>
-                      My Notes:
-                    </h3>
+                <div className="empSideColumn" ref={empSideColumnRef} style={empSideColumnInlineStyle}>
+                  <button
+                    type="button"
+                    className="empSideColumnResizeHandle"
+                    onMouseDown={handleEmpSideColumnResizeMouseDown}
+                    aria-label="Resize notes panel"
+                    title="Drag to resize notes panel"
+                  />
+                  <div className="empSideColumnTopRow">
+                    <h3>My Notes:</h3>
+                    <button
+                      type="button"
+                      className={`empSideColumnRefreshBtn ${notepadSideRefreshLoading ? "loading" : ""}`}
+                      onClick={refreshSideNotepadDisplay}
+                      disabled={notepadSideRefreshLoading}
+                      title="Refresh notes"
+                      aria-label="Refresh notes"
+                    >
+                      <RefreshCw size={14} aria-hidden="true" />
+                    </button>
                   </div>
                   <div className="dashboardNotepadCard">
                     <div
@@ -6185,6 +7183,8 @@ export default function EmployeeDashboard({
                         onClick={() => {
                           setNotepadViewMode(NOTEPAD_VIEW_GROUP);
                           setIsNotepadGroupCreatorOpen(false);
+                          setNotepadAddMemberNoteId("");
+                          setNotepadAddMemberDraft([]);
                           setSelectedNotepadNoteId("");
                         }}
                         title="Open group notes"
@@ -6201,6 +7201,8 @@ export default function EmployeeDashboard({
                         onClick={() => {
                           setNotepadViewMode(NOTEPAD_VIEW_MY);
                           setIsNotepadGroupCreatorOpen(false);
+                          setNotepadAddMemberNoteId("");
+                          setNotepadAddMemberDraft([]);
                           setSelectedNotepadNoteId("");
                         }}
                         title="Open my notes"
@@ -6217,6 +7219,8 @@ export default function EmployeeDashboard({
                         onClick={() => {
                           setNotepadViewMode(NOTEPAD_VIEW_BIN);
                           setIsNotepadGroupCreatorOpen(false);
+                          setNotepadAddMemberNoteId("");
+                          setNotepadAddMemberDraft([]);
                           setSelectedNotepadNoteId("");
                         }}
                         title="Open recycle bin"
@@ -6341,7 +7345,7 @@ export default function EmployeeDashboard({
 
                 {notepadError ? <div className="empNotepadError">{notepadError}</div> : null}
 
-                <div className="empNotepadList">
+                <div className="empNotepadList" ref={notepadListRef}>
                   {!notepadLoading && !isNotepadRecycleBinView ? (
                     <div className={`empNotepadCompletedDropdown ${isNotepadCompletedOpen ? "open" : ""}`}>
                       <button

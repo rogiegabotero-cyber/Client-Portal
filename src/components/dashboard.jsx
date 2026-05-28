@@ -1066,6 +1066,9 @@ export default function Dashboard({
   attendanceResetTime = "05:00",
   businessTimeZone = "America/Chicago",
 }) {
+  const [dashMainHeightPx, setDashMainHeightPx] = useState(0);
+  const [pAttPanelHeightPx, setPAttPanelHeightPx] = useState(0);
+  const [selectedSidebarAnnouncement, setSelectedSidebarAnnouncement] = useState(null);
   const [hoursWindow, setHoursWindow] = useState("today");
   const [breakLogWindow, setBreakLogWindow] = useState("today");
   const [isBreakLogsDrawerOpen, setIsBreakLogsDrawerOpen] = useState(false);
@@ -1089,6 +1092,9 @@ export default function Dashboard({
   const [showAllSummaryRows, setShowAllSummaryRows] = useState(false);
   const [showAllAgentRates, setShowAllAgentRates] = useState(false);
   const attendancePieRef = useRef(null);
+  const attendanceWrapRef = useRef(null);
+  const dashMainRef = useRef(null);
+  const pAttPanelRef = useRef(null);
   const attendanceHoleRef = useRef(null);
   const pieTooltipRef = useRef(null);
   const payableChartWrapRef = useRef(null);
@@ -2196,12 +2202,6 @@ export default function Dashboard({
     }
   }, [visibleAgentAttendanceRates]);
 
-  useEffect(() => {
-    if (!pieTooltip.visible || !pieTooltipRef.current) return;
-    pieTooltipRef.current.style.left = `${pieTooltip.left}px`;
-    pieTooltipRef.current.style.top = `${pieTooltip.top}px`;
-  }, [pieTooltip.visible, pieTooltip.left, pieTooltip.top]);
-
   const registerAgentDonutRef = (userId) => (node) => {
     if (!node) {
       agentDonutRefs.current.delete(userId);
@@ -2215,7 +2215,7 @@ export default function Dashboard({
   };
 
   const handleAttendancePieMouseMove = (event) => {
-    if (attendanceBreakdown.total <= 0 || !attendancePieRef.current) {
+    if (attendanceBreakdown.total <= 0 || !attendancePieRef.current || !attendanceWrapRef.current) {
       hidePieTooltip();
       return;
     }
@@ -2265,17 +2265,17 @@ export default function Dashboard({
       return;
     }
 
-    const tooltipWidth = 300;
-    const tooltipHeight = 160;
-    let left = event.clientX + 14;
-    let top = event.clientY + 14;
-
-    if (left + tooltipWidth > window.innerWidth) {
-      left = Math.max(12, event.clientX - tooltipWidth - 14);
-    }
-    if (top + tooltipHeight > window.innerHeight) {
-      top = Math.max(12, event.clientY - tooltipHeight - 14);
-    }
+    const wrapRect = attendanceWrapRef.current.getBoundingClientRect();
+    const tooltipWidth = Math.max(200, Math.round(pieTooltipRef.current?.offsetWidth || 300));
+    const tooltipHeight = Math.max(80, Math.round(pieTooltipRef.current?.offsetHeight || 160));
+    const cursorOffset = 12;
+    const edgePadding = 8;
+    const rawLeft = event.clientX - wrapRect.left + cursorOffset;
+    const rawTop = event.clientY - wrapRect.top + cursorOffset;
+    const maxLeft = Math.max(edgePadding, wrapRect.width - tooltipWidth - edgePadding);
+    const maxTop = Math.max(edgePadding, wrapRect.height - tooltipHeight - edgePadding);
+    const left = Math.min(Math.max(edgePadding, rawLeft), maxLeft);
+    const top = Math.min(Math.max(edgePadding, rawTop), maxTop);
 
     setPieTooltip({
       visible: true,
@@ -2784,6 +2784,73 @@ export default function Dashboard({
     };
   }, [isBreakLogsDrawerOpen]);
 
+  useEffect(() => {
+    if (!selectedSidebarAnnouncement) return;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setSelectedSidebarAnnouncement(null);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedSidebarAnnouncement]);
+
+  useEffect(() => {
+    const mainEl = dashMainRef.current;
+    if (!mainEl) return;
+
+    const applyHeight = () => {
+      const next = Math.max(0, Math.round(mainEl.getBoundingClientRect()?.height || 0));
+      setDashMainHeightPx((prev) => (prev === next ? prev : next));
+    };
+
+    applyHeight();
+
+    let observer = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => {
+        applyHeight();
+      });
+      observer.observe(mainEl);
+    } else {
+      window.addEventListener("resize", applyHeight);
+    }
+
+    return () => {
+      if (observer) observer.disconnect();
+      else window.removeEventListener("resize", applyHeight);
+    };
+  }, []);
+
+  useEffect(() => {
+    const panelEl = pAttPanelRef.current;
+    if (!panelEl) return;
+
+    const applyHeight = () => {
+      const next = Math.max(0, Math.round(panelEl.getBoundingClientRect()?.height || 0));
+      setPAttPanelHeightPx((prev) => (prev === next ? prev : next));
+    };
+
+    applyHeight();
+
+    let observer = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => {
+        applyHeight();
+      });
+      observer.observe(panelEl);
+    } else {
+      window.addEventListener("resize", applyHeight);
+    }
+
+    return () => {
+      if (observer) observer.disconnect();
+      else window.removeEventListener("resize", applyHeight);
+    };
+  }, []);
+
   const sidebarAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcements) ? announcements : [];
     const nowForWindowMs = Number.isFinite(nowMs) ? nowMs : 0;
@@ -2815,6 +2882,7 @@ export default function Dashboard({
             String(item?.id || "").trim() ||
             `${headline}-${String(item?.createdByUserId || "").trim()}-${Number.isFinite(postedAtMs) ? postedAtMs : "now"}`,
           headline,
+          text,
           preview,
           postedAtMs,
         };
@@ -3204,9 +3272,17 @@ export default function Dashboard({
   );
 
   return (
-    <div className="dashX">
+    <div
+      className="dashX"
+      style={{
+        "--dash-main-height":
+          Number(dashMainHeightPx) > 0 ? `${Math.max(0, Number(dashMainHeightPx) || 0)}px` : "auto",
+        "--dash-p-att-panel-height":
+          Number(pAttPanelHeightPx) > 0 ? `${Math.max(0, Number(pAttPanelHeightPx) || 0)}px` : "auto",
+      }}
+    >
       <div className="dashLayout">
-        <div className="dashMain">
+        <div className="dashMain" ref={dashMainRef}>
           <div className="topBar">
             <div className="kpi">
               <div className="kpiLabel">EARLY</div>
@@ -3249,7 +3325,7 @@ export default function Dashboard({
           </div>
 
           <div className="grid">
-            <div className="panel p-att">
+            <div className="panel p-att" ref={pAttPanelRef}>
               <div className="panelHead">
                 <span>Attendance Breakdown</span>
                 <div className="panelHeadActions">
@@ -3296,7 +3372,7 @@ export default function Dashboard({
               </div>
 
               <div className="panelBody">
-                <div className="attWrap">
+                <div className="attWrap" ref={attendanceWrapRef}>
                   <div
                     className="attPie"
                     ref={attendancePieRef}
@@ -3375,6 +3451,7 @@ export default function Dashboard({
                     <div
                       className="pieSliceTooltip"
                       ref={pieTooltipRef}
+                      style={{ left: `${pieTooltip.left}px`, top: `${pieTooltip.top}px` }}
                     >
                       <div className="pieSliceTooltipHead">
                         <span className={`dot dash-tone-${pieTooltip.key}`} />
@@ -3451,48 +3528,38 @@ export default function Dashboard({
 
           <div className="panelHead center">Announcements</div>
 
-          <div className="panelBody">
+          <div className="panelBody updateSidebarAnnouncementsBody">
             <div className="updateBody">
               <div className="updateBox">
-                <div className="payTableWrap">
-                  <table className="payTable">
-                    <thead>
-                      <tr>
-                        <th className="payThLeft">Announcement</th>
-                        <th className="payThRight">Posted</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {announcementsError ? (
-                        <tr>
-                          <td className="payEmpty" colSpan={2}>
-                            {announcementsError}
-                          </td>
-                        </tr>
-                      ) : sidebarAnnouncements.length === 0 ? (
-                        <tr>
-                          <td className="payEmpty" colSpan={2}>
-                            No active announcements.
-                          </td>
-                        </tr>
-                      ) : (
-                        sidebarAnnouncements.map((item) => (
-                          <tr key={`dash-announcement-${item.id}`}>
-                            <td className="payTdName">
-                              <div className="dashAnnouncementHeadline">{item.headline}</div>
-                              <div className="dashAnnouncementPreview">{item.preview}</div>
-                            </td>
-                            <td
-                              className="payTdHours"
-                              title={formatSidebarAnnouncementDate(item.postedAtMs)}
-                            >
-                              {formatSidebarAnnouncementDate(item.postedAtMs)}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                <div className="dashAnnouncementListWrap">
+                  {announcementsError ? (
+                    <div className="payEmpty">{announcementsError}</div>
+                  ) : sidebarAnnouncements.length === 0 ? (
+                    <div className="payEmpty">No active announcements.</div>
+                  ) : (
+                    <div className="dashAnnouncementList">
+                      {sidebarAnnouncements.map((item) => (
+                        <button
+                          key={`dash-announcement-${item.id}`}
+                          type="button"
+                          className="dashAnnouncementCard"
+                          onClick={() => setSelectedSidebarAnnouncement(item)}
+                          aria-label={`Open announcement: ${item.headline}`}
+                        >
+                          <div className="dashAnnouncementCardMain">
+                            <div className="dashAnnouncementHeadline">{item.headline}</div>
+                            <div className="dashAnnouncementPreview">{item.preview}</div>
+                          </div>
+                          <div
+                            className="dashAnnouncementCardDate"
+                            title={formatSidebarAnnouncementDate(item.postedAtMs)}
+                          >
+                            {formatSidebarAnnouncementDate(item.postedAtMs)}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -3602,7 +3669,45 @@ export default function Dashboard({
           </div>
         ) : null}
 
-        
+        {selectedSidebarAnnouncement ? (
+          <>
+            <div
+              className="portal-modal-backdrop"
+              onClick={() => setSelectedSidebarAnnouncement(null)}
+              aria-hidden="true"
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Announcement details"
+              className="portal-dialog portal-dialog-notification"
+            >
+              <div className="portal-notification-head">
+                <div>
+                  <h2 className="portal-notification-title">
+                    {selectedSidebarAnnouncement.headline || "Announcement"}
+                  </h2>
+                  <div className="portal-notification-meta">
+                    <span>Announcement</span>
+                    <span>{formatSidebarAnnouncementDate(selectedSidebarAnnouncement.postedAtMs)}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSidebarAnnouncement(null)}
+                  className="portal-notification-close"
+                  aria-label="Close announcement"
+                >
+                  x
+                </button>
+              </div>
+              <div className="portal-notification-body">
+                {selectedSidebarAnnouncement.text || "No announcement content available."}
+              </div>
+            </div>
+          </>
+        ) : null}
+
       </div>
 
       <div className="agentAttendancePanel">

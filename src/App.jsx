@@ -1692,17 +1692,36 @@ export default function App() {
   );
 
   const currentViewerIdentity = useMemo(() => {
-    return {
-      userId:
-        user?.userId ??
+    const role = user?.role || "";
+    const normalizedRole = normalizeRole(role);
+    const directUserId = String(
+      user?.userId ??
         user?.id ??
         user?.uid ??
         user?.firebaseUid ??
         user?.employeeId ??
-        "",
-      role: user?.role || "",
+        ""
+    ).trim();
+    const viewerEmail = String(user?.email || "").trim().toLowerCase();
+
+    let linkedEmployeeUserId = "";
+    if (viewerEmail) {
+      const linkedRow = validEmployees.find(
+        (row) => String(row?.email || "").trim().toLowerCase() === viewerEmail
+      );
+      linkedEmployeeUserId = String(getUserId(linkedRow) || "").trim();
+    }
+
+    const userId =
+      normalizedRole === ROLES.EMPLOYEE
+        ? linkedEmployeeUserId || directUserId
+        : directUserId || linkedEmployeeUserId;
+
+    return {
+      userId,
+      role,
     };
-  }, [user]);
+  }, [user, validEmployees]);
 
   useEffect(() => {
     announcementsRef.current = Array.isArray(announcements) ? announcements : [];
@@ -1974,6 +1993,7 @@ export default function App() {
         ? [...archivedNotificationsRef.current]
         : [];
       let touched = false;
+      const notepadRefreshEvents = [];
 
       for (const item of docs) {
         const changeType = String(item?.changeType || "").trim().toLowerCase();
@@ -2002,6 +2022,22 @@ export default function App() {
         } else {
           activeRows.unshift(enrichedRow);
         }
+        const notifType = String(enrichedRow?.type || "").trim().toLowerCase();
+        const shouldTriggerNotepadRefresh =
+          !enrichedRow?.archived &&
+          (notifType === "notepad_group_checklist_updated" ||
+            notifType === "notepad_group_added" ||
+            notifType === "notepad_group_moved_to_bin" ||
+            notifType === "notepad_group_restored" ||
+            notifType === "notepad_group_deleted" ||
+            notifType === "notepad_group_permanently_deleted");
+        if (shouldTriggerNotepadRefresh) {
+          notepadRefreshEvents.push({
+            id,
+            noteId: String(enrichedRow?.noteId || "").trim(),
+            type: notifType,
+          });
+        }
         touched = true;
       }
 
@@ -2015,6 +2051,15 @@ export default function App() {
       setNotifications(nextActive);
       setArchivedNotifications(nextArchived);
       queueFreshUnreadNotificationToasts(nextActive);
+      if (typeof window !== "undefined" && notepadRefreshEvents.length > 0) {
+        notepadRefreshEvents.forEach((eventPayload) => {
+          window.dispatchEvent(
+            new CustomEvent("notepadChecklistNotificationReceived", {
+              detail: eventPayload,
+            })
+          );
+        });
+      }
       return true;
     },
     [

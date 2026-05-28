@@ -504,6 +504,82 @@
   padding: 20px;
 }
 
+.empSideColumnTopRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  margin-bottom:6px;
+}
+
+.empSideColumnTopRow h3{
+  margin:0;
+}
+
+.empSideColumnRefreshBtn{
+  border:1px solid rgba(15,23,42,.16);
+  background:#ffffff;
+  color:#334155;
+  border-radius:999px;
+  width:28px;
+  height:28px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  box-shadow:0 2px 8px rgba(15,23,42,.12);
+}
+
+.empSideColumnRefreshBtn:hover{
+  border-color:rgba(37,99,235,.42);
+  color:#1d4ed8;
+}
+
+.empSideColumnRefreshBtn:disabled{
+  opacity:.72;
+  cursor:not-allowed;
+}
+
+.empSideColumnRefreshBtn.loading svg{
+  animation:empSideRefreshSpin .85s linear infinite;
+}
+
+@keyframes empSideRefreshSpin{
+  from { transform:rotate(0deg); }
+  to { transform:rotate(360deg); }
+}
+
+.empSideColumnResizeHandle{
+  position:absolute;
+  left:-8px;
+  top:12px;
+  bottom:12px;
+  width:12px;
+  border:none;
+  background:transparent;
+  padding:0;
+  margin:0;
+  cursor:col-resize;
+  z-index:12;
+}
+
+.empSideColumnResizeHandle::before{
+  content:"";
+  position:absolute;
+  left:5px;
+  top:0;
+  bottom:0;
+  width:2px;
+  border-radius:999px;
+  background:rgba(15,23,42,.16);
+  transition:background-color .16s ease, box-shadow .16s ease;
+}
+
+.empSideColumnResizeHandle:hover::before{
+  background:rgba(59,130,246,.56);
+  box-shadow:0 0 0 2px rgba(59,130,246,.16);
+}
+
 
 /* ---------- Schedule Card ---------- */
 
@@ -2577,13 +2653,17 @@
   border:1px solid var(--border);
   border-left:4px solid #3b82f6;
   border-radius:10px;
-  background:#ffffff;
+  background:#00000025;
   padding:8px 8px 8px 10px;
   text-align:left;
   display:grid;
   grid-template-rows:auto auto;
   gap:6px;
   position:relative;
+}
+
+.empNotepadListItem:hover{
+  background-color: #ffffff;
 }
 
 .empNotepadListItem.trashed{
@@ -2612,7 +2692,34 @@
 }
 
 .empNotepadListItem.active{
-  box-shadow:0 0 0 2px rgba(15,23,42,.08);
+  border-color:rgba(65, 0, 185, 0.801) !important;
+  border-left-color:#1d4ed8 !important;
+  background:#00000000;
+  box-shadow:
+    0 0 0 2px rgba(37,99,235,.22),
+    0 8px 18px rgba(30,64,175,.16);
+}
+
+.empNotepadListItem.active::before{
+  content:"";
+  position:absolute;
+  left:-4px;
+  top:10px;
+  bottom:10px;
+  width:4px;
+  border-radius:999px;
+  background:#1d4ed8;
+  box-shadow:0 0 0 1px rgba(255,255,255,.7);
+}
+
+.empNotepadListItem.active .empNotepadListItemTitle{
+  color:#0f172a;
+  font-weight:800;
+}
+
+.empNotepadListItem.active .empNotepadListItemPreview,
+.empNotepadListItem.active .empNotepadListItemDate{
+  color:#1e3a8a;
 }
 
 .empNotepadListItemMain{
@@ -2697,9 +2804,45 @@
 }
 
 .empNotepadGroupMembers{
-  margin-right:auto;
+  margin-right:6px;
   display:flex;
   align-items:center;
+}
+
+.empNotepadAddMemberBtn{
+  border:1px solid rgba(15,23,42,.14);
+  background:#ffffff;
+  color:#334155;
+  border-radius:8px;
+  height:24px;
+  min-width:28px;
+  padding:0 7px;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  margin-right:auto;
+  box-shadow:0 2px 6px rgba(15,23,42,.12);
+}
+
+.empNotepadAddMemberBtn:hover{
+  border-color:rgba(37,99,235,.4);
+  color:#1d4ed8;
+}
+
+.empNotepadAddMemberBtn:disabled{
+  opacity:.7;
+  cursor:not-allowed;
+}
+
+.empNotepadMemberAddPane{
+  margin-top:6px;
+  border:1px solid rgba(15,23,42,.14);
+  border-radius:10px;
+  background:#ffffff;
+  padding:8px;
+  display:grid;
+  gap:6px;
 }
 
 .empNotepadGroupMemberAvatar{
@@ -3728,6 +3871,10 @@
     justify-content:flex-start;
   }
 
+  .empSideColumnResizeHandle{
+    display:none;
+  }
+
   .taskListCard,
   .announcementCard,
   .importantNotesCard{
@@ -4152,8 +4299,8 @@
 
 .dashboardNotepadStack{
   position:relative;
-  width:min(250px, 100%);
-  min-height:176px;
+  width:min(var(--dashboard-note-stack-width, 250px), 100%);
+  min-height:var(--dashboard-note-stack-min-height, 176px);
   transform:rotate(-1.5deg);
   filter:drop-shadow(0 10px 10px rgba(120, 96, 32, .22));
 }
@@ -4183,7 +4330,7 @@
 
 .dashboardNotepadPageFront{
   inset:0;
-  min-height:176px;
+  min-height:var(--dashboard-note-front-min-height, 176px);
   padding:10px 14px 8px;
   display:flex;
   flex-direction:column;
