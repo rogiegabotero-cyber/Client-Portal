@@ -500,6 +500,7 @@
   width: 4px;
   border-radius: 999px;
   background: #22c55e;
+  display: none;
 }
 
 /* Icon + text */

@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./dashboard.css";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { getBusinessDayKey } from "../utils/attendanceDate";
 import { getBreakLogsByUserIdsInRange } from "../services/breakService";
 import { getDisplayName, getUserId, pick, safeLower } from "../utils/common";
@@ -28,6 +28,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
+import { Megaphone } from "lucide-react";
 
 /* ------------------------- helpers ------------------------- */
 
@@ -36,6 +37,17 @@ const shortAgentLabel = (name) => {
   if (!raw) return "-";
   const first = raw.split(/\s+/)[0] || raw;
   return first.length > 12 ? `${first.slice(0, 11)}.` : first;
+};
+
+const nameInitials = (name = "") => {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!parts.length) return "NA";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
 };
 
 const formatHoursValue = (value) => {
@@ -861,6 +873,7 @@ const ATTENDANCE_SCORE_WEIGHTS = {
 };
 const ATTENDANCE_SCORE_BEST_DAY_POINTS = 1.0;
 const AGENT_ATTENDANCE_MONTH_ALL = "ALL";
+const ATTENDANCE_MONTH_THIS = "THIS_MONTH";
 const PAYABLE_MONTH_SELECT_NONE = "";
 
 const SUMMARY_ROWS_PREVIEW = 20;
@@ -1065,11 +1078,13 @@ export default function Dashboard({
   employeeProfilesByUserId = {},
   attendanceResetTime = "05:00",
   businessTimeZone = "America/Chicago",
+  onNavigatePage = null,
 }) {
   const [dashMainHeightPx, setDashMainHeightPx] = useState(0);
   const [pAttPanelHeightPx, setPAttPanelHeightPx] = useState(0);
+  const [agentAttendancePanelHeightPx, setAgentAttendancePanelHeightPx] = useState(0);
   const [selectedSidebarAnnouncement, setSelectedSidebarAnnouncement] = useState(null);
-  const [hoursWindow, setHoursWindow] = useState("today");
+  const [selectedDayOffset, setSelectedDayOffset] = useState(0);
   const [breakLogWindow, setBreakLogWindow] = useState("today");
   const [isBreakLogsDrawerOpen, setIsBreakLogsDrawerOpen] = useState(false);
   const [chartReady, setChartReady] = useState(false);
@@ -1087,19 +1102,24 @@ export default function Dashboard({
   const [selectedAgentAttendanceMonth, setSelectedAgentAttendanceMonth] = useState(() =>
     monthKeyFromYmd(endDate || "")
   );
+  const [selectedEmployeeDotMonth, setSelectedEmployeeDotMonth] = useState(
+    ATTENDANCE_MONTH_THIS
+  );
+  const [dayNavDirection, setDayNavDirection] = useState("older");
   const [isPrinting, setIsPrinting] = useState(false);
   const [printChartSize, setPrintChartSize] = useState({ width: 900, height: 330 });
   const [showAllSummaryRows, setShowAllSummaryRows] = useState(false);
   const [showAllAgentRates, setShowAllAgentRates] = useState(false);
   const attendancePieRef = useRef(null);
   const attendanceWrapRef = useRef(null);
+  const dashRootRef = useRef(null);
   const dashMainRef = useRef(null);
   const pAttPanelRef = useRef(null);
+  const agentAttendancePanelRef = useRef(null);
   const attendanceHoleRef = useRef(null);
   const pieTooltipRef = useRef(null);
   const payableChartWrapRef = useRef(null);
   const agentDonutRefs = useRef(new Map());
-  const requestedAllHistoryRef = useRef(new Set());
   const originalDocumentTitleRef = useRef("");
   const breakRangeRequestRef = useRef(0);
   const breakRangeCacheRef = useRef(new Map());
@@ -1115,12 +1135,52 @@ export default function Dashboard({
     count: 0,
     names: [],
   });
+  const [hoverTooltip, setHoverTooltip] = useState({
+    visible: false,
+    left: 0,
+    top: 0,
+    title: "",
+    lines: [],
+    tone: "",
+  });
+  const hoverTooltipRef = useRef(null);
 
   const normalizedViewerRole = safeLower(viewerRole);
   const hasViewerPermissions = !!normalizedViewerRole;
   const isVisitorViewer = normalizedViewerRole === "visitor";
   const canViewBreakLog = hasViewerPermissions && !isVisitorViewer;
   const canViewPayablePanel = hasViewerPermissions && !isVisitorViewer;
+  const reportRouteCards = [
+    {
+      key: "daily",
+      page: "perf_daily",
+      title: "Daily Report",
+      subtitle: "Single day attendance status and pacing",
+      cta: "Open Daily",
+      miniClassName: "isDaily",
+    },
+    {
+      key: "weekly",
+      page: "perf_weekly",
+      title: "Weekly Report",
+      subtitle: "Week over week attendance behavior",
+      cta: "Open Weekly",
+      miniClassName: "isWeekly",
+    },
+    {
+      key: "monthly",
+      page: "perf_monthly",
+      title: "Monthly Report",
+      subtitle: "Month level trends and performance totals",
+      cta: "Open Monthly",
+      miniClassName: "isMonthly",
+    },
+  ];
+
+  const handleOpenReportRoute = (pageKey) => {
+    if (typeof onNavigatePage !== "function") return;
+    onNavigatePage(String(pageKey || ""));
+  };
 
   useEffect(() => {
     const id = requestAnimationFrame(() => {
@@ -1207,18 +1267,6 @@ export default function Dashboard({
       restoreDocumentTitle();
     };
   }, []);
-
-  const setHoursWindowAndCollapseLists = (nextWindow) => {
-    setHoursWindow(nextWindow);
-    setShowAllSummaryRows(false);
-    setShowAllAgentRates(false);
-  };
-
-  useEffect(() => {
-    if (hoursWindow !== "all") {
-      requestedAllHistoryRef.current.clear();
-    }
-  }, [hoursWindow]);
 
   const allValidEmployees = useMemo(
     () => (Array.isArray(employees) ? employees : []).filter((e) => !!getUserId(e)),
@@ -1385,6 +1433,50 @@ export default function Dashboard({
     }
   }, [effectiveSelectedPerfUserId, onFetchFullHistory, historyByUserId, loadingHistoryByUserId]);
 
+  const selectedDashDayKey = useMemo(() => {
+    const periodEnd = String(endDate || "");
+    if (!periodEnd) return "";
+    return addDaysYmd(periodEnd, -Math.max(0, Number(selectedDayOffset) || 0));
+  }, [endDate, selectedDayOffset]);
+
+  const selectedDashDayLabel = useMemo(() => {
+    if (!selectedDashDayKey) return "-";
+    if (Number(selectedDayOffset) === 0) return "Today";
+    if (Number(selectedDayOffset) === 1) return "Yesterday";
+    return prettyDayLabel(selectedDashDayKey);
+  }, [selectedDashDayKey, selectedDayOffset]);
+
+  const nextDashDayLabel = useMemo(() => {
+    const periodEnd = String(endDate || "");
+    if (!periodEnd) return "";
+    const targetOffset = Math.max(0, Number(selectedDayOffset || 0) + 1);
+    if (targetOffset === 1) return "Yesterday";
+    return prettyDayLabel(addDaysYmd(periodEnd, -targetOffset));
+  }, [endDate, selectedDayOffset]);
+
+  const backDashDayLabel = useMemo(() => {
+    const periodEnd = String(endDate || "");
+    if (!periodEnd) return "";
+    const targetOffset = Math.max(0, Number(selectedDayOffset || 0) - 1);
+    if (targetOffset === 0) return "Today";
+    if (targetOffset === 1) return "Yesterday";
+    return prettyDayLabel(addDaysYmd(periodEnd, -targetOffset));
+  }, [endDate, selectedDayOffset]);
+
+  const goToPreviousDashDay = () => {
+    setDayNavDirection("older");
+    setSelectedDayOffset((prev) => Math.max(0, Number(prev || 0) + 1));
+    setShowAllSummaryRows(false);
+    setShowAllAgentRates(false);
+  };
+
+  const goToNextDashDay = () => {
+    setDayNavDirection("newer");
+    setSelectedDayOffset((prev) => Math.max(0, Number(prev || 0) - 1));
+    setShowAllSummaryRows(false);
+    setShowAllAgentRates(false);
+  };
+
   const dashPeriod = useMemo(() => {
     const periodEnd = String(endDate || "");
     if (!periodEnd) {
@@ -1399,109 +1491,23 @@ export default function Dashboard({
         note: "",
       };
     }
-
-    if (hoursWindow === "today") {
-      const keys = enumerateYmdRange(periodEnd, periodEnd);
-      return {
-        label: "Today",
-        start: periodEnd,
-        end: periodEnd,
-        dayKeys: keys,
-        isAll: false,
-        isMonthly: false,
-        monthKeys: [],
-        note: "",
-      };
-    }
-
-    if (hoursWindow === "yesterday") {
-      const yesterday = addDaysYmd(periodEnd, -1);
-      const keys = enumerateYmdRange(yesterday, yesterday);
-      return {
-        label: "Yesterday",
-        start: yesterday,
-        end: yesterday,
-        dayKeys: keys,
-        isAll: false,
-        isMonthly: false,
-        monthKeys: [],
-        note: "",
-      };
-    }
-
-    if (hoursWindow === "15") {
-      const w = cutoffWindowFor15D(periodEnd);
-      const keys = w.start && w.end ? enumerateYmdRange(w.start, w.end) : [];
-      return {
-        label: "Cutoff (15D)",
-        start: w.start,
-        end: w.end,
-        dayKeys: keys,
-        isAll: false,
-        isMonthly: false,
-        monthKeys: [],
-        note: "",
-      };
-    }
-
-    if (hoursWindow === "30") {
-      const start = addDaysYmd(periodEnd, -29);
-      const keys = enumerateYmdRange(start, periodEnd);
-      return {
-        label: "Last 30 days",
-        start,
-        end: periodEnd,
-        dayKeys: keys,
-        isAll: false,
-        isMonthly: false,
-        monthKeys: [],
-        note: "",
-      };
-    }
-
-    let minDay = null;
-    let minProfileStart = null;
-    const list = Array.isArray(employees) ? employees : [];
-    for (const emp of list) {
-      const uid = getUserId(emp);
-      if (!uid) continue;
-      const key = String(uid);
-
-      const profileStart = getEmployeeStartDateYmd(employeeProfilesByUserId, key);
-      if (profileStart && (minProfileStart == null || profileStart < minProfileStart)) {
-        minProfileStart = profileStart;
-      }
-
-      const hist = Array.isArray(historyByUserId?.[key]) ? historyByUserId[key] : [];
-      const rangeLogs = Array.isArray(logsByUserId?.[key]) ? logsByUserId[key] : [];
-      const logsForStart = hist.length ? hist : rangeLogs;
-      const m = minDayKeyFromLogs(logsForStart, attendanceResetTime, businessTimeZone);
-      if (m && (minDay == null || m < minDay)) minDay = m;
-    }
-
-    const start = minDay || minProfileStart || String(startDate || periodEnd);
-    const allKeys = enumerateYmdRange(start, periodEnd);
+    const targetDay = selectedDashDayKey || periodEnd;
+    const allKeys = enumerateYmdRange(targetDay, targetDay);
 
     return {
-      label: "All time",
-      start,
-      end: periodEnd,
+      label: selectedDashDayLabel,
+      start: targetDay,
+      end: targetDay,
       dayKeys: allKeys,
-      isAll: true,
+      isAll: false,
       isMonthly: false,
       monthKeys: [],
       note: "",
     };
   }, [
-    hoursWindow,
     endDate,
-    employees,
-    historyByUserId,
-    logsByUserId,
-    employeeProfilesByUserId,
-    startDate,
-    attendanceResetTime,
-    businessTimeZone,
+    selectedDashDayKey,
+    selectedDashDayLabel,
   ]);
 
   const breakLogPeriod = useMemo(() => {
@@ -1694,18 +1700,8 @@ export default function Dashboard({
   useEffect(() => {
     if (!onFetchFullHistory) return;
 
-    const needDays =
-      hoursWindow === "today"
-        ? 1
-        : hoursWindow === "yesterday"
-          ? 2
-        : hoursWindow === "15"
-          ? 16
-          : hoursWindow === "30"
-            ? 30
-            : Infinity;
-
-    const needHistory = hoursWindow === "all" || Number(rangeDays) < needDays;
+    const needDays = Math.max(1, Number(selectedDayOffset) + 1);
+    const needHistory = Number(rangeDays) < needDays;
     if (!needHistory) return;
 
     const list = Array.isArray(employees) ? employees : [];
@@ -1715,18 +1711,17 @@ export default function Dashboard({
 
       const key = String(uid);
       const isLoading = !!loadingHistoryByUserId?.[key];
-      if (hoursWindow === "all") {
-        if (!requestedAllHistoryRef.current.has(key) && !isLoading) {
-          requestedAllHistoryRef.current.add(key);
-          onFetchFullHistory(key);
-        }
-        continue;
-      }
-
       const alreadyHave = Array.isArray(historyByUserId?.[key]) && historyByUserId[key].length > 0;
       if (!alreadyHave && !isLoading) onFetchFullHistory(key);
     }
-  }, [hoursWindow, rangeDays, onFetchFullHistory, employees, historyByUserId, loadingHistoryByUserId]);
+  }, [
+    selectedDayOffset,
+    rangeDays,
+    onFetchFullHistory,
+    employees,
+    historyByUserId,
+    loadingHistoryByUserId,
+  ]);
 
   useEffect(() => {
     if (!onFetchFullHistory || !validEmployees.length) return;
@@ -1933,6 +1928,183 @@ export default function Dashboard({
 
     return enumerateYmdRange(start, end);
   }, [effectiveSelectedAgentAttendanceMonth, endDate, availableAgentAttendanceMonths]);
+
+  const currentAttendanceMonthKey = useMemo(() => monthKeyFromYmd(endDate || ""), [endDate]);
+
+  const employeeDotMonthOptions = useMemo(() => {
+    const options = [{ key: ATTENDANCE_MONTH_THIS, label: "This Month" }];
+    for (const monthKey of availableAgentAttendanceMonths) {
+      if (monthKey === currentAttendanceMonthKey) continue;
+      options.push({
+        key: monthKey,
+        label: prettyMonthLabel(monthKey),
+      });
+    }
+    return options;
+  }, [availableAgentAttendanceMonths, currentAttendanceMonthKey]);
+
+  const effectiveEmployeeDotMonth = useMemo(() => {
+    if (selectedEmployeeDotMonth === ATTENDANCE_MONTH_THIS) {
+      if (/^\d{4}-\d{2}$/.test(currentAttendanceMonthKey)) return currentAttendanceMonthKey;
+      return availableAgentAttendanceMonths[0] || "";
+    }
+
+    if (availableAgentAttendanceMonths.includes(selectedEmployeeDotMonth)) {
+      return selectedEmployeeDotMonth;
+    }
+
+    if (/^\d{4}-\d{2}$/.test(currentAttendanceMonthKey)) return currentAttendanceMonthKey;
+    return availableAgentAttendanceMonths[0] || "";
+  }, [
+    selectedEmployeeDotMonth,
+    currentAttendanceMonthKey,
+    availableAgentAttendanceMonths,
+  ]);
+
+  const employeeDotDayKeys = useMemo(() => {
+    if (!/^\d{4}-\d{2}$/.test(effectiveEmployeeDotMonth)) return [];
+    const start = `${effectiveEmployeeDotMonth}-01`;
+    const end = lastDayOfMonthYmd(start);
+    return enumerateYmdRange(start, end);
+  }, [effectiveEmployeeDotMonth]);
+
+  const employeeDotWeekGroups = useMemo(() => {
+    if (!employeeDotDayKeys.length) return [];
+    const groups = [];
+    let activeWeekKey = "";
+    let activeGroup = [];
+
+    for (const dayKey of employeeDotDayKeys) {
+      const weekKey = startOfWeekYmd(dayKey);
+      if (weekKey !== activeWeekKey) {
+        if (activeGroup.length) groups.push(activeGroup);
+        activeWeekKey = weekKey;
+        activeGroup = [];
+      }
+      activeGroup.push(dayKey);
+    }
+
+    if (activeGroup.length) groups.push(activeGroup);
+    return groups;
+  }, [employeeDotDayKeys]);
+
+  const employeeDotWeekLabels = useMemo(
+    () =>
+      employeeDotWeekGroups.map((weekDays) => {
+        const firstDay = weekDays[0] || "";
+        const lastDay = weekDays[weekDays.length - 1] || firstDay;
+        return `${prettyDayLabel(firstDay)} -> ${prettyDayLabel(lastDay)}`;
+      }),
+    [employeeDotWeekGroups]
+  );
+
+  const employeeDotWeekTrackStyle = useMemo(
+    () => ({
+      "--employee-dot-week-count": Math.max(1, employeeDotWeekLabels.length),
+    }),
+    [employeeDotWeekLabels.length]
+  );
+
+  const employeeDotRangeLabel = useMemo(() => {
+    if (!employeeDotDayKeys.length || !effectiveEmployeeDotMonth) return "No month selected";
+    const lastDay = dayOfMonthFromYmd(employeeDotDayKeys[employeeDotDayKeys.length - 1]);
+    return `From 1 - ${lastDay} ${prettyMonthLabel(effectiveEmployeeDotMonth)}`;
+  }, [employeeDotDayKeys, effectiveEmployeeDotMonth]);
+
+  const employeeDotRows = useMemo(() => {
+    const monthIsCurrent =
+      !!currentAttendanceMonthKey &&
+      !!effectiveEmployeeDotMonth &&
+      currentAttendanceMonthKey === effectiveEmployeeDotMonth;
+    const effectiveEndDate =
+      /^\d{4}-\d{2}-\d{2}$/.test(String(endDate || "")) ? String(endDate) : "";
+    const bucketLabelByKey = ATTENDANCE_BUCKETS.reduce((acc, item) => {
+      acc[item.key] = item.label;
+      return acc;
+    }, {});
+
+    return validEmployees
+      .map((emp) => {
+        const userId = String(getUserId(emp));
+        const context = attendanceContextByUserId[userId] || null;
+        const name = context?.name || getDisplayName(emp);
+        const byDay = context?.byDay || new Map();
+        const firstDayKey = context?.firstDayKey || "";
+
+        let loggedDays = 0;
+        let eligibleDays = 0;
+        const weeks = employeeDotWeekGroups.map((weekDays) =>
+          weekDays.map((dayKey) => {
+            if (!firstDayKey || dayKey >= firstDayKey) {
+              eligibleDays += 1;
+            }
+
+            const dayLogs = byDay.get(dayKey) || [];
+            if (dayLogs.length) {
+              const primaryLog = pickPrimaryAttendanceLog(dayLogs);
+              const bucket = normalizeAttendanceStatus(getRawAttendanceStatus(primaryLog || {}));
+              if (bucket) {
+                loggedDays += 1;
+                return {
+                  key: `${userId}-${dayKey}`,
+                  className: `dash-tone-${bucket}`,
+                  label: bucketLabelByKey[bucket] || "Logged",
+                  dayKey,
+                };
+              }
+              loggedDays += 1;
+              return {
+                key: `${userId}-${dayKey}`,
+                className: "isUnknown",
+                label: "Logged",
+                dayKey,
+              };
+            }
+
+            if (firstDayKey && dayKey < firstDayKey) {
+              return {
+                key: `${userId}-${dayKey}`,
+                className: "isInactive",
+                label: "Not started yet",
+                dayKey,
+              };
+            }
+
+            if (monthIsCurrent && effectiveEndDate && dayKey > effectiveEndDate) {
+              return {
+                key: `${userId}-${dayKey}`,
+                className: "isFuture",
+                label: "Upcoming day",
+                dayKey,
+              };
+            }
+
+            return {
+              key: `${userId}-${dayKey}`,
+              className: "isMissing",
+              label: "No log",
+              dayKey,
+            };
+          })
+        );
+
+        return {
+          userId,
+          name,
+          initials: nameInitials(name),
+          meta: `${loggedDays}/${eligibleDays} logged days`,
+          weeks,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [
+    validEmployees,
+    attendanceContextByUserId,
+    employeeDotWeekGroups,
+    endDate,
+    currentAttendanceMonthKey,
+    effectiveEmployeeDotMonth,
+  ]);
 
   const attendanceBreakdown = useMemo(() => {
     const counts = {
@@ -2213,6 +2385,120 @@ export default function Dashboard({
   const hidePieTooltip = () => {
     setPieTooltip((prev) => (prev.visible ? { ...prev, visible: false } : prev));
   };
+
+  const hideHoverTooltip = () => {
+    setHoverTooltip((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+  };
+
+  const getTooltipPlacement = (clientX, clientY, boundsRect = null) => {
+    const x = Number(clientX || 0);
+    const y = Number(clientY || 0);
+    const viewportWidth = Number(window?.innerWidth || 0);
+    const viewportHeight = Number(window?.innerHeight || 0);
+    const tooltipWidth = Math.max(150, Math.round(hoverTooltipRef.current?.offsetWidth || 210));
+    const tooltipHeight = Math.max(52, Math.round(hoverTooltipRef.current?.offsetHeight || 88));
+    const offset = 1;
+    const edge = 4;
+    const maxLeft = Math.max(edge, viewportWidth - tooltipWidth - edge);
+    const maxTop = Math.max(edge, viewportHeight - tooltipHeight - edge);
+
+    const canPlaceRight = x + offset + tooltipWidth <= viewportWidth - edge;
+    const canPlaceLeft = x - offset - tooltipWidth >= edge;
+    const canPlaceBelow = y + offset + tooltipHeight <= viewportHeight - edge;
+    const canPlaceAbove = y - offset - tooltipHeight >= edge;
+
+    let left = canPlaceRight
+      ? x + offset
+      : canPlaceLeft
+        ? x - tooltipWidth - offset
+        : x - tooltipWidth / 2;
+    let top = canPlaceBelow
+      ? y + offset
+      : canPlaceAbove
+        ? y - tooltipHeight - offset
+        : y - tooltipHeight / 2;
+
+    const hasBounds =
+      boundsRect &&
+      Number.isFinite(Number(boundsRect.left)) &&
+      Number.isFinite(Number(boundsRect.top)) &&
+      Number.isFinite(Number(boundsRect.width)) &&
+      Number.isFinite(Number(boundsRect.height));
+
+    if (hasBounds) {
+      const boundLeft = Number(boundsRect.left) + edge;
+      const boundTop = Number(boundsRect.top) + edge;
+      const boundRight = Number(boundsRect.left) + Number(boundsRect.width) - edge;
+      const boundBottom = Number(boundsRect.top) + Number(boundsRect.height) - edge;
+      const boundMaxLeft = boundRight - tooltipWidth;
+      const boundMaxTop = boundBottom - tooltipHeight;
+
+      if (boundMaxLeft >= boundLeft) {
+        left = Math.min(Math.max(boundLeft, left), boundMaxLeft);
+      } else {
+        left = Math.min(Math.max(edge, left), maxLeft);
+      }
+
+      if (boundMaxTop >= boundTop) {
+        top = Math.min(Math.max(boundTop, top), boundMaxTop);
+      } else {
+        top = Math.min(Math.max(edge, top), maxTop);
+      }
+    } else {
+      left = Math.min(Math.max(edge, left), maxLeft);
+      top = Math.min(Math.max(edge, top), maxTop);
+    }
+    return { left, top };
+  };
+
+  const showHoverTooltipFromPointer = (event, payload, boundsRect = null) => {
+    if (!payload) return;
+    const { left, top } = getTooltipPlacement(
+      Number(event?.clientX || 0),
+      Number(event?.clientY || 0),
+      boundsRect
+    );
+    setHoverTooltip({
+      visible: true,
+      left,
+      top,
+      title: String(payload.title || ""),
+      lines: Array.isArray(payload.lines) ? payload.lines : [],
+      tone: String(payload.tone || ""),
+    });
+  };
+
+  const showHoverTooltipFromElement = (element, payload, boundsRect = null) => {
+    if (!payload || !element?.getBoundingClientRect) return;
+    const rect = element.getBoundingClientRect();
+    const x = Number(rect.left || 0) + Number(rect.width || 0) / 2;
+    const y = Number(rect.top || 0);
+    const { left, top } = getTooltipPlacement(x, y, boundsRect);
+    setHoverTooltip({
+      visible: true,
+      left,
+      top,
+      title: String(payload.title || ""),
+      lines: Array.isArray(payload.lines) ? payload.lines : [],
+      tone: String(payload.tone || ""),
+    });
+  };
+
+  useEffect(() => {
+    if (!hoverTooltip.visible) return undefined;
+
+    const handleDismiss = () => {
+      setHoverTooltip((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+    };
+
+    window.addEventListener("scroll", handleDismiss, true);
+    window.addEventListener("resize", handleDismiss);
+
+    return () => {
+      window.removeEventListener("scroll", handleDismiss, true);
+      window.removeEventListener("resize", handleDismiss);
+    };
+  }, [hoverTooltip.visible]);
 
   const handleAttendancePieMouseMove = (event) => {
     if (attendanceBreakdown.total <= 0 || !attendancePieRef.current || !attendanceWrapRef.current) {
@@ -2663,18 +2949,8 @@ export default function Dashboard({
   }, [payableGraphWindow, payableHoursChart.rows]);
 
   const anyHistoryLoading = useMemo(() => {
-    const needDays =
-      hoursWindow === "today"
-        ? 1
-        : hoursWindow === "yesterday"
-          ? 2
-        : hoursWindow === "15"
-          ? 16
-          : hoursWindow === "30"
-            ? 30
-            : Infinity;
-
-    const needHistory = hoursWindow === "all" || Number(rangeDays) < needDays;
+    const needDays = Math.max(1, Number(selectedDayOffset) + 1);
+    const needHistory = Number(rangeDays) < needDays;
     if (!needHistory) return false;
 
     for (const emp of data.validEmployees) {
@@ -2682,21 +2958,11 @@ export default function Dashboard({
       if (loadingHistoryByUserId?.[uid]) return true;
     }
     return false;
-  }, [hoursWindow, rangeDays, data.validEmployees, loadingHistoryByUserId]);
+  }, [selectedDayOffset, rangeDays, data.validEmployees, loadingHistoryByUserId]);
 
   const anyHistoryErrors = useMemo(() => {
-    const needDays =
-      hoursWindow === "today"
-        ? 1
-        : hoursWindow === "yesterday"
-          ? 2
-        : hoursWindow === "15"
-          ? 16
-          : hoursWindow === "30"
-            ? 30
-            : Infinity;
-
-    const needHistory = hoursWindow === "all" || Number(rangeDays) < needDays;
+    const needDays = Math.max(1, Number(selectedDayOffset) + 1);
+    const needHistory = Number(rangeDays) < needDays;
     if (!needHistory) return "";
 
     const msgs = [];
@@ -2706,7 +2972,7 @@ export default function Dashboard({
       if (msg) msgs.push(`${getDisplayName(emp)}: ${msg}`);
     }
     return msgs.slice(0, 2).join("  |  ");
-  }, [hoursWindow, rangeDays, data.validEmployees, historyErrorByUserId]);
+  }, [selectedDayOffset, rangeDays, data.validEmployees, historyErrorByUserId]);
 
   const breakLogSourceByUserId = useMemo(
     () => (breakLogWindow === "today" ? breakLogsByUserId : rangeBreakLogsByUserId),
@@ -2831,6 +3097,33 @@ export default function Dashboard({
     const applyHeight = () => {
       const next = Math.max(0, Math.round(panelEl.getBoundingClientRect()?.height || 0));
       setPAttPanelHeightPx((prev) => (prev === next ? prev : next));
+    };
+
+    applyHeight();
+
+    let observer = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => {
+        applyHeight();
+      });
+      observer.observe(panelEl);
+    } else {
+      window.addEventListener("resize", applyHeight);
+    }
+
+    return () => {
+      if (observer) observer.disconnect();
+      else window.removeEventListener("resize", applyHeight);
+    };
+  }, []);
+
+  useEffect(() => {
+    const panelEl = agentAttendancePanelRef.current;
+    if (!panelEl) return;
+
+    const applyHeight = () => {
+      const next = Math.max(0, Math.round(panelEl.getBoundingClientRect()?.height || 0));
+      setAgentAttendancePanelHeightPx((prev) => (prev === next ? prev : next));
     };
 
     applyHeight();
@@ -3274,11 +3567,16 @@ export default function Dashboard({
   return (
     <div
       className="dashX"
+      ref={dashRootRef}
       style={{
         "--dash-main-height":
           Number(dashMainHeightPx) > 0 ? `${Math.max(0, Number(dashMainHeightPx) || 0)}px` : "auto",
         "--dash-p-att-panel-height":
           Number(pAttPanelHeightPx) > 0 ? `${Math.max(0, Number(pAttPanelHeightPx) || 0)}px` : "auto",
+        "--dash-agent-attendance-panel-height":
+          Number(agentAttendancePanelHeightPx) > 0
+            ? `${Math.max(0, Number(agentAttendancePanelHeightPx) || 0)}px`
+            : "auto",
       }}
     >
       <div className="dashLayout">
@@ -3314,7 +3612,7 @@ export default function Dashboard({
               <div className="kpiValue">{attendanceBreakdown.counts.ncns}</div>
             </div>
 
-            {hoursWindow === "today" ? (
+            {Number(selectedDayOffset) === 0 ? (
               <div id="kpi" className="kpi">
                 <div className="kpiLabel">LIVE</div>
                 <div className="kpiValue">
@@ -3331,43 +3629,6 @@ export default function Dashboard({
                 <div className="panelHeadActions">
                   {loading ? <div className="dashLoading" /> : null}
                   {!loading && error ? <div className="dashError">{error}</div> : null}
-                  <div className="windowBtns panelHeadWindowBtns">
-                    <button
-                      type="button"
-                      className={`windowBtn ${hoursWindow === "today" ? "isActive" : ""}`}
-                      onClick={() => setHoursWindowAndCollapseLists("today")}
-                    >
-                      TODAY
-                    </button>
-                    <button
-                      type="button"
-                      className={`windowBtn ${hoursWindow === "yesterday" ? "isActive" : ""}`}
-                      onClick={() => setHoursWindowAndCollapseLists("yesterday")}
-                    >
-                      YESTERDAY
-                    </button>
-                    <button
-                      type="button"
-                      className={`windowBtn ${hoursWindow === "15" ? "isActive" : ""}`}
-                      onClick={() => setHoursWindowAndCollapseLists("15")}
-                    >
-                      15D
-                    </button>
-                    <button
-                      type="button"
-                      className={`windowBtn ${hoursWindow === "30" ? "isActive" : ""}`}
-                      onClick={() => setHoursWindowAndCollapseLists("30")}
-                    >
-                      30D
-                    </button>
-                    <button
-                      type="button"
-                      className={`windowBtn ${hoursWindow === "all" ? "isActive" : ""}`}
-                      onClick={() => setHoursWindowAndCollapseLists("all")}
-                    >
-                      ALL
-                    </button>
-                  </div>
                 </div>
               </div>
 
@@ -3441,10 +3702,6 @@ export default function Dashboard({
                         </button>
                       </div>
                     ) : null}
-
-                    <div className="attMeta">
-                      Employees: {data.validEmployees.length} | {dashPeriod.isMonthly ? "Eligible Months" : "Eligible Days"}: {attendanceBreakdown.eligibleDays}
-                    </div>
                   </div>
 
                   {pieTooltip.visible ? (
@@ -3470,13 +3727,73 @@ export default function Dashboard({
                   ) : null}
                 </div>
               </div>
+              <div className="dash-foot">
+                <div className="attMeta">
+                  Employees: {data.validEmployees.length} | {dashPeriod.isMonthly ? "Eligible Months" : "Eligible Days"}: {attendanceBreakdown.eligibleDays}
+                </div>
+                <div className="dailyNav panelHeadWindowBtns" role="group" aria-label="Attendance day navigation">
+                  <button
+                    type="button"
+                    className="dailyNavBtn dailyNavBtnArrow"
+                    onClick={goToNextDashDay}
+                    disabled={Number(selectedDayOffset) <= 0}
+                    aria-label="Newer day"
+                  >
+                    <span className="dailyNavTriangle left" aria-hidden="true" />
+                  </button>
+
+                  <span className="dailyNavCenter" aria-live="polite">
+                    {Number(selectedDayOffset) > 0 ? (
+                      <span
+                        key={`back-label-${selectedDayOffset}-${backDashDayLabel}`}
+                        className={`dailyNavPreview dailyNavPreviewLeft dailyNavPreviewAnim ${
+                          dayNavDirection === "older" ? "isOlder" : "isNewer"
+                        }`}
+                        aria-hidden="true"
+                      >
+                        {backDashDayLabel}
+                      </span>
+                    ) : (
+                      <span className="dailyNavPreview dailyNavPreviewLeft isHidden" aria-hidden="true">
+                        -
+                      </span>
+                    )}
+                    <span
+                      key={`active-day-${selectedDashDayKey}-${selectedDayOffset}`}
+                      className={`dailyNavDate dailyNavDateAnim ${
+                        dayNavDirection === "older" ? "isOlder" : "isNewer"
+                      }`}
+                    >
+                      {selectedDashDayLabel}
+                    </span>
+                    <span
+                      key={`next-label-${selectedDayOffset}-${nextDashDayLabel}`}
+                      className={`dailyNavPreview dailyNavPreviewAnim ${
+                        dayNavDirection === "older" ? "isOlder" : "isNewer"
+                      }`}
+                      aria-hidden="true"
+                    >
+                      {nextDashDayLabel}
+                    </span>
+                  </span>
+
+                  <button
+                    type="button"
+                    className="dailyNavBtn dailyNavBtnArrow"
+                    onClick={goToPreviousDashDay}
+                    aria-label="Next day"
+                  >
+                    <span className="dailyNavTriangle right" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              
             </div>
           </div>
         </div>
 
         <aside className="updateSidebar">
           <div className="panelHead center dashAgentsHead">
-            <span>Agents On Break</span>
             {canViewBreakLog ? (
               <button
                 type="button"
@@ -3495,7 +3812,7 @@ export default function Dashboard({
                   <table className="payTable dashAnnouncementTable">
                     <thead>
                       <tr>
-                        <th className="payThLeft">Agent</th>
+                        <th className="payThLeft">Agents On Break</th>
                         <th className="payThRight">Since</th>
                       </tr>
                     </thead>
@@ -3526,7 +3843,10 @@ export default function Dashboard({
             </div>
           </div>
 
-          <div className="panelHead center">Announcements</div>
+          <div className="panelHead center">
+            <Megaphone size={16} strokeWidth={2} />
+            Announcements
+          </div>
 
           <div className="panelBody updateSidebarAnnouncementsBody">
             <div className="updateBody">
@@ -3710,75 +4030,265 @@ export default function Dashboard({
 
       </div>
 
-      <div className="agentAttendancePanel">
-        <div className="agentAttendancePanelTop">
-          <div className="agentAttendancePanelHead">
-            Best Attendance Per Employee (Early/On Time/PTO full credit, Late/Absent lower score, NCNS biggest deduction)
-          </div>
-          <div className="agentAttendanceMonthFilter">
-            <label htmlFor="agent-attendance-month-filter">Month</label>
-            <select
-              id="agent-attendance-month-filter"
-              className="agentAttendanceMonthSelect"
-              value={effectiveSelectedAgentAttendanceMonth}
-              onChange={(e) => setSelectedAgentAttendanceMonth(e.target.value)}
-            >
-              <option value={AGENT_ATTENDANCE_MONTH_ALL}>All months</option>
-              {availableAgentAttendanceMonths.map((monthKey) => (
-                <option key={`agent-att-month-${monthKey}`} value={monthKey}>
-                  {prettyMonthLabel(monthKey)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="agentAttendanceLegend">
-          {ATTENDANCE_BUCKETS.map((item) => (
-            <span key={`agent-legend-${item.key}`} className="agentAttendanceLegendItem">
-              <span className={`dot dash-tone-${item.key}`} />
-              <span>{item.label}</span>
-            </span>
-          ))}
-        </div>
-
-        {agentAttendanceRates.length === 0 ? (
-          <div className="agentAttendanceEmpty">{agentAttendanceEmptyText}</div>
-        ) : (
-          <>
-            <div className="agentAttendanceStrip">
-              {visibleAgentAttendanceRates.map((agent) => (
-                <div
-                  key={`agent-att-${agent.userId}`}
-                  className="agentAttendanceItem"
-                  title={`Score: ${agent.rate}% | ${agent.tooltipSummary}`}
-                >
-                  <div
-                    className="agentAttendanceDonut"
-                    ref={registerAgentDonutRef(agent.userId)}
-                  >
-                    <div className="agentAttendanceCenter">{agent.rate}%</div>
-                  </div>
-                  <div className="agentAttendanceName">{agent.shortName}</div>
-                </div>
-              ))}
+      <div className="agentAttendancePanelsRow">
+        <div className="agentAttendancePanel" ref={agentAttendancePanelRef}>
+          <div className="agentAttendancePanelTop">
+            <div className="agentAttendancePanelHead">
+              Best Attendance Per Employee
             </div>
-
-            {hiddenAgentAttendanceRates > 0 ? (
-              <div
-                className="agentAttendanceFoot"
+            <div className="agentAttendanceMonthFilter">
+              <label htmlFor="agent-attendance-month-filter">Month</label>
+              <select
+                id="agent-attendance-month-filter"
+                className="agentAttendanceMonthSelect"
+                value={effectiveSelectedAgentAttendanceMonth}
+                onChange={(e) => setSelectedAgentAttendanceMonth(e.target.value)}
               >
-                <button
-                  type="button"
-                  className="attSummaryToggleBtn"
-                  onClick={() => setShowAllAgentRates(true)}
-                >
-                  Show all agents ({hiddenAgentAttendanceRates} more)
-                </button>
+                <option value={AGENT_ATTENDANCE_MONTH_ALL}>All months</option>
+                {availableAgentAttendanceMonths.map((monthKey) => (
+                  <option key={`agent-att-month-${monthKey}`} value={monthKey}>
+                    {prettyMonthLabel(monthKey)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="agentAttendanceLegend">
+            {ATTENDANCE_BUCKETS.map((item) => (
+              <span key={`agent-legend-${item.key}`} className="agentAttendanceLegendItem">
+                <span className={`dot dash-tone-${item.key}`} />
+                <span>{item.label}</span>
+              </span>
+            ))}
+          </div>
+
+          {agentAttendanceRates.length === 0 ? (
+            <div className="agentAttendanceEmpty">{agentAttendanceEmptyText}</div>
+          ) : (
+            <>
+              <div className="agentAttendanceStrip">
+                {visibleAgentAttendanceRates.map((agent) => (
+                  <div
+                    key={`agent-att-${agent.userId}`}
+                    className="agentAttendanceItem"
+                  >
+                    <div
+                      className="agentAttendanceDonut"
+                      ref={registerAgentDonutRef(agent.userId)}
+                      tabIndex={0}
+                      onMouseEnter={(event) =>
+                        showHoverTooltipFromPointer(event, {
+                          title: String(agent.name || "Employee"),
+                          lines: [
+                            `Score: ${Number(agent.rate || 0)}%`,
+                            `Early: ${Number(agent.counts?.early || 0)} | On Time: ${Number(agent.counts?.onTime || 0)}`,
+                            `Late: ${Number(agent.counts?.late || 0)} | PTO: ${Number(agent.counts?.pto || 0)}`,
+                          `Absent: ${Number(agent.counts?.absent || 0)} | NCNS: ${Number(agent.counts?.ncns || 0)}`,
+                          ],
+                          tone: "",
+                        })
+                      }
+                      onMouseMove={(event) =>
+                        showHoverTooltipFromPointer(event, {
+                          title: String(agent.name || "Employee"),
+                          lines: [
+                            `Score: ${Number(agent.rate || 0)}%`,
+                            `Early: ${Number(agent.counts?.early || 0)} | On Time: ${Number(agent.counts?.onTime || 0)}`,
+                            `Late: ${Number(agent.counts?.late || 0)} | PTO: ${Number(agent.counts?.pto || 0)}`,
+                          `Absent: ${Number(agent.counts?.absent || 0)} | NCNS: ${Number(agent.counts?.ncns || 0)}`,
+                          ],
+                          tone: "",
+                        })
+                      }
+                      onMouseLeave={hideHoverTooltip}
+                      onFocus={(event) =>
+                        showHoverTooltipFromElement(event.currentTarget, {
+                          title: String(agent.name || "Employee"),
+                          lines: [
+                            `Score: ${Number(agent.rate || 0)}%`,
+                            `Early: ${Number(agent.counts?.early || 0)} | On Time: ${Number(agent.counts?.onTime || 0)}`,
+                            `Late: ${Number(agent.counts?.late || 0)} | PTO: ${Number(agent.counts?.pto || 0)}`,
+                          `Absent: ${Number(agent.counts?.absent || 0)} | NCNS: ${Number(agent.counts?.ncns || 0)}`,
+                          ],
+                          tone: "",
+                        })
+                      }
+                      onBlur={hideHoverTooltip}
+                    >
+                      <div className="agentAttendanceCenter">{agent.rate}%</div>
+                    </div>
+                    <div className="agentAttendanceName">{agent.shortName}</div>
+                  </div>
+                ))}
               </div>
-            ) : null}
-          </>
-        )}
+
+              {hiddenAgentAttendanceRates > 0 ? (
+                <div className="agentAttendanceFoot">
+                  <button
+                    type="button"
+                    className="attSummaryToggleBtn"
+                    onClick={() => setShowAllAgentRates(true)}
+                  >
+                    Show all agents ({hiddenAgentAttendanceRates} more)
+                  </button>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+
+        <div className="employeeDotPanel">
+          <div className="employeeDotPanelTop">
+            <div>
+              <div className="employeeDotPanelTitle">Team Attendance</div>
+              <div className="employeeDotPanelSub">{employeeDotRangeLabel}</div>
+            </div>
+            <div className="employeeDotPanelFilter">
+              <label htmlFor="employee-dot-month-filter">Month</label>
+              <select
+                id="employee-dot-month-filter"
+                className="employeeDotPanelSelect"
+                value={selectedEmployeeDotMonth}
+                onChange={(e) => setSelectedEmployeeDotMonth(e.target.value)}
+              >
+                {employeeDotMonthOptions.map((option) => (
+                  <option key={`employee-dot-month-${option.key}`} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="employeeDotLegend">
+            {ATTENDANCE_BUCKETS.map((item) => (
+              <span key={`employee-dot-legend-${item.key}`} className="employeeDotLegendItem">
+                <span className={`employeeDotLegendDot dash-tone-${item.key}`} />
+                <span>{item.label}</span>
+              </span>
+            ))}
+            <span className="employeeDotLegendItem">
+              <span className="employeeDotLegendDot isMissing" />
+              <span>No Log</span>
+            </span>
+          </div>
+
+          {employeeDotRows.length === 0 ? (
+            <div className="employeeDotEmpty">No employee attendance records for this month.</div>
+          ) : (
+            <div className="employeeDotRows">
+              <div className="employeeDotTableRow employeeDotTableHeadRow">
+                <div className="employeeDotHeadLabel">Employee</div>
+                <div className="employeeDotWeeksWrap">
+                  <div
+                    className="employeeDotWeekTrack employeeDotWeekTrackHead"
+                    style={employeeDotWeekTrackStyle}
+                  >
+                    {employeeDotWeekLabels.map((label, idx) => (
+                      <div key={`employee-dot-week-label-${idx}`} className="employeeDotWeekCell">
+                        <span className="employeeDotWeekHeaderLabel">{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="employeeDotRowsScroll">
+                <div className="employeeDotRowsContent">
+                  {employeeDotRows.map((row) => (
+                    <div key={`employee-dot-row-${row.userId}`} className="employeeDotTableRow">
+                      <div className="employeeDotIdentity">
+                        <div className="employeeDotAvatar">{row.initials}</div>
+                        <div className="employeeDotIdentityText">
+                          <div className="employeeDotName">{row.name}</div>
+                          <div className="employeeDotMeta">{row.meta}</div>
+                        </div>
+                      </div>
+
+                      <div className="employeeDotWeeksWrap">
+                        <div className="employeeDotWeekTrack" style={employeeDotWeekTrackStyle}>
+                          {row.weeks.map((weekDots, weekIdx) => (
+                            <div key={`employee-dot-week-${row.userId}-${weekIdx}`} className="employeeDotWeekCell">
+                              <div className="employeeDotWeek">
+                                {weekDots.map((dot) => (
+                                  <span
+                                    key={dot.key}
+                                    className={`employeeDotItem ${dot.className}`}
+                                    tabIndex={0}
+                                    onMouseEnter={(event) =>
+                                      showHoverTooltipFromPointer(event, {
+                                        title: prettyDayLabel(dot.dayKey),
+                                        lines: [String(dot.label || "")],
+                                        tone: String(dot.className || "").startsWith("dash-tone-")
+                                          ? String(dot.className || "").replace("dash-tone-", "")
+                                          : "",
+                                      })
+                                    }
+                                    onMouseMove={(event) =>
+                                      showHoverTooltipFromPointer(event, {
+                                        title: prettyDayLabel(dot.dayKey),
+                                        lines: [String(dot.label || "")],
+                                        tone: String(dot.className || "").startsWith("dash-tone-")
+                                          ? String(dot.className || "").replace("dash-tone-", "")
+                                          : "",
+                                      })
+                                    }
+                                    onMouseLeave={hideHoverTooltip}
+                                    onFocus={(event) =>
+                                      showHoverTooltipFromElement(event.currentTarget, {
+                                        title: prettyDayLabel(dot.dayKey),
+                                        lines: [String(dot.label || "")],
+                                        tone: String(dot.className || "").startsWith("dash-tone-")
+                                          ? String(dot.className || "").replace("dash-tone-", "")
+                                          : "",
+                                      })
+                                    }
+                                    onBlur={hideHoverTooltip}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
+
+      {hoverTooltip.visible && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="dashHoverTooltipOverlay"
+              ref={hoverTooltipRef}
+              style={{ left: `${hoverTooltip.left}px`, top: `${hoverTooltip.top}px` }}
+              role="tooltip"
+            >
+              <div className="dashTooltipCard dashHoverTooltipCard">
+                <div className="dashTooltipTitle">
+                  {hoverTooltip.tone ? (
+                    <span className="dashHoverTooltipTitleRow">
+                      <span className={`dashTooltipDot dash-tone-${hoverTooltip.tone}`} />
+                      <span>{hoverTooltip.title}</span>
+                    </span>
+                  ) : (
+                    hoverTooltip.title
+                  )}
+                </div>
+                {hoverTooltip.lines.map((line, idx) => (
+                  <div key={`hover-tooltip-line-${idx}`} className="dashTooltipLine">
+                    {line}
+                  </div>
+                ))}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
 
       {canViewPayablePanel ? (
       <div className="panel p-payable">
@@ -4165,122 +4675,47 @@ export default function Dashboard({
       </div>
       ) : null}
 
-      <div className="panel p-heat">
-        <div className="panelHead">
+      <div className="panel reportRoutePanel">
+        <div className="panelHead reportRoutePanelHead">
           <div className="panel1">
-            <h3>Attendance Breakdown per Month</h3>
-            <p>Monthly attendance patterns and trends</p>
-          </div>
-
-          <div className="panel2">
-            <div className="avgmonth">
-              <h3>Avg/Month</h3>
-              <h2>{Math.round(monthlyAttendance.avgPerMonth || 0)}</h2>
-            </div>
-
-            <div className="avgmonth">
-              <div>
-                <h3>Total</h3>
-                <h2>{monthlyAttendance.total}</h2>
-              </div>
-            </div>
+            <h3>Attendance Reports</h3>
+            <p>Choose Daily, Weekly, or Monthly insights.</p>
           </div>
         </div>
 
-        <div className="select-divv">
-          <select
-            className="select-emp"
-            value={selectedPerfUserId}
-            onChange={(e) => setSelectedPerfUserId(e.target.value)}
-          >
-            {validEmployees.map((emp) => {
-              const uid = String(getUserId(emp));
-              return (
-                <option key={uid} value={uid}>
-                  {getDisplayName(emp)}
-                </option>
-              );
-            })}
-          </select>
-        </div>
-
-        <div className="panelBody panelBodyFill">
-          <div className="perfBody">
-            {selectedPerfLoading ? (
-              <div className="perfEmpty">Loading attendance history...</div>
-            ) : selectedPerfError ? (
-              <div className="perfEmpty">{selectedPerfError}</div>
-            ) : !selectedPerfEmployee ? (
-              <div className="perfEmpty">No employee selected.</div>
-            ) : monthlyAttendance.chartData.length === 0 ? (
-              <div className="perfEmpty">No attendance data available for this employee.</div>
-            ) : (
-              <>
-                <div className="perfTop">
-                  <div className="perfTopLeft">
-                    Employee: <span className="perfTopValue">{getDisplayName(selectedPerfEmployee)}</span>
+        <div className="panelBody reportRoutePanelBody">
+          <div className="reportRouteGrid">
+            {reportRouteCards.map((card) => (
+              <button
+                key={`report-route-${card.key}`}
+                type="button"
+                className="reportRouteCard"
+                onClick={() => handleOpenReportRoute(card.page)}
+              >
+                <div className={`reportMiniPage ${card.miniClassName}`}>
+                  <div className="reportMiniTopBar" />
+                  <div className="reportMiniBody">
+                    <span className="reportMiniLine long" />
+                    <span className="reportMiniLine medium" />
+                    <span className="reportMiniLine short" />
                   </div>
-                  <div className="perfTopRight">
-                    Range:{" "}
-                    <span className="perfTopValue">
-                      {monthlyAttendance.firstMonth
-                        ? `${prettyMonthLabel(monthlyAttendance.firstMonth)} -> ${prettyMonthLabel(monthlyAttendance.lastMonth)}`
-                        : "-"}
-                    </span>
+                  <div className="reportMiniViz">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                    <span />
                   </div>
                 </div>
 
-                <div className="monthlyLegend">
-                  {ATTENDANCE_BUCKETS.map((item) => (
-                    <div
-                      key={item.key}
-                      className="monthlyLegendItem"
-                    >
-                      <span className={`monthlyLegendDot dash-tone-${item.key}`} />
-                      <span>{item.label}</span>
-                    </div>
-                  ))}
+                <div className="reportRouteCardBody">
+                  <div className="reportRouteTitle">{card.title}</div>
+                  <div className="reportRouteSubtitle">{card.subtitle}</div>
+                  <div className="reportRouteCta">{card.cta}</div>
                 </div>
-
-                <div className="perfChartWrap">
-                  <div className="perfChartInner">
-                    {chartReady ? (
-                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
-                        <BarChart
-                          data={monthlyAttendance.chartData}
-                          margin={{ top: 10, right: 0, left: 0, bottom: 10 }}
-                          barCategoryGap={22}
-                        >
-                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0)" />
-                          <XAxis
-                            dataKey="label"
-                            tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
-                            interval={0}
-                          />
-                          <YAxis
-                            allowDecimals={false}
-                            tick={{ fontSize: 11, fill: "rgba(0, 0, 0, 0.72)" }}
-                          />
-                          <Tooltip content={<MonthlyAttendanceTooltip />} />
-                          <Bar dataKey="early" stackId="attendance" fill="#4b9fea" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="onTime" stackId="attendance" fill="#66bb6a" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="late" stackId="attendance" fill="#f39c12" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="pto" stackId="attendance" fill="#8e44ad" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="absent" stackId="attendance" fill="#e74c3c" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="ncns" stackId="attendance" fill="#4b5563" radius={[6, 6, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <div className="perfEmpty">Preparing chart...</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="perfFoot">
-                  Counts are grouped by month using the same attendance history records loaded for the selected employee.
-                </div>
-              </>
-            )}
+              </button>
+            ))}
           </div>
         </div>
       </div>

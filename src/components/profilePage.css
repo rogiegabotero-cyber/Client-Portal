@@ -1,0 +1,414 @@
+.ppgPage {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ppgHero {
+  border-radius: 18px;
+  background: linear-gradient(120deg, #7f1d1d, #334155 72%);
+  padding: 16px 18px;
+  color: #ffffff;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.16);
+}
+
+.ppgHeroLeft {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ppgHeroAvatarWrap {
+  position: relative;
+  width: 78px;
+  height: 78px;
+}
+
+.ppgHeroAvatar,
+.ppgHeroAvatarFallback {
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid rgba(255, 255, 255, 0.74);
+}
+
+.ppgHeroAvatarFallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #1e293b;
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 24px;
+}
+
+.ppgHeroStatus {
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.22);
+}
+
+.ppgHeroMeta h2 {
+  margin: 0;
+  font-size: 33px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.ppgHeroMeta p {
+  margin: 5px 0 0;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 600;
+}
+
+.ppgTabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ppgTab {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #475569;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ppgTab.isActive {
+  background: linear-gradient(135deg, #7f1d1d, #6b1024);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 10px 20px rgba(127, 29, 29, 0.24);
+}
+
+.ppgSection {
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  overflow: hidden;
+}
+
+.ppgSectionHead {
+  padding: 13px 16px;
+  background: #f8f1e5;
+  color: #9a3412;
+  border-bottom: 1px solid rgba(217, 119, 6, 0.2);
+  font-size: 25px;
+  font-weight: 800;
+}
+
+.ppgInfoGrid {
+  padding: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.ppgWorkLayout {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ppgWorkGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ppgWorkCard {
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 12px;
+  min-height: 164px;
+}
+
+.ppgWorkCardHead {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.ppgWorkCardIcon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #f3e8ff;
+  color: #6d28d9;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ppgWorkCardValue {
+  margin-top: 8px;
+  font-size: 26px;
+  font-weight: 700;
+  color: #1f2937;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ppgDeptList {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ppgDeptChip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+  padding: 4px 10px;
+  font-size: 17px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.ppgTimelineCard {
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 14px;
+}
+
+.ppgTimelineTitle {
+  font-size: 25px;
+  font-weight: 800;
+  color: #1f2937;
+}
+
+.ppgTimelineSub {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 16px;
+}
+
+.ppgTimelineItem {
+  margin-top: 10px;
+  border: 1px solid rgba(239, 68, 68, 0.16);
+  border-radius: 12px;
+  background: #fff7f7;
+  padding: 10px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ppgTimelineIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.ppgTimelineItemLabel {
+  font-size: 16px;
+  font-weight: 700;
+  color: #6b7280;
+}
+
+.ppgTimelineItemValue {
+  margin-top: 2px;
+  font-size: 26px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.ppgInfoCard {
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ppgInfoCard span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ppgInfoCard strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.ppgSettingsRow {
+  margin: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ppgSettingsTitle {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.ppgSettingsSub {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.ppgActionBtn {
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #7f1d1d, #6b1024);
+  color: #ffffff;
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ppgActionBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ppgCollapseCard {
+  margin: 0 14px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.ppgCollapseHead {
+  width: 100%;
+  border: none;
+  background: #f8fafc;
+  min-height: 44px;
+  padding: 0 12px;
+  color: #334155;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.ppgCollapseHead > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ppgCollapseHead svg.isOpen {
+  transform: rotate(180deg);
+}
+
+.ppgCollapseBody {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.ppgInput {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0 11px;
+  outline: none;
+}
+
+.ppgInput:focus {
+  border-color: #64748b;
+}
+
+.ppgHelper {
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.4;
+}
+
+.ppgHelper.isError {
+  color: #b91c1c;
+}
+
+.ppgHelper.isSuccess {
+  color: #166534;
+}
+
+@media (max-width: 768px) {
+  .ppgHeroMeta h2 {
+    font-size: 20px;
+  }
+
+  .ppgHeroMeta p {
+    font-size: 13px;
+  }
+
+  .ppgTabs {
+    grid-template-columns: 1fr;
+  }
+
+  .ppgWorkGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .ppgWorkCard {
+    min-height: 0;
+  }
+
+  .ppgSettingsRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .ppgActionBtn {
+    width: 100%;
+  }
+}

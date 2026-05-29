@@ -36,6 +36,7 @@ const DEFAULT_ROLE_PAGES = {
   [ROLES.SUPER_ADMIN]: [
     "dashboard",
     "employee_dashboard",
+    "profile",
     "attendance",
     "assignment",
     "schedule",
@@ -54,6 +55,7 @@ const DEFAULT_ROLE_PAGES = {
   [ROLES.ADMIN]: [
     "dashboard",
     "employee_dashboard",
+    "profile",
     "attendance",
     "assignment",
     "schedule",
@@ -67,6 +69,7 @@ const DEFAULT_ROLE_PAGES = {
   ],
   [ROLES.ACCOUNTING]: [
     "dashboard",
+    "profile",
     "attendance",
     "schedule",
     "hours",
@@ -76,9 +79,10 @@ const DEFAULT_ROLE_PAGES = {
     "perf_monthly",
     "invoices",
   ],
-  [ROLES.VISITOR]: ["employee_dashboard", "notifications", "manage_announcements"],
+  [ROLES.VISITOR]: ["employee_dashboard", "profile", "notifications", "manage_announcements"],
   [ROLES.EMPLOYEE]: [
     "employee_dashboard",
+    "profile",
     "attendance",
     "assignment",
     "schedule",

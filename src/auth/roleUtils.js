@@ -9,6 +9,7 @@ export const ROLES = {
 export const PAGE_KEYS = [
   "dashboard",
   "employee_dashboard",
+  "profile",
   "attendance",
   "assignment",
   "schedule",
@@ -29,6 +30,7 @@ export const DEFAULT_ROLE_PAGES = {
   [ROLES.ADMIN]: [
     "dashboard",
     "employee_dashboard",
+    "profile",
     "attendance",
     "assignment",
     "schedule",
@@ -43,6 +45,7 @@ export const DEFAULT_ROLE_PAGES = {
   ],
   [ROLES.ACCOUNTING]: [
     "dashboard",
+    "profile",
     "attendance",
     "schedule",
     "hours",
@@ -54,6 +57,7 @@ export const DEFAULT_ROLE_PAGES = {
   ],
   [ROLES.VISITOR]: [
     "dashboard",
+    "profile",
     "attendance",
     "schedule",
     "notifications",
@@ -64,6 +68,7 @@ export const DEFAULT_ROLE_PAGES = {
   ],
   [ROLES.EMPLOYEE]: [
     "employee_dashboard", 
+    "profile",
     "attendance",
     "schedule",
     "notifications",
@@ -90,16 +95,26 @@ export function normalizeRole(role) {
 
 export function getAllowedPages(role, customAllowedPages = null) {
   const normalizedRole = normalizeRole(role);
+  const includeProfilePage = (pages = []) => {
+    const normalizedPages = Array.isArray(pages)
+      ? pages.filter((page) => PAGE_KEYS.includes(page))
+      : [];
+
+    if (!normalizedPages.includes("profile")) {
+      normalizedPages.unshift("profile");
+    }
+    return normalizedPages;
+  };
 
   if (normalizedRole === ROLES.SUPER_ADMIN) {
-    return DEFAULT_ROLE_PAGES[ROLES.SUPER_ADMIN];
+    return includeProfilePage(DEFAULT_ROLE_PAGES[ROLES.SUPER_ADMIN]);
   }
 
   if (Array.isArray(customAllowedPages) && customAllowedPages.length > 0) {
-    return customAllowedPages.filter((page) => PAGE_KEYS.includes(page));
+    return includeProfilePage(customAllowedPages);
   }
 
-  return DEFAULT_ROLE_PAGES[normalizedRole] || [];
+  return includeProfilePage(DEFAULT_ROLE_PAGES[normalizedRole] || []);
 }
 
 export function canAccessPage(role, page, customAllowedPages = null) {

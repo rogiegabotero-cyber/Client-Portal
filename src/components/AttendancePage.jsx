@@ -942,53 +942,7 @@ export default function AttendancePage({
 
   return (
     <div className="attx">
-      <div className="attxTop">
-        <div className="attxTopRight">
-          <div className="attxControls">
-            <button id="badeng" className="attxBtn" onClick={onReload} disabled={loading}>
-              {loading ? "Loading..." : "Reload"}
-            </button>
-
-            <div className="attxPill">
-              Rows: <span className="attxPillValue">{filtered.length}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {error && <div className="attxAlert">{error}</div>}
-
-      <div className="attxKpis">
-        <div className="attxTile">
-          <div className="attxTileLabel">Early</div>
-          <div className="attxTileValue">{kpis.early}</div>
-        </div>
-
-        <div className="attxTile">
-          <div className="attxTileLabel">On Time</div>
-          <div className="attxTileValue">{kpis.onTime}</div>
-        </div>
-
-        <div className="attxTile">
-          <div className="attxTileLabel">Late</div>
-          <div className="attxTileValue">{kpis.late}</div>
-        </div>
-
-        <div className="attxTile">
-          <div className="attxTileLabel">PTO</div>
-          <div className="attxTileValue">{kpis.pto}</div>
-        </div>
-
-        <div className="attxTile">
-          <div className="attxTileLabel">Absent</div>
-          <div className="attxTileValue">{kpis.absent}</div>
-        </div>
-
-        <div className="attxTile">
-          <div className="attxTileLabel">NCNS</div>
-          <div className="attxTileValue">{kpis.ncns}</div>
-        </div>
-      </div>
 
       <div className="attxField">
         
@@ -1046,7 +1000,6 @@ export default function AttendancePage({
       <div className="attxCard">
         <div className="attxCardHead">
           <div className="attxTitleWrap attxTitleWrapCard">
-            <div className="attxTitle attxTitleCard">Attendance</div>
             <div className="attxSub attxSubCard">
               Range: {startDate} -&gt; {endDate}  |  Users: {validEmployees.length}
               {perUserErrorCount ? `  |  Errors: ${perUserErrorCount}` : ""}

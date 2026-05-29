@@ -1413,8 +1413,7 @@ export async function updatePortalUserEmail(userId, newEmail) {
   return {
     uid: normalizedUserId,
     email: normalizedEmail,
-    message:
-      "Profile email updated in Firestore. For fully managed cross-user auth email changes, connect a Firebase Admin backend.",
+    message: "Profile email updated successfully.",
   };
 }
 

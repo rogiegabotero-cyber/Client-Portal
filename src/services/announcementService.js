@@ -72,29 +72,37 @@ export async function createAnnouncement(payload = {}) {
 
   const publishAt = toDate(payload?.publishAt) || new Date();
   const fallbackExpiresAt = new Date(publishAt.getTime() + 24 * 60 * 60 * 1000);
-  const expiresAt = toDate(payload?.expiresAt) || fallbackExpiresAt;
+  const noExpiration = payload?.noExpiration === true;
+  const expiresAt = noExpiration ? null : toDate(payload?.expiresAt) || fallbackExpiresAt;
 
-  if (expiresAt.getTime() <= publishAt.getTime()) {
+  if (expiresAt && expiresAt.getTime() <= publishAt.getTime()) {
     throw new Error("Expire time must be after post time.");
   }
   const now = new Date();
   const storageTimeZone = resolveStorageTimeZone();
-
-  const ref = await addDoc(collection(db, ANNOUNCEMENTS_COLLECTION), {
+  const announcementPayload = {
     headline,
     note,
     createdByUserId: toText(payload?.createdByUserId),
     createdByName: payload?.createdByName || "",
     createdByRole: toText(payload?.createdByRole),
     publishAt: Timestamp.fromDate(publishAt),
-    expiresAt: Timestamp.fromDate(expiresAt),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     ...buildTimeZoneMeta("publishAtClient", publishAt, storageTimeZone),
-    ...buildTimeZoneMeta("expiresAtClient", expiresAt, storageTimeZone),
     ...buildTimeZoneMeta("createdAtClient", now, storageTimeZone),
     ...buildTimeZoneMeta("updatedAtClient", now, storageTimeZone),
-  });
+  };
+
+  if (expiresAt) {
+    announcementPayload.expiresAt = Timestamp.fromDate(expiresAt);
+    Object.assign(
+      announcementPayload,
+      buildTimeZoneMeta("expiresAtClient", expiresAt, storageTimeZone)
+    );
+  }
+
+  const ref = await addDoc(collection(db, ANNOUNCEMENTS_COLLECTION), announcementPayload);
 
   const recipientUserIds = uniq(
     (Array.isArray(payload?.recipientUserIds) ? payload.recipientUserIds : [])

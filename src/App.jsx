@@ -142,6 +142,7 @@ import AssignmentPage from "./components/AssignmentPage";
 import PerformanceReportPage from "./components/PerformanceReportPage";
 import ManageAnnouncementsPage from "./components/ManageAnnouncementsPage";
 import ManageBreaksPage from "./components/ManageBreaksPage";
+import ProfilePage from "./components/ProfilePage";
 import { db } from "./firebase";
 import {
   doc as fsDoc,
@@ -910,6 +911,7 @@ const HISTORY_START_DATE = "2000-01-01";
 const PAGE_HEADER_TITLES = {
   dashboard: "Dashboard",
   employee_dashboard: "My Dashboard",
+  profile: "Profile",
   attendance: "Attendance",
   schedule: "Schedule",
   assignment: "Assignment Management",
@@ -1006,6 +1008,10 @@ export default function App() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [employees, setEmployees] = useState([]);
   const [activePage, setActivePage] = useState("dashboard");
+  const [profilePageRequest, setProfilePageRequest] = useState({
+    tab: "personal",
+    requestId: 0,
+  });
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -1101,6 +1107,7 @@ export default function App() {
   const [announcementExpireAt, setAnnouncementExpireAt] = useState(
     () => getDefaultAnnouncementWindow().expiresAt
   );
+  const [announcementNoExpiration, setAnnouncementNoExpiration] = useState(false);
   const [savingAnnouncement, setSavingAnnouncement] = useState(false);
   const [showUserRequestModal, setShowUserRequestModal] = useState(false);
   const [requestingNewUser, setRequestingNewUser] = useState(false);
@@ -1288,6 +1295,7 @@ export default function App() {
     setAnnouncementDraft("");
     setAnnouncementPostAt(defaults.postAt);
     setAnnouncementExpireAt(defaults.expiresAt);
+    setAnnouncementNoExpiration(false);
     setShowAnnouncementModal(true);
   }, [canPostAnnouncements]);
 
@@ -1311,6 +1319,7 @@ export default function App() {
     setAnnouncementDraft("");
     setAnnouncementPostAt(defaults.postAt);
     setAnnouncementExpireAt(defaults.expiresAt);
+    setAnnouncementNoExpiration(false);
   }, [savingAnnouncement]);
 
   const handleCloseUserRequestModal = useCallback(() => {
@@ -1355,6 +1364,18 @@ export default function App() {
       requestId: Number(prev?.requestId || 0) + 1,
     }));
     setActivePage("assignment");
+  }, []);
+
+  const handleOpenProfilePage = useCallback((tab = "personal") => {
+    const normalizedTab = String(tab || "").trim().toLowerCase();
+    const allowedTabs = new Set(["personal", "work", "settings"]);
+    const nextTab = allowedTabs.has(normalizedTab) ? normalizedTab : "personal";
+
+    setProfilePageRequest((prev) => ({
+      tab: nextTab,
+      requestId: Number(prev?.requestId || 0) + 1,
+    }));
+    setActivePage("profile");
   }, []);
 
   const handleConsumeAssignmentOpenRequest = useCallback((requestId) => {
@@ -3664,6 +3685,26 @@ export default function App() {
     [pushToast, user?.email, user?.firebaseUid, user?.id, user?.role, user?.uid, user?.userId]
   );
 
+  const handleChangeOwnEmail = useCallback(
+    async (nextEmail) => {
+      const viewerUserId = String(currentViewerIdentity?.userId || "").trim();
+      if (!viewerUserId) {
+        throw new Error("Your user profile is not ready yet. Please try again.");
+      }
+
+      const result = await updatePortalUserEmail(viewerUserId, nextEmail);
+
+      pushToast({
+        type: "success",
+        title: "Email Updated",
+        message: result?.message || `Profile email changed to ${result?.email || nextEmail}.`,
+      });
+
+      return result;
+    },
+    [currentViewerIdentity?.userId, pushToast]
+  );
+
   const handlePostAnnouncement = useCallback(
     async (e) => {
       e?.preventDefault?.();
@@ -3690,16 +3731,28 @@ export default function App() {
       }
 
       const postAtMs = new Date(announcementPostAt).getTime();
-      const expireAtMs = new Date(announcementExpireAt).getTime();
-      if (!Number.isFinite(postAtMs) || !Number.isFinite(expireAtMs)) {
+      if (!Number.isFinite(postAtMs)) {
         pushToast({
           type: "warning",
           title: "Invalid Time",
-          message: "Please set valid post and expire date/time values.",
+          message: "Please set a valid post date/time value.",
         });
         return;
       }
-      if (expireAtMs <= postAtMs) {
+
+      const expireAtMs = announcementNoExpiration
+        ? Number.POSITIVE_INFINITY
+        : new Date(announcementExpireAt).getTime();
+      if (!announcementNoExpiration && !Number.isFinite(expireAtMs)) {
+        pushToast({
+          type: "warning",
+          title: "Invalid Time",
+          message: "Please set a valid expire date/time value.",
+        });
+        return;
+      }
+
+      if (!announcementNoExpiration && expireAtMs <= postAtMs) {
         pushToast({
           type: "warning",
           title: "Invalid Time Range",
@@ -3738,7 +3791,8 @@ export default function App() {
           createdByName: user?.name || user?.displayName || user?.email || "Portal User",
           createdByRole: viewerRole,
           publishAt: new Date(postAtMs),
-          expiresAt: new Date(expireAtMs),
+          expiresAt: announcementNoExpiration ? null : new Date(expireAtMs),
+          noExpiration: announcementNoExpiration,
           recipientUserIds,
           notifyEmployees: true,
         });
@@ -3749,6 +3803,7 @@ export default function App() {
         setShowAnnouncementModal(false);
         setAnnouncementHeadline("");
         setAnnouncementDraft("");
+        setAnnouncementNoExpiration(false);
         pushToast({
           type: "success",
           title: "Announcement Posted",
@@ -3769,6 +3824,7 @@ export default function App() {
       announcementHeadline,
       announcementDraft,
       announcementExpireAt,
+      announcementNoExpiration,
       announcementPostAt,
       canPostAnnouncements,
       canLoadSpecialUsers,
@@ -5614,7 +5670,9 @@ export default function App() {
           onNotificationClick={handleNotificationClick}
           onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
           onOpenNotificationsPage={() => setActivePage("notifications")}
-          onChangeOwnPassword={handleChangeOwnPassword}
+          onOpenProfilePage={() => handleOpenProfilePage("personal")}
+          onOpenProfileSettings={() => handleOpenProfilePage("settings")}
+          onRequestLogout={handleLogoutClick}
         />
         {isPageSwitchLoading ? (
           <div className="portal-page-transition-spinner-wrap" role="status" aria-live="polite" aria-busy="true">
@@ -5857,6 +5915,12 @@ export default function App() {
                     employeeProfilesByUserId={employeeProfilesByUserId}
                     attendanceResetTime={attendanceResetTime}
                     businessTimeZone={businessTimeZone}
+                    onNavigatePage={(targetPage) => {
+                      const nextPage = String(targetPage || "").trim();
+                      if (!nextPage) return;
+                      if (!canAccessPage(user?.role, nextPage, user?.allowedPages)) return;
+                      setActivePage(nextPage);
+                    }}
                     pageData={sharedPageData}
                   />
                 </div>
@@ -5899,6 +5963,20 @@ export default function App() {
                     onRefreshBreakForUser={reloadBreakStatusForUser}
                     onOpenTaskDetails={handleOpenAssignmentTask}
                     pageData={sharedPageData}
+                  />
+                </div>
+              )}
+
+              {activePage === "profile" && (
+                <div className="portal-page-pad">
+                  <ProfilePage
+                    viewer={user}
+                    profileImagesByUserId={profileImagesByUserId}
+                    employeeProfilesByUserId={employeeProfilesByUserId}
+                    requestedTab={profilePageRequest.tab}
+                    tabRequestId={profilePageRequest.requestId}
+                    onChangeOwnPassword={handleChangeOwnPassword}
+                    onChangeOwnEmail={handleChangeOwnEmail}
                   />
                 </div>
               )}
@@ -6091,8 +6169,20 @@ export default function App() {
                   type="datetime-local"
                   value={announcementExpireAt}
                   onChange={(e) => setAnnouncementExpireAt(e.target.value)}
+                  disabled={announcementNoExpiration}
                   className="portal-announce-input portal-announce-input-sm"
                 />
+                <div className="portal-announce-expire-actions">
+                  <button
+                    type="button"
+                    className={`portal-announce-toggle-btn ${
+                      announcementNoExpiration ? "is-active" : ""
+                    }`}
+                    onClick={() => setAnnouncementNoExpiration((prev) => !prev)}
+                  >
+                    {announcementNoExpiration ? "No Expiration Enabled" : "No Expiration"}
+                  </button>
+                </div>
               </label>
             </div>
 

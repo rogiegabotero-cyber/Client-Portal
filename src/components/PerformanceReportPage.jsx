@@ -127,7 +127,7 @@ const formatDayLabel = (dayKey, mode) => {
     return d.toLocaleDateString(undefined, { weekday: "short" });
   }
   if (mode === "daily") {
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return String(d.getUTCDate());
   }
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
