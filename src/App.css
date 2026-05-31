@@ -124,6 +124,7 @@
 
 .portal-btn-danger {
   background: linear-gradient(180deg, #83000b, #6b0009);
+  display: none;
 }
 
 .portal-btn-secondary {

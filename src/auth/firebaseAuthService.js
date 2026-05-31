@@ -12,6 +12,8 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   signOut,
+  verifyBeforeUpdateEmail,
+  updateEmail,
   updatePassword,
   deleteUser,
 } from "firebase/auth";
@@ -1393,9 +1395,11 @@ export async function getSpecialPortalUsers() {
   });
 }
 
-export async function updatePortalUserEmail(userId, newEmail) {
+export async function updatePortalUserEmail(userId, newEmail, options = {}) {
   const normalizedUserId = String(userId || "").trim();
   const normalizedEmail = normalizeEmail(newEmail);
+  const requestedAuthUserId = String(options?.authUserId || "").trim();
+  const requireAuthUpdate = options?.requireAuthUpdate === true;
 
   if (!normalizedUserId) {
     throw new Error("User id is required");
@@ -1405,15 +1409,106 @@ export async function updatePortalUserEmail(userId, newEmail) {
     throw new Error("Email is required");
   }
 
-  await updateDoc(doc(db, "users", normalizedUserId), {
+  const currentAuthUser = auth.currentUser;
+  const currentAuthUid = String(currentAuthUser?.uid || "").trim();
+  const authTargetUid = requestedAuthUserId || currentAuthUid;
+  const targetUserIds = Array.from(
+    new Set([normalizedUserId, authTargetUid].map((x) => String(x || "").trim()).filter(Boolean))
+  );
+  const basePayload = {
     email: normalizedEmail,
     updatedAt: serverTimestamp(),
-  });
+  };
+
+  await Promise.all(
+    targetUserIds.map(async (targetUserId) => {
+      const userRef = doc(db, "users", targetUserId);
+      const userSnap = await getDoc(userRef);
+
+      if (userSnap.exists()) {
+        await updateDoc(userRef, basePayload);
+      } else {
+        await setDoc(
+          userRef,
+          {
+            uid: targetUserId,
+            userId: targetUserId,
+            ...basePayload,
+          },
+          { merge: true }
+        );
+      }
+    })
+  );
+
+  const canUpdateSignedInAuthUser =
+    !!currentAuthUser && !!currentAuthUid && !!authTargetUid && currentAuthUid === authTargetUid;
+  let authUpdated = false;
+  let authAlreadyMatched = false;
+  let pendingVerification = false;
+
+  if (canUpdateSignedInAuthUser) {
+    const currentAuthEmail = normalizeEmail(currentAuthUser?.email || "");
+    if (currentAuthEmail === normalizedEmail) {
+      authAlreadyMatched = true;
+      authUpdated = true;
+    } else {
+      try {
+        await updateEmail(currentAuthUser, normalizedEmail);
+        authUpdated = true;
+      } catch (err) {
+        const code = String(err?.code || "").trim().toLowerCase();
+        if (code === "auth/operation-not-allowed") {
+          try {
+            await verifyBeforeUpdateEmail(currentAuthUser, normalizedEmail);
+            pendingVerification = true;
+          } catch (verifyErr) {
+            const verifyCode = String(verifyErr?.code || "").trim().toLowerCase();
+            if (verifyCode === "auth/invalid-email") {
+              throw new Error("Please enter a valid email address.");
+            }
+            if (verifyCode === "auth/email-already-in-use") {
+              throw new Error("That email is already in use by another account.");
+            }
+            if (verifyCode === "auth/requires-recent-login") {
+              throw new Error("For security, log out and sign in again, then retry changing your email.");
+            }
+            throw verifyErr;
+          }
+        } else if (code === "auth/requires-recent-login") {
+          throw new Error("For security, log out and sign in again, then retry changing your email.");
+        } else if (code === "auth/email-already-in-use") {
+          throw new Error("That email is already in use by another account.");
+        } else if (code === "auth/invalid-email") {
+          throw new Error("Please enter a valid email address.");
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
+
+  if (requireAuthUpdate && !authUpdated && !pendingVerification) {
+    throw new Error(
+      "Authentication email was not updated. Please sign out, sign in again, and retry."
+    );
+  }
+
+  const message = authUpdated
+    ? authAlreadyMatched
+      ? "Email is already updated in Authentication and profile."
+      : "Email updated in Authentication and profile."
+    : pendingVerification
+      ? "Profile email updated. Verification email sent. Please verify the new email from your inbox to complete Authentication email change."
+      : "Profile email updated successfully.";
 
   return {
     uid: normalizedUserId,
     email: normalizedEmail,
-    message: "Profile email updated successfully.",
+    authUpdated,
+    pendingVerification,
+    profileUpdated: true,
+    message,
   };
 }
 

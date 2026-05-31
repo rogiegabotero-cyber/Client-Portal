@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+﻿import React, { useEffect, useRef, useState } from "react";
 import "./header.css";
 import { Bell, ChevronDown, LogOut, Settings, User } from "lucide-react";
 import { getProfileImageUrl, getUserId, toMillis } from "../utils/common";
@@ -54,6 +54,10 @@ const Header = ({
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+  });
+  const clockWeekdayLabel = new Date(clockNowMs).toLocaleDateString(undefined, {
+    timeZone: clockReferenceTimeZone,
+    weekday: "long",
   });
 
   const profileSource = viewer || employee || null;
@@ -171,6 +175,7 @@ const Header = ({
             ) : null}
           </div>
         </div>
+        <div className="top-header-clock-day">{clockWeekdayLabel}</div>
       </div>
 
       <div className="header-right">

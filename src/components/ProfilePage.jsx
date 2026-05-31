@@ -39,6 +39,8 @@ const normalizeRoleValue = (value) =>
     .toLowerCase()
     .replace(/\s+/g, "_");
 
+const toLower = (value) => String(value || "").trim().toLowerCase();
+
 const toDepartmentList = (...candidates) => {
   const out = [];
   const pushValue = (value) => {
@@ -80,6 +82,7 @@ export default function ProfilePage({
   tabRequestId = 0,
   onChangeOwnPassword,
   onChangeOwnEmail,
+  onSendOwnPasswordReset,
 }) {
   const [activeTab, setActiveTab] = useState("personal");
   const [autoMinimizeSidebar, setAutoMinimizeSidebar] = useState(false);
@@ -92,6 +95,12 @@ export default function ProfilePage({
   const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
+  const [passwordResetEmailDraft, setPasswordResetEmailDraft] = useState(() =>
+    String(viewer?.email || "")
+  );
+  const [sendingPasswordReset, setSendingPasswordReset] = useState(false);
+  const [passwordResetError, setPasswordResetError] = useState("");
+  const [passwordResetMessage, setPasswordResetMessage] = useState("");
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -127,6 +136,7 @@ export default function ProfilePage({
 
   useEffect(() => {
     setEmailDraft(String(viewer?.email || ""));
+    setPasswordResetEmailDraft(String(viewer?.email || ""));
   }, [viewer?.email]);
 
   const profileImage = useMemo(() => {
@@ -141,8 +151,62 @@ export default function ProfilePage({
   const displayRole = String(
     viewer?.role || viewer?.position || viewer?.title || viewer?.jobTitle || "User"
   ).trim();
-  const userId = String(getUserId(viewer) || viewer?.uid || viewer?.id || "-").trim() || "-";
-  const savedProfile = employeeProfilesByUserId?.[userId] || {};
+  const resolvedProfile = useMemo(() => {
+    const profiles = employeeProfilesByUserId && typeof employeeProfilesByUserId === "object"
+      ? employeeProfilesByUserId
+      : {};
+    const candidateIds = Array.from(
+      new Set(
+        [
+          getUserId(viewer),
+          viewer?.userId,
+          viewer?.uid,
+          viewer?.id,
+          viewer?.firebaseUid,
+          viewer?.employeeId,
+          viewer?.profile?.userId,
+          viewer?.profile?.uid,
+        ]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      )
+    );
+    const viewerEmail = toLower(viewer?.email || viewer?.profile?.email);
+
+    for (const id of candidateIds) {
+      if (Object.prototype.hasOwnProperty.call(profiles, id)) {
+        return profiles[id] || {};
+      }
+    }
+
+    const rows = Object.values(profiles);
+    for (const row of rows) {
+      const rowId = String(row?.userId || row?.uid || row?.id || "").trim();
+      if (rowId && candidateIds.includes(rowId)) {
+        return row || {};
+      }
+    }
+
+    if (viewerEmail) {
+      for (const row of rows) {
+        const rowEmail = toLower(row?.email || row?.employeeSnapshot?.email);
+        if (rowEmail && rowEmail === viewerEmail) {
+          return row || {};
+        }
+      }
+    }
+
+    return {};
+  }, [viewer, employeeProfilesByUserId]);
+  const userId = String(
+    getUserId(viewer) ||
+      resolvedProfile?.userId ||
+      viewer?.uid ||
+      viewer?.id ||
+      resolvedProfile?.id ||
+      "-"
+  ).trim() || "-";
+  const savedProfile = resolvedProfile || {};
   const createdAt = viewer?.createdAt || viewer?.profile?.createdAt || null;
   const updatedAt = viewer?.updatedAt || viewer?.profile?.updatedAt || null;
   const allowedPagesCount = Array.isArray(viewer?.allowedPages) ? viewer.allowedPages.length : 0;
@@ -158,6 +222,10 @@ export default function ProfilePage({
       viewer?.title ||
       savedProfile?.position ||
       savedProfile?.jobTitle ||
+      savedProfile?.employeeSnapshot?.position ||
+      savedProfile?.employeeSnapshot?.jobTitle ||
+      savedProfile?.employeeSnapshot?.title ||
+      savedProfile?.employeeSnapshot?.role ||
       savedProfile?.role ||
       ""
   ).trim();
@@ -172,7 +240,14 @@ export default function ProfilePage({
     viewer?.departmentName,
     savedProfile?.departmentName
   );
-  const hiredDate = savedProfile?.startDate || viewer?.startDate || viewer?.profile?.startDate || "";
+  const hiredDate =
+    savedProfile?.startDate ||
+    savedProfile?.employeeSnapshot?.startDate ||
+    savedProfile?.employeeSnapshot?.dateJoined ||
+    savedProfile?.employeeSnapshot?.joinedDate ||
+    viewer?.startDate ||
+    viewer?.profile?.startDate ||
+    "";
 
   const handleSaveEmail = () => {
     setEmailError("");
@@ -255,6 +330,52 @@ export default function ProfilePage({
       setPasswordError(err?.message || "Could not update password.");
     } finally {
       setSavingPassword(false);
+    }
+  };
+
+  const handleSendPasswordResetLink = async () => {
+    setPasswordResetError("");
+    setPasswordResetMessage("");
+
+    const targetEmail = String(passwordResetEmailDraft || "").trim().toLowerCase();
+    const currentEmail = String(viewer?.email || "").trim().toLowerCase();
+
+    if (!targetEmail) {
+      setPasswordResetError("Please enter your login email.");
+      return;
+    }
+
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailPattern.test(targetEmail)) {
+      setPasswordResetError("Please enter a valid email address.");
+      return;
+    }
+
+    if (!currentEmail) {
+      setPasswordResetError("Your login email is not available yet. Please refresh and try again.");
+      return;
+    }
+
+    if (targetEmail !== currentEmail) {
+      setPasswordResetError("Use the same email address currently used to log in.");
+      return;
+    }
+
+    if (typeof onSendOwnPasswordReset !== "function") {
+      setPasswordResetError("Password reset is unavailable for this account.");
+      return;
+    }
+
+    setSendingPasswordReset(true);
+    try {
+      const result = await onSendOwnPasswordReset(targetEmail);
+      setPasswordResetMessage(
+        result?.message || `Reset email sent to ${targetEmail}. Check your inbox/spam and follow the link.`
+      );
+    } catch (err) {
+      setPasswordResetError(err?.message || "Could not send password reset email.");
+    } finally {
+      setSendingPasswordReset(false);
     }
   };
 
@@ -484,6 +605,31 @@ export default function ProfilePage({
             </button>
             {passwordExpanded ? (
               <div className="ppgCollapseBody">
+                <div className="ppgSettingsSub">
+                  Reset password via verification link (recommended). You must use your current login email.
+                </div>
+                <input
+                  type="email"
+                  value={passwordResetEmailDraft}
+                  onChange={(e) => setPasswordResetEmailDraft(e.target.value)}
+                  className="ppgInput"
+                  placeholder="Enter your current login email"
+                  disabled={sendingPasswordReset}
+                />
+                <button
+                  type="button"
+                  className="ppgActionBtn"
+                  onClick={handleSendPasswordResetLink}
+                  disabled={sendingPasswordReset}
+                >
+                  {sendingPasswordReset ? "Sending..." : "Send Reset Link"}
+                </button>
+                {passwordResetError ? <div className="ppgHelper isError">{passwordResetError}</div> : null}
+                {passwordResetMessage ? (
+                  <div className="ppgHelper isSuccess">{passwordResetMessage}</div>
+                ) : null}
+
+                <div className="ppgHelper">Or change password directly below:</div>
                 <input
                   type="password"
                   value={oldPassword}

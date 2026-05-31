@@ -50,6 +50,45 @@ const nameInitials = (name = "") => {
   return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
 };
 
+const resolveEmployeeAvatarUrl = (employee = {}, profile = {}) => {
+  const profileValue = pick(
+    profile || {},
+    [
+      "profileImg",
+      "profileImage",
+      "profileImageUrl",
+      "profilePicture",
+      "profilePictureUrl",
+      "photoURL",
+      "photoUrl",
+      "avatar",
+      "avatarUrl",
+      "image",
+      "imageUrl",
+    ],
+    ""
+  );
+  const employeeValue = pick(
+    employee || {},
+    [
+      "profileImg",
+      "profileImage",
+      "profileImageUrl",
+      "profilePicture",
+      "profilePictureUrl",
+      "photoURL",
+      "photoUrl",
+      "avatar",
+      "avatarUrl",
+      "image",
+      "imageUrl",
+    ],
+    ""
+  );
+  const url = String(profileValue || employeeValue || "").trim();
+  return url;
+};
+
 const formatHoursValue = (value) => {
   const hours = Number(value);
   return Number.isFinite(hours) ? hours.toFixed(2) : "0.00";
@@ -518,6 +557,29 @@ const getScheduledDurationMinutesForDay = (
   }
 
   return resolveScheduledDurationMinutes(item, 600);
+};
+
+const formatScheduleRangeLabelForDay = (
+  scheduleItem,
+  dayKey,
+  businessTimeZone = "America/Chicago"
+) => {
+  if (!scheduleItem || !dayKey) return "No schedule";
+
+  const startMs = getScheduledStartUtcMsForDayKey(scheduleItem, dayKey, businessTimeZone);
+  const endMs = resolveScheduledEndUtcMsForDayKey(scheduleItem, dayKey, businessTimeZone);
+
+  if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
+    return `${formatBreakTimeOnly(startMs, businessTimeZone)} - ${formatBreakTimeOnly(
+      endMs,
+      businessTimeZone
+    )}`;
+  }
+  if (Number.isFinite(startMs)) {
+    return `Starts ${formatBreakTimeOnly(startMs, businessTimeZone)}`;
+  }
+
+  return "Schedule set";
 };
 
 /* ------------------------ status logic ------------------------ */
@@ -2359,6 +2421,76 @@ export default function Dashboard({
     effectiveSelectedAgentAttendanceMonth === AGENT_ATTENDANCE_MONTH_ALL
       ? "No agent data for all months."
       : "No agent data for this month.";
+  const liveAgentIds = useMemo(() => {
+    const out = new Set();
+    for (const row of Array.isArray(liveAgents) ? liveAgents : []) {
+      const id = String(row?.id || row?.userId || row?.uid || "").trim();
+      if (id) out.add(id);
+    }
+    return out;
+  }, [liveAgents]);
+
+  const expectedLoginTodayAgents = useMemo(() => {
+    const dayKey = String(endDate || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return [];
+
+    const rows = [];
+    for (const emp of data.validEmployees) {
+      const userId = String(getUserId(emp) || "").trim();
+      if (!userId) continue;
+
+      const scheduleItem = getScheduleItemForDay(schedulesByUserId, userId, dayKey);
+      if (!scheduleItem) continue;
+
+      const employeeName = getDisplayName(emp);
+      const profile = employeeProfilesByUserId?.[userId] || null;
+      const scheduleLabel = formatScheduleRangeLabelForDay(
+        scheduleItem,
+        dayKey,
+        businessTimeZone
+      );
+      const scheduledStartMs = getScheduledStartUtcMsForDayKey(
+        scheduleItem,
+        dayKey,
+        businessTimeZone
+      );
+
+      rows.push({
+        userId,
+        name: employeeName,
+        initials: nameInitials(employeeName),
+        avatarUrl: resolveEmployeeAvatarUrl(emp, profile || {}),
+        scheduleLabel,
+        scheduledStartMs,
+        isOnline: liveAgentIds.has(userId),
+      });
+    }
+
+    rows.sort((a, b) => {
+      const aStart = Number(a?.scheduledStartMs);
+      const bStart = Number(b?.scheduledStartMs);
+      const aHas = Number.isFinite(aStart);
+      const bHas = Number.isFinite(bStart);
+      if (aHas && bHas && aStart !== bStart) return aStart - bStart;
+      if (aHas && !bHas) return -1;
+      if (!aHas && bHas) return 1;
+      return String(a?.name || "").localeCompare(String(b?.name || ""));
+    });
+
+    return rows;
+  }, [
+    endDate,
+    data.validEmployees,
+    schedulesByUserId,
+    employeeProfilesByUserId,
+    businessTimeZone,
+    liveAgentIds,
+  ]);
+
+  const expectedToLogInTodayAgents = useMemo(
+    () => expectedLoginTodayAgents.filter((agent) => !agent.isOnline),
+    [expectedLoginTodayAgents]
+  );
 
   useEffect(() => {
     if (attendancePieRef.current) {
@@ -3627,6 +3759,54 @@ export default function Dashboard({
               <div className="panelHead">
                 <span>Attendance Breakdown</span>
                 <div className="panelHeadActions">
+                  {expectedToLogInTodayAgents.length > 0 ? (
+                    <div className="attHeadExpectedLoginSection">
+                      <div className="attHeadExpectedLoginHead">
+                        Expected to Log in Today ({expectedToLogInTodayAgents.length})
+                      </div>
+                      <div className="attHeadExpectedLoginAvatars" role="list" aria-label="Expected employees today">
+                        {expectedToLogInTodayAgents.map((agent) => (
+                          <button
+                            key={`att-head-expected-login-agent-${agent.userId}`}
+                            type="button"
+                            className="attHeadExpectedLoginAvatar"
+                            aria-label={`${agent.name} schedule ${agent.scheduleLabel}`}
+                            onMouseEnter={(event) =>
+                              showHoverTooltipFromPointer(event, {
+                                title: agent.name,
+                                lines: [`Schedule: ${agent.scheduleLabel}`],
+                              })
+                            }
+                            onMouseMove={(event) =>
+                              showHoverTooltipFromPointer(event, {
+                                title: agent.name,
+                                lines: [`Schedule: ${agent.scheduleLabel}`],
+                              })
+                            }
+                            onMouseLeave={hideHoverTooltip}
+                            onFocus={(event) =>
+                              showHoverTooltipFromElement(event.currentTarget, {
+                                title: agent.name,
+                                lines: [`Schedule: ${agent.scheduleLabel}`],
+                              })
+                            }
+                            onBlur={hideHoverTooltip}
+                          >
+                            {agent.avatarUrl ? (
+                              <img
+                                src={agent.avatarUrl}
+                                alt={`${agent.name} profile`}
+                                className="attHeadExpectedLoginAvatarImg"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <span className="attHeadExpectedLoginAvatarFallback">{agent.initials}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   {loading ? <div className="dashLoading" /> : null}
                   {!loading && error ? <div className="dashError">{error}</div> : null}
                 </div>
@@ -4036,21 +4216,23 @@ export default function Dashboard({
             <div className="agentAttendancePanelHead">
               Best Attendance Per Employee
             </div>
-            <div className="agentAttendanceMonthFilter">
-              <label htmlFor="agent-attendance-month-filter">Month</label>
-              <select
-                id="agent-attendance-month-filter"
-                className="agentAttendanceMonthSelect"
-                value={effectiveSelectedAgentAttendanceMonth}
-                onChange={(e) => setSelectedAgentAttendanceMonth(e.target.value)}
-              >
-                <option value={AGENT_ATTENDANCE_MONTH_ALL}>All months</option>
-                {availableAgentAttendanceMonths.map((monthKey) => (
-                  <option key={`agent-att-month-${monthKey}`} value={monthKey}>
-                    {prettyMonthLabel(monthKey)}
-                  </option>
-                ))}
-              </select>
+            <div className="agentAttendanceTopRight">
+              <div className="agentAttendanceMonthFilter">
+                <label htmlFor="agent-attendance-month-filter">Month</label>
+                <select
+                  id="agent-attendance-month-filter"
+                  className="agentAttendanceMonthSelect"
+                  value={effectiveSelectedAgentAttendanceMonth}
+                  onChange={(e) => setSelectedAgentAttendanceMonth(e.target.value)}
+                >
+                  <option value={AGENT_ATTENDANCE_MONTH_ALL}>All months</option>
+                  {availableAgentAttendanceMonths.map((monthKey) => (
+                    <option key={`agent-att-month-${monthKey}`} value={monthKey}>
+                      {prettyMonthLabel(monthKey)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
           <div className="agentAttendanceLegend">

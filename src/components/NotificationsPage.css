@@ -165,6 +165,10 @@
   gap: 18px;
 }
 
+.notif-page-grid.notif-page-grid-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .notif-page-card {
   background: #fff;
   border: 1px solid rgba(15, 23, 42, 0.08);

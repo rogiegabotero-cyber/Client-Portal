@@ -3688,11 +3688,33 @@ export default function App() {
   const handleChangeOwnEmail = useCallback(
     async (nextEmail) => {
       const viewerUserId = String(currentViewerIdentity?.userId || "").trim();
-      if (!viewerUserId) {
-        throw new Error("Your user profile is not ready yet. Please try again.");
+      const authUserId = String(
+        user?.uid ?? user?.firebaseUid ?? user?.id ?? user?.userId ?? ""
+      ).trim();
+      if (!authUserId) {
+        throw new Error("Your authentication session is not ready yet. Please try again.");
       }
+      const targetFirestoreUserId = viewerUserId || authUserId;
 
-      const result = await updatePortalUserEmail(viewerUserId, nextEmail);
+      const result = await updatePortalUserEmail(targetFirestoreUserId, nextEmail, {
+        authUserId,
+        requireAuthUpdate: true,
+      });
+      if (result?.pendingVerification) {
+        pushToast({
+          type: "info",
+          title: "Verify New Email",
+          message:
+            result?.message ||
+            "Verification email sent. Please verify the new email from your inbox to complete the change.",
+        });
+        return result;
+      }
+      if (!result?.authUpdated) {
+        throw new Error(
+          "Your profile email was saved, but Authentication email was not updated. Please sign in again and retry."
+        );
+      }
 
       pushToast({
         type: "success",
@@ -3702,7 +3724,44 @@ export default function App() {
 
       return result;
     },
-    [currentViewerIdentity?.userId, pushToast]
+    [currentViewerIdentity?.userId, pushToast, user?.firebaseUid, user?.id, user?.uid, user?.userId]
+  );
+
+  const handleSendOwnPasswordReset = useCallback(
+    async (email) => {
+      const requestedEmail = String(email || "").trim().toLowerCase();
+      const loginEmail = String(user?.email || "").trim().toLowerCase();
+
+      if (!requestedEmail) {
+        throw new Error("Email is required.");
+      }
+      if (!loginEmail) {
+        throw new Error("Your current login email is unavailable. Please sign in again.");
+      }
+      if (requestedEmail !== loginEmail) {
+        throw new Error("Please enter the same email address you used to log in.");
+      }
+
+      try {
+        const result = await sendPortalUserPasswordResetEmail(requestedEmail);
+        pushToast({
+          type: "success",
+          title: "Reset Email Sent",
+          message:
+            result?.message ||
+            `Reset email sent to ${requestedEmail}. Open the link from your inbox/spam to continue.`,
+        });
+        return result;
+      } catch (err) {
+        pushToast({
+          type: "error",
+          title: "Reset Failed",
+          message: err?.message || "Could not send password reset email.",
+        });
+        throw err;
+      }
+    },
+    [pushToast, user?.email]
   );
 
   const handlePostAnnouncement = useCallback(
@@ -5717,11 +5776,6 @@ export default function App() {
                 <span>{isRestartingSessions ? "Restarting..." : "Restart Sessions"}</span>
               </button>
             ) : null}
-
-            <button className="portal-btn portal-btn-danger" onClick={handleLogoutClick}>
-              <LogOut size={16} strokeWidth={2} />
-              <span>Logout</span>
-            </button>
           </div>
         </div>
 
@@ -5827,6 +5881,7 @@ export default function App() {
                     archivedNotifications={archivedNotifications}
                     overBreakNotes={overBreakNotes}
                     archivedOverBreakNotes={archivedOverBreakNotes}
+                    viewerRole={user?.role || ""}
                     onMarkNotificationRead={handleNotificationClick}
                     onMarkAllRead={handleMarkAllNotificationsRead}
                     onResetAllNotificationData={handleResetAllNotificationsData}
@@ -5977,6 +6032,7 @@ export default function App() {
                     tabRequestId={profilePageRequest.requestId}
                     onChangeOwnPassword={handleChangeOwnPassword}
                     onChangeOwnEmail={handleChangeOwnEmail}
+                    onSendOwnPasswordReset={handleSendOwnPasswordReset}
                   />
                 </div>
               )}

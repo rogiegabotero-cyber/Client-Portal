@@ -17,6 +17,7 @@ export default function NotificationsPage({
   archivedNotifications = [],
   overBreakNotes = [],
   archivedOverBreakNotes = [],
+  viewerRole = "",
   onMarkNotificationRead,
   onMarkAllRead,
   onResetAllNotificationData,
@@ -34,6 +35,8 @@ export default function NotificationsPage({
   canManageNotificationArchive = false,
   businessTimeZone = "America/Chicago",
 }) {
+  const normalizedViewerRole = String(viewerRole || "").trim().toLowerCase();
+  const isVisitorViewer = normalizedViewerRole === "visitor";
   const [showArchive, setShowArchive] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [confirmState, setConfirmState] = useState({
@@ -316,7 +319,7 @@ export default function NotificationsPage({
         </div>
       </div>
 
-      <div className="notif-page-grid">
+      <div className={`notif-page-grid ${isVisitorViewer ? "notif-page-grid-single" : ""}`}>
         <div className="notif-page-card">
           <div className="notif-page-card-head">
             <span>{isArchiveView ? "Inbox Archive" : "Inbox"}</span>
@@ -440,119 +443,121 @@ export default function NotificationsPage({
           </div>
         </div>
 
-        <div className="notif-page-card">
-          <div className="notif-page-card-head">
-            <span>{isArchiveView ? "Over-break Archive" : "Over-break records"}</span>
-            <div className="notif-page-card-head-actions">
-              {canArchiveActions ? (
-                <button
-                  type="button"
-                  className="notif-page-icon-btn"
-                  onClick={() => openConfirm("archive_overbreak_all")}
-                  disabled={overBreakIds.length === 0}
-                  aria-label="Move all over-break records to archive"
-                  title="Move all to archive"
-                >
-                  <Trash2 size={14} />
-                </button>
-              ) : null}
-              {canArchivedItemActions ? (
-                <button
-                  type="button"
-                  className="notif-page-delete-all-btn"
-                  onClick={() => openConfirm("delete_archived_overbreak_all")}
-                  disabled={!canPermanentDeleteActions || archivedOverBreakIds.length === 0}
-                >
-                  Delete All Permanently
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="notif-page-list">
-            {visibleOverBreakNotes.length === 0 ? (
-              <div className="notif-page-empty">
-                {isArchiveView
-                  ? "No archived over-break records yet"
-                  : "No over-break records yet"}
+        {!isVisitorViewer ? (
+          <div className="notif-page-card">
+            <div className="notif-page-card-head">
+              <span>{isArchiveView ? "Over-break Archive" : "Over-break records"}</span>
+              <div className="notif-page-card-head-actions">
+                {canArchiveActions ? (
+                  <button
+                    type="button"
+                    className="notif-page-icon-btn"
+                    onClick={() => openConfirm("archive_overbreak_all")}
+                    disabled={overBreakIds.length === 0}
+                    aria-label="Move all over-break records to archive"
+                    title="Move all to archive"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : null}
+                {canArchivedItemActions ? (
+                  <button
+                    type="button"
+                    className="notif-page-delete-all-btn"
+                    onClick={() => openConfirm("delete_archived_overbreak_all")}
+                    disabled={!canPermanentDeleteActions || archivedOverBreakIds.length === 0}
+                  >
+                    Delete All Permanently
+                  </button>
+                ) : null}
               </div>
-            ) : (
-              visibleOverBreakNotes.map((note) => (
-                <div key={note.id} className="notif-page-row">
-                  {canArchiveActions || canArchivedItemActions ? (
+            </div>
+
+            <div className="notif-page-list">
+              {visibleOverBreakNotes.length === 0 ? (
+                <div className="notif-page-empty">
+                  {isArchiveView
+                    ? "No archived over-break records yet"
+                    : "No over-break records yet"}
+                </div>
+              ) : (
+                visibleOverBreakNotes.map((note) => (
+                  <div key={note.id} className="notif-page-row">
+                    {canArchiveActions || canArchivedItemActions ? (
+                      <div
+                        className={`notif-page-side-actions ${
+                          canArchivedItemActions && canPermanentDeleteActions ? "double" : ""
+                        }`}
+                      >
+                        {canArchiveActions ? (
+                          <button
+                            type="button"
+                            className="notif-page-side-btn"
+                            onClick={() => onArchiveOverBreakNote?.(note?.id)}
+                            aria-label="Move over-break record to archive"
+                            title="Move to archive"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        ) : null}
+                        {canArchivedItemActions && canPermanentDeleteActions ? (
+                          <button
+                            type="button"
+                            className="notif-page-side-btn"
+                            onClick={() =>
+                              openConfirm("delete_archived_overbreak", {
+                                targetId: note?.id,
+                              })
+                            }
+                            aria-label="Delete archived over-break record"
+                            title="Delete permanently"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        ) : null}
+                        {canArchivedItemActions ? (
+                          <button
+                            type="button"
+                            className="notif-page-side-btn restore"
+                            onClick={() => onRestoreArchivedOverBreakNote?.(note?.id)}
+                            aria-label="Restore over-break record"
+                            title="Restore"
+                          >
+                            <RotateCcw size={14} />
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+
                     <div
-                      className={`notif-page-side-actions ${
-                        canArchivedItemActions && canPermanentDeleteActions ? "double" : ""
+                      className={`notif-page-overbreak ${
+                        canArchiveActions || canArchivedItemActions ? "has-side-btn" : ""
                       }`}
                     >
-                      {canArchiveActions ? (
-                        <button
-                          type="button"
-                          className="notif-page-side-btn"
-                          onClick={() => onArchiveOverBreakNote?.(note?.id)}
-                          aria-label="Move over-break record to archive"
-                          title="Move to archive"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      ) : null}
-                      {canArchivedItemActions && canPermanentDeleteActions ? (
-                        <button
-                          type="button"
-                          className="notif-page-side-btn"
-                          onClick={() =>
-                            openConfirm("delete_archived_overbreak", {
-                              targetId: note?.id,
-                            })
-                          }
-                          aria-label="Delete archived over-break record"
-                          title="Delete permanently"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      ) : null}
-                      {canArchivedItemActions ? (
-                        <button
-                          type="button"
-                          className="notif-page-side-btn restore"
-                          onClick={() => onRestoreArchivedOverBreakNote?.(note?.id)}
-                          aria-label="Restore over-break record"
-                          title="Restore"
-                        >
-                          <RotateCcw size={14} />
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  <div
-                    className={`notif-page-overbreak ${
-                      canArchiveActions || canArchivedItemActions ? "has-side-btn" : ""
-                    }`}
-                  >
-                    <div className="notif-page-item-top">
-                      <div className="notif-page-item-title">
-                        {note?.name || note?.email || note?.userId || "Employee"}
+                      <div className="notif-page-item-top">
+                        <div className="notif-page-item-title">
+                          {note?.name || note?.email || note?.userId || "Employee"}
+                        </div>
+                        <div className="notif-page-item-date">
+                          {formatDateTime(note?.updatedAt || note?.createdAt, businessTimeZone)}
+                        </div>
                       </div>
-                      <div className="notif-page-item-date">
-                        {formatDateTime(note?.updatedAt || note?.createdAt, businessTimeZone)}
+
+                      <div className="notif-page-overbreak-meta">
+                        <span>Total break: {note?.totalBreakMinutes ?? 0} min</span>
+                        <span>Over-break: {note?.overBreakMinutes ?? 0} min</span>
                       </div>
-                    </div>
 
-                    <div className="notif-page-overbreak-meta">
-                      <span>Total break: {note?.totalBreakMinutes ?? 0} min</span>
-                      <span>Over-break: {note?.overBreakMinutes ?? 0} min</span>
-                    </div>
-
-                    <div className="notif-page-item-message">
-                      {note?.note || "Over-break saved."}
+                      <div className="notif-page-item-message">
+                        {note?.note || "Over-break saved."}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
-            )}
+                ))
+              )}
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       <ConfirmModal

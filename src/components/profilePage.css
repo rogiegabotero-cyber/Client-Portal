@@ -167,7 +167,7 @@
 
 .ppgWorkCardValue {
   margin-top: 8px;
-  font-size: 26px;
+  font-size: 14px;
   font-weight: 700;
   color: #1f2937;
   line-height: 1.35;
@@ -188,7 +188,7 @@
   background: #e5e7eb;
   color: #374151;
   padding: 4px 10px;
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
@@ -201,7 +201,7 @@
 }
 
 .ppgTimelineTitle {
-  font-size: 25px;
+  font-size: 14px;
   font-weight: 800;
   color: #1f2937;
 }
@@ -209,7 +209,7 @@
 .ppgTimelineSub {
   margin-top: 2px;
   color: #64748b;
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .ppgTimelineItem {
@@ -235,14 +235,14 @@
 }
 
 .ppgTimelineItemLabel {
-  font-size: 16px;
+  font-size: 12px;
   font-weight: 700;
   color: #6b7280;
 }
 
 .ppgTimelineItemValue {
   margin-top: 2px;
-  font-size: 26px;
+  font-size: 14px;
   font-weight: 700;
   color: #1f2937;
 }
@@ -267,7 +267,7 @@
 
 .ppgInfoCard strong {
   color: #0f172a;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
@@ -285,7 +285,7 @@
 }
 
 .ppgSettingsTitle {
-  font-size: 22px;
+  font-size: 14px;
   font-weight: 700;
   color: #1f2937;
 }
@@ -293,7 +293,7 @@
 .ppgSettingsSub {
   margin-top: 2px;
   color: #64748b;
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .ppgActionBtn {
@@ -303,7 +303,7 @@
   color: #ffffff;
   min-height: 36px;
   padding: 0 14px;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
@@ -339,7 +339,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 700;
 }
 
