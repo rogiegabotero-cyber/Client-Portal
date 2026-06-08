@@ -43,6 +43,7 @@
 
 .top-header-clock-card.is-on-break {
   background: none;
+  padding-right: 10px;
 }
 
 .top-header-clock-title {
@@ -84,6 +85,7 @@
 .top-header-clock-break {
   color: #92400e;
   font-weight: 700;
+  display: none;
 }
 
 /* Search */

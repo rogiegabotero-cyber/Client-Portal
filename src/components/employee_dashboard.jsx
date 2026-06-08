@@ -29,7 +29,9 @@ import {
   MoreVertical,
   Palette,
   Pencil,
+  Pause,
   Pin,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -472,6 +474,8 @@ const NOTEPAD_TABLE_PICKER_MAX_COLS = 8;
 const NOTEPAD_DOCS_CACHE_BY_EMPLOYEE = new Map();
 const NOTEPAD_NOTIFICATION_EVENT_CACHE = new Set();
 const NOTEPAD_REFRESH_SIGNAL_COLLECTION = "employee_notepad_refresh_signals";
+const NOTEPAD_LOCAL_DRAFT_STORAGE_PREFIX = "emp_notepad_local_draft";
+const NOTEPAD_LOCAL_DRAFT_VERSION = 1;
 const EMP_SIDE_COLUMN_MIN_WIDTH_PX = 220;
 const EMP_SIDE_COLUMN_MAX_WIDTH_RATIO = 0.6;
 const EMP_SIDE_COLUMN_WIDTH_STORAGE_PREFIX = "emp_dash_side_col_width";
@@ -501,6 +505,51 @@ const normalizeNotepadColorKey = (value = "") => {
   const raw = String(value || "").trim().toLowerCase();
   if (raw && NOTEPAD_COLOR_THEMES[raw]) return raw;
   return DEFAULT_NOTEPAD_COLOR_KEY;
+};
+
+const getNotepadLocalDraftStorageKey = (employeeUserId = "", noteId = "") => {
+  const employeeKey = toText(employeeUserId) || "unknown";
+  const noteKey = toText(noteId) || "new-personal";
+  return `${NOTEPAD_LOCAL_DRAFT_STORAGE_PREFIX}:${employeeKey}:${noteKey}`;
+};
+
+const readNotepadLocalDraft = (storageKey = "") => {
+  if (!storageKey || typeof window === "undefined" || !window.localStorage) return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || Number(parsed?.version) !== NOTEPAD_LOCAL_DRAFT_VERSION) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const writeNotepadLocalDraft = (storageKey = "", payload = {}) => {
+  if (!storageKey || typeof window === "undefined" || !window.localStorage) return false;
+  try {
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: NOTEPAD_LOCAL_DRAFT_VERSION,
+        updatedAtMs: Date.now(),
+        ...payload,
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const removeNotepadLocalDraft = (storageKey = "") => {
+  if (!storageKey || typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.removeItem(storageKey);
+  } catch {
+    // Local draft cleanup should never block a successful note save.
+  }
 };
 
 const resolveNotepadDeadlineValue = (data = {}) => {
@@ -587,6 +636,43 @@ const prettyMonthLabel = (monthKey = "") => {
   const d = new Date(`${monthKey}-01T12:00:00Z`);
   if (Number.isNaN(d.getTime())) return monthKey;
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+};
+
+const parseYmdToUtcNoon = (ymd = "") => {
+  const d = new Date(`${ymd}T12:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const ymdFromUtcDate = (date) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+};
+
+const enumerateYmdRange = (startYmd = "", endYmd = "") => {
+  const start = parseYmdToUtcNoon(startYmd);
+  const end = parseYmdToUtcNoon(endYmd);
+  if (!start || !end || start > end) return [];
+
+  const days = [];
+  const cur = new Date(start.getTime());
+  while (cur <= end) {
+    days.push(ymdFromUtcDate(cur));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return days;
+};
+
+const startOfWeekYmd = (ymd = "") => {
+  const d = parseYmdToUtcNoon(ymd);
+  if (!d) return ymd;
+  d.setUTCDate(d.getUTCDate() - d.getUTCDay());
+  return ymdFromUtcDate(d);
+};
+
+const prettyDayLabel = (ymd = "") => {
+  const d = parseYmdToUtcNoon(ymd);
+  if (!d) return String(ymd || "-");
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 };
 
 const buildPieConicGradient = (slices = [], total = 0) => {
@@ -882,7 +968,7 @@ const applyNotepadFontSizeInEditor = (editorEl, fontSizePx) => {
     if (!selectedRange) return false;
     try {
       return selectedRange.intersectsNode(nodeEl);
-    } catch (_err) {
+    } catch {
       return false;
     }
   };
@@ -1175,6 +1261,7 @@ export default function EmployeeDashboard({
   const [notepadDeadlineDraft, setNotepadDeadlineDraft] = useState("");
   const [notepadContentDraft, setNotepadContentDraft] = useState(EMPTY_NOTEPAD_HTML);
   const [notepadDirty, setNotepadDirty] = useState(false);
+  const [notepadColorDraftSaving, setNotepadColorDraftSaving] = useState(false);
   const [notepadChecklistChangeVersion, setNotepadChecklistChangeVersion] = useState(0);
   const [notepadLastChecklistChange, setNotepadLastChecklistChange] = useState(null);
   const [savingNotepadNote, setSavingNotepadNote] = useState(false);
@@ -1196,6 +1283,11 @@ export default function EmployeeDashboard({
     note: null,
   });
   const [notepadConfirmBusy, setNotepadConfirmBusy] = useState(false);
+  const [notepadExitGuardState, setNotepadExitGuardState] = useState({
+    open: false,
+    reason: "",
+  });
+  const [notepadExitGuardBusy, setNotepadExitGuardBusy] = useState(false);
   const [dashboardDisplayHtml, setDashboardDisplayHtml] = useState("");
   const [dashboardDisplayDirty, setDashboardDisplayDirty] = useState(false);
   const [dashboardDisplaySaving, setDashboardDisplaySaving] = useState(false);
@@ -1206,6 +1298,7 @@ export default function EmployeeDashboard({
   const [isDashboardNoteMenuOpen, setIsDashboardNoteMenuOpen] = useState(false);
   const [isDashboardUnpinConfirmOpen, setIsDashboardUnpinConfirmOpen] = useState(false);
   const [dashboardNoteColorUpdatingId, setDashboardNoteColorUpdatingId] = useState("");
+  const [dashboardColorSavePendingId, setDashboardColorSavePendingId] = useState("");
   const [notepadTableMenuState, setNotepadTableMenuState] = useState({
     open: false,
     x: 0,
@@ -1243,7 +1336,7 @@ export default function EmployeeDashboard({
   const notepadTableSelectionAnchorRef = useRef(null);
   const notepadTableResizeStateRef = useRef(null);
   const notepadSelectionRangeRef = useRef(null);
-  const saveNotepadNoteRef = useRef(null);
+  const notepadPendingExitActionRef = useRef(null);
   const saveDashboardDisplayNoteRef = useRef(null);
   const dashboardColorSaveTimerRef = useRef(null);
   const dashboardColorPendingPayloadRef = useRef(null);
@@ -1814,6 +1907,162 @@ export default function EmployeeDashboard({
     return days.size;
   }, [nowMs, hasHistory, historyLogs, logsToday, businessTimeZone]);
 
+  const selectedEmployeeDotMonth = useMemo(() => {
+    const endDateMonth = /^\d{4}-\d{2}-\d{2}$/.test(String(endDate || ""))
+      ? String(endDate).slice(0, 7)
+      : "";
+    if (endDateMonth) return endDateMonth;
+    return monthKeyFromMsInZone(nowMs || Date.now(), businessTimeZone);
+  }, [endDate, nowMs, businessTimeZone]);
+
+  const selectedEmployeeDotDayKeys = useMemo(() => {
+    if (!/^\d{4}-\d{2}$/.test(selectedEmployeeDotMonth)) return [];
+    const start = `${selectedEmployeeDotMonth}-01`;
+    const startDate = parseYmdToUtcNoon(start);
+    if (!startDate) return [];
+    const endDateObj = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0, 12, 0, 0));
+    return enumerateYmdRange(start, ymdFromUtcDate(endDateObj));
+  }, [selectedEmployeeDotMonth]);
+
+  const selectedEmployeeDotWeekGroups = useMemo(() => {
+    if (!selectedEmployeeDotDayKeys.length) return [];
+    const groups = [];
+    let activeWeekKey = "";
+    let activeGroup = [];
+
+    for (const dayKey of selectedEmployeeDotDayKeys) {
+      const weekKey = startOfWeekYmd(dayKey);
+      if (weekKey !== activeWeekKey) {
+        if (activeGroup.length) groups.push(activeGroup);
+        activeWeekKey = weekKey;
+        activeGroup = [];
+      }
+      activeGroup.push(dayKey);
+    }
+
+    if (activeGroup.length) groups.push(activeGroup);
+    return groups;
+  }, [selectedEmployeeDotDayKeys]);
+
+  const selectedEmployeeDotWeekLabels = useMemo(
+    () =>
+      selectedEmployeeDotWeekGroups.map((weekDays) => {
+        const firstDay = (weekDays[0] || "").slice(-2).replace(/^0/, "") || "-";
+        const lastDay = (weekDays[weekDays.length - 1] || weekDays[0] || "").slice(-2).replace(/^0/, "") || firstDay;
+        return `${firstDay} - ${lastDay}`;
+      }),
+    [selectedEmployeeDotWeekGroups]
+  );
+
+  const selectedEmployeeDotWeekTrackStyle = useMemo(
+    () => ({
+      "--break-employee-dot-week-count": Math.max(1, selectedEmployeeDotWeekLabels.length),
+    }),
+    [selectedEmployeeDotWeekLabels.length]
+  );
+
+  const selectedEmployeeDotRangeLabel = useMemo(() => {
+    if (!selectedEmployeeDotDayKeys.length || !selectedEmployeeDotMonth) return "No month selected";
+    const lastDay = selectedEmployeeDotDayKeys[selectedEmployeeDotDayKeys.length - 1]?.slice(-2).replace(/^0/, "");
+    return `From 1 - ${lastDay} ${prettyMonthLabel(selectedEmployeeDotMonth)}`;
+  }, [selectedEmployeeDotDayKeys, selectedEmployeeDotMonth]);
+
+  const selectedEmployeeDotRow = useMemo(() => {
+    if (!effectiveSelectedId || !selectedEmployeeDotWeekGroups.length) return null;
+    const zone = String(businessTimeZone || "").trim() || "America/Chicago";
+    const sourceLogs = mergeAttendanceScoreLogs(logsToday, historyLogs);
+    const byDay = new Map();
+    const bucketLabelByKey = ATTENDANCE_BUCKETS.reduce((acc, item) => {
+      acc[item.key] = item.label;
+      return acc;
+    }, {});
+
+    for (const log of sourceLogs) {
+      const dayKey = getAttendanceScoreDayKey(log, zone);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey) || !dayKey.startsWith(`${selectedEmployeeDotMonth}-`)) continue;
+      if (!byDay.has(dayKey)) byDay.set(dayKey, []);
+      byDay.get(dayKey).push(log);
+    }
+
+    const loggedDayKeys = Array.from(byDay.keys()).sort();
+    const firstDayKey = loggedDayKeys[0] || "";
+    const currentMonth = monthKeyFromMsInZone(nowMs || Date.now(), zone);
+    const effectiveEndDate =
+      /^\d{4}-\d{2}-\d{2}$/.test(String(endDate || ""))
+        ? String(endDate)
+        : dayKeyFromMsInZone(nowMs || Date.now(), zone) || "";
+    const selectedMonthIsCurrent = selectedEmployeeDotMonth === currentMonth;
+
+    let loggedDays = 0;
+    let eligibleDays = 0;
+    const weeks = selectedEmployeeDotWeekGroups.map((weekDays) =>
+      weekDays.map((dayKey) => {
+        if (!firstDayKey || dayKey >= firstDayKey) eligibleDays += 1;
+
+        const dayLogs = byDay.get(dayKey) || [];
+        if (dayLogs.length) {
+          const primaryLog = pickPrimaryAttendanceLogForScore(dayLogs);
+          const statusText = getAttendanceStatusText(primaryLog || {});
+          let bucket = normalizeAttendanceScoreBucket(statusText);
+          const typeText = normalize(pick(primaryLog || {}, ["type", "logType", "eventType"], ""));
+          if (!bucket && typeText.includes("in")) bucket = "onTime";
+
+          loggedDays += 1;
+          return {
+            key: `${effectiveSelectedId}-${dayKey}`,
+            className: bucket ? `dash-tone-${bucket}` : "isUnknown",
+            label: bucketLabelByKey[bucket] || "Logged",
+            dayKey,
+          };
+        }
+
+        if (firstDayKey && dayKey < firstDayKey) {
+          return {
+            key: `${effectiveSelectedId}-${dayKey}`,
+            className: "isInactive",
+            label: "Not started yet",
+            dayKey,
+          };
+        }
+
+        if (selectedMonthIsCurrent && effectiveEndDate && dayKey > effectiveEndDate) {
+          return {
+            key: `${effectiveSelectedId}-${dayKey}`,
+            className: "isFuture",
+            label: "Upcoming day",
+            dayKey,
+          };
+        }
+
+        return {
+          key: `${effectiveSelectedId}-${dayKey}`,
+          className: "isMissing",
+          label: "No log",
+          dayKey,
+        };
+      })
+    );
+
+    const selectedName = toText(getDisplayName(employee)) || "Selected Employee";
+    return {
+      userId: String(effectiveSelectedId),
+      name: selectedName,
+      initials: initialsFromName(selectedName),
+      meta: `${loggedDays}/${eligibleDays} logged days`,
+      weeks,
+    };
+  }, [
+    effectiveSelectedId,
+    employee,
+    selectedEmployeeDotWeekGroups,
+    selectedEmployeeDotMonth,
+    nowMs,
+    endDate,
+    logsToday,
+    historyLogs,
+    businessTimeZone,
+  ]);
+
   const selectedBreakLogs = useMemo(() => {
     const uid = normalizedSelectedUserId;
     if (!uid) return [];
@@ -1915,15 +2164,18 @@ export default function EmployeeDashboard({
     Math.max(0, (breakMinutesLeft / Math.max(1, breakLimitMinutes)) * 100)
   );
   const breakProgressPercent = Math.round(breakRemainingPct);
-  const breakSparkleLeftPct = Math.min(99.5, Math.max(0.5, breakProgressPercent));
   const showBreakWarningMarker = breakMinutesLeft > 0 && breakMinutesLeft <= 5;
   const breakRemainingRatio = Math.min(1, Math.max(0, breakMinutesLeft / Math.max(1, breakLimitMinutes)));
   const breakProgressHue = Math.round(120 * breakRemainingRatio);
   const breakProgressColor = `hsl(${breakProgressHue} 78% 42%)`;
-  const breakThirtyMinuteMarkerPct = Math.min(
-    100,
-    Math.max(0, (30 / Math.max(1, breakLimitMinutes)) * 100)
-  );
+  const breakDonutOffset = 100 - breakProgressPercent;
+  const breakDonutAngle = breakProgressPercent * 3.6;
+  const breakThirtyMinuteMarkerAngle =
+    -Math.min(100, Math.max(0, (30 / Math.max(1, breakLimitMinutes)) * 100)) * 3.6;
+  const breakSecondsLeftTotal = Math.max(0, Math.ceil(breakMinutesLeft * 60));
+  const breakMinutesCounter = Math.floor(breakSecondsLeftTotal / 60);
+  const breakSecondsCounter = breakSecondsLeftTotal % 60;
+  const breakSecondsLabel = String(breakSecondsCounter).padStart(2, "0");
   let breakProgressVariant = "good";
   if (breakMinutesLeft <= 10) breakProgressVariant = "danger";
   else if (breakMinutesLeft <= 20) breakProgressVariant = "warning";
@@ -1940,6 +2192,7 @@ export default function EmployeeDashboard({
   });
 
   const canStartBreak = !isOnBreak && breakMinutesLeft > 0;
+  const breakToggleLabel = isOnBreak ? "Back to work" : "Take a break";
 
   async function handleBreakToggle() {
     if (!employee) return;
@@ -2080,6 +2333,10 @@ export default function EmployeeDashboard({
         (note) => String(note?.id || "") === String(selectedNotepadNoteId || "")
       ) || null,
     [notepadNotes, selectedNotepadNoteId]
+  );
+  const notepadLocalDraftStorageKey = useMemo(
+    () => getNotepadLocalDraftStorageKey(effectiveSelectedId, selectedNotepadNoteId),
+    [effectiveSelectedId, selectedNotepadNoteId]
   );
 
   const formatNotepadDateLabel = useCallback(
@@ -2310,6 +2567,68 @@ export default function EmployeeDashboard({
     setNotepadContentDraft(notepadEditorRef.current.innerHTML || EMPTY_NOTEPAD_HTML);
   }, []);
 
+  const getCurrentNotepadDraftSnapshot = useCallback(() => {
+    const editorHtml = notepadEditorRef.current?.innerHTML || notepadContentDraft || EMPTY_NOTEPAD_HTML;
+    const contentHtml =
+      String(serializeNotepadEditorHtml(notepadEditorRef.current, editorHtml) || "").trim() ||
+      EMPTY_NOTEPAD_HTML;
+
+    return {
+      employeeUserId: String(effectiveSelectedId || "").trim(),
+      noteId: String(selectedNotepadNoteId || "").trim(),
+      noteScope:
+        normalizeNotepadScope(selectedNotepadNote?.noteScope) ||
+        (String(notepadViewMode || "") === NOTEPAD_VIEW_GROUP ? "group" : "personal"),
+      title: String(notepadTitleDraft || ""),
+      noteColorKey: normalizeNotepadColorKey(notepadColorDraft || selectedNotepadNote?.noteColorKey),
+      deadlineDraft: String(notepadDeadlineDraft || ""),
+      contentHtml,
+      checklistChangeVersion: Number(notepadChecklistChangeVersion) || 0,
+      lastChecklistChange: notepadLastChecklistChange || null,
+    };
+  }, [
+    effectiveSelectedId,
+    selectedNotepadNoteId,
+    selectedNotepadNote,
+    notepadViewMode,
+    notepadTitleDraft,
+    notepadColorDraft,
+    notepadDeadlineDraft,
+    notepadContentDraft,
+    notepadChecklistChangeVersion,
+    notepadLastChecklistChange,
+  ]);
+
+  const persistCurrentNotepadLocalDraft = useCallback(() => {
+    if (!notepadLocalDraftStorageKey) return false;
+    return writeNotepadLocalDraft(notepadLocalDraftStorageKey, getCurrentNotepadDraftSnapshot());
+  }, [notepadLocalDraftStorageKey, getCurrentNotepadDraftSnapshot]);
+
+  const hasPendingNotepadLocalDraft = useCallback(() => {
+    if (!isNotepadDrawerOpen) return false;
+    if (String(notepadViewMode || "") === NOTEPAD_VIEW_BIN) return false;
+    if (savingNotepadNote) return false;
+    return !!notepadDirty;
+  }, [isNotepadDrawerOpen, notepadViewMode, savingNotepadNote, notepadDirty]);
+
+  const requestNotepadDraftTransition = useCallback(
+    (pendingAction, reason = "") => {
+      if (!hasPendingNotepadLocalDraft()) {
+        pendingAction?.();
+        return true;
+      }
+
+      persistCurrentNotepadLocalDraft();
+      notepadPendingExitActionRef.current = typeof pendingAction === "function" ? pendingAction : null;
+      setNotepadExitGuardState({
+        open: true,
+        reason: String(reason || "").trim(),
+      });
+      return false;
+    },
+    [hasPendingNotepadLocalDraft, persistCurrentNotepadLocalDraft]
+  );
+
   const refreshNotepadToolbarState = useCallback(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
     const editorEl = notepadEditorRef.current;
@@ -2344,14 +2663,14 @@ export default function EmployeeDashboard({
     }
     try {
       notepadSelectionRangeRef.current = selection.getRangeAt(0).cloneRange();
-    } catch (_err) {
+    } catch {
       notepadSelectionRangeRef.current = null;
     }
 
     const safeQueryState = (commandName) => {
       try {
         return !!document.queryCommandState(commandName);
-      } catch (_err) {
+      } catch {
         return false;
       }
     };
@@ -2453,7 +2772,7 @@ export default function EmployeeDashboard({
         try {
           selection.removeAllRanges();
           selection.addRange(notepadSelectionRangeRef.current.cloneRange());
-        } catch (_err) {
+        } catch {
           // Selection can become stale when editor DOM changes; ignore and continue with caret at focus.
         }
       }
@@ -2849,24 +3168,26 @@ export default function EmployeeDashboard({
   );
 
   const startNewNotepadNote = useCallback(() => {
-    setNotepadViewMode(NOTEPAD_VIEW_MY);
-    setIsNotepadGroupCreatorOpen(false);
-    setNotepadGroupMemberDraft([]);
-    setNotepadAddMemberNoteId("");
-    setNotepadAddMemberDraft([]);
-    setSelectedNotepadNoteId("");
-    setNotepadTitleDraft("");
-    setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
-    setNotepadDeadlineDraft("");
-    setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
-    setNotepadDirty(false);
-    setNotepadStatusText("New note ready.");
-    setNotepadError("");
-    if (notepadEditorRef.current) {
-      notepadEditorRef.current.innerHTML = EMPTY_NOTEPAD_HTML;
-      notepadEditorRef.current.focus();
-    }
-  }, []);
+    requestNotepadDraftTransition(() => {
+      setNotepadViewMode(NOTEPAD_VIEW_MY);
+      setIsNotepadGroupCreatorOpen(false);
+      setNotepadGroupMemberDraft([]);
+      setNotepadAddMemberNoteId("");
+      setNotepadAddMemberDraft([]);
+      setSelectedNotepadNoteId("");
+      setNotepadTitleDraft("");
+      setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
+      setNotepadDeadlineDraft("");
+      setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
+      setNotepadDirty(false);
+      setNotepadStatusText("New note ready.");
+      setNotepadError("");
+      if (notepadEditorRef.current) {
+        notepadEditorRef.current.innerHTML = EMPTY_NOTEPAD_HTML;
+        notepadEditorRef.current.focus();
+      }
+    }, "new_note");
+  }, [requestNotepadDraftTransition]);
 
   const openCreateGroupNotepad = useCallback(() => {
     const selectedEmployeeUserId = String(effectiveSelectedId || "").trim();
@@ -2875,21 +3196,23 @@ export default function EmployeeDashboard({
       return;
     }
 
-    const defaultMemberIds = sanitizeNotepadMemberUserIds([selectedEmployeeUserId]);
-    setNotepadViewMode(NOTEPAD_VIEW_GROUP);
-    setSelectedNotepadNoteId("");
-    setNotepadTitleDraft("");
-    setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
-    setNotepadDeadlineDraft("");
-    setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
-    setNotepadDirty(false);
-    setNotepadStatusText("");
-    setNotepadError("");
-    setNotepadAddMemberNoteId("");
-    setNotepadAddMemberDraft([]);
-    setNotepadGroupMemberDraft(defaultMemberIds);
-    setIsNotepadGroupCreatorOpen(true);
-  }, [effectiveSelectedId]);
+    requestNotepadDraftTransition(() => {
+      const defaultMemberIds = sanitizeNotepadMemberUserIds([selectedEmployeeUserId]);
+      setNotepadViewMode(NOTEPAD_VIEW_GROUP);
+      setSelectedNotepadNoteId("");
+      setNotepadTitleDraft("");
+      setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
+      setNotepadDeadlineDraft("");
+      setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
+      setNotepadDirty(false);
+      setNotepadStatusText("");
+      setNotepadError("");
+      setNotepadAddMemberNoteId("");
+      setNotepadAddMemberDraft([]);
+      setNotepadGroupMemberDraft(defaultMemberIds);
+      setIsNotepadGroupCreatorOpen(true);
+    }, "group_note");
+  }, [effectiveSelectedId, requestNotepadDraftTransition]);
 
   const toggleGroupNoteMemberDraft = useCallback(
     (memberUserId) => {
@@ -3721,15 +4044,16 @@ export default function EmployeeDashboard({
   ]);
 
   const saveNotepadNote = useCallback(async () => {
-    if (savingNotepadNote) return;
+    if (savingNotepadNote) return false;
 
     const employeeUserId = String(effectiveSelectedId || "").trim();
-    if (!employeeUserId) return;
+    if (!employeeUserId) return false;
     if (!selectedNotepadNoteId && String(notepadViewMode || "") === NOTEPAD_VIEW_GROUP) {
       setNotepadError("Use + Create Group Note to start a shared note.");
-      return;
+      return false;
     }
 
+    const draftStorageKey = notepadLocalDraftStorageKey;
     const editorHtml = notepadEditorRef.current?.innerHTML || notepadContentDraft || EMPTY_NOTEPAD_HTML;
     const persistedHtml = serializeNotepadEditorHtml(notepadEditorRef.current, editorHtml);
     const finalContentHtml = String(persistedHtml || "").trim() || EMPTY_NOTEPAD_HTML;
@@ -3742,11 +4066,13 @@ export default function EmployeeDashboard({
     const hasDeadline = Number.isFinite(deadlineMs);
     const isCreatingNewNote = !String(selectedNotepadNoteId || "").trim();
     if (isCreatingNewNote && !hasMeaningfulTitle && !hasMeaningfulContent && !hasDeadline) {
+      removeNotepadLocalDraft(draftStorageKey);
       setNotepadDirty(false);
       setNotepadChecklistChangeVersion(0);
+      setNotepadLastChecklistChange(null);
       setNotepadStatusText("Nothing to save.");
       setNotepadError("");
-      return;
+      return true;
     }
 
     const deadlineNotificationKey = Number.isFinite(deadlineMs) ? String(Math.floor(deadlineMs / 60000)) : "";
@@ -3842,14 +4168,17 @@ export default function EmployeeDashboard({
       setNotepadContentDraft(finalContentHtml);
       setNotepadChecklistChangeVersion(0);
       setNotepadLastChecklistChange(null);
+      removeNotepadLocalDraft(draftStorageKey);
       if (notepadEditorRef.current) {
         notepadEditorRef.current.innerHTML = finalContentHtml;
       }
       setNotepadStatusText("Saved.");
       await refreshNotepadIconMeta({ force: true });
       await loadNotepadNotes(keepSelectedId, { force: true });
+      return true;
     } catch (err) {
       setNotepadError(err?.message || "Failed to save note.");
+      return false;
     } finally {
       setSavingNotepadNote(false);
     }
@@ -3862,6 +4191,7 @@ export default function EmployeeDashboard({
     notepadDeadlineDraft,
     notepadTitleDraft,
     notepadColorDraft,
+    notepadLocalDraftStorageKey,
     viewerUserId,
     selectedNotepadNoteId,
     notepadViewMode,
@@ -3874,9 +4204,37 @@ export default function EmployeeDashboard({
     loadNotepadNotes,
   ]);
 
-  useEffect(() => {
-    saveNotepadNoteRef.current = saveNotepadNote;
-  }, [saveNotepadNote]);
+  const continueEditingNotepadDraft = useCallback(() => {
+    if (notepadExitGuardBusy) return;
+    notepadPendingExitActionRef.current = null;
+    setNotepadExitGuardState({
+      open: false,
+      reason: "",
+    });
+    window.requestAnimationFrame(() => {
+      notepadEditorRef.current?.focus?.();
+    });
+  }, [notepadExitGuardBusy]);
+
+  const saveAndContinueNotepadDraftTransition = useCallback(async () => {
+    if (notepadExitGuardBusy) return;
+
+    setNotepadExitGuardBusy(true);
+    try {
+      const didSave = await saveNotepadNote();
+      if (!didSave) return;
+
+      const pendingAction = notepadPendingExitActionRef.current;
+      notepadPendingExitActionRef.current = null;
+      setNotepadExitGuardState({
+        open: false,
+        reason: "",
+      });
+      pendingAction?.();
+    } finally {
+      setNotepadExitGuardBusy(false);
+    }
+  }, [notepadExitGuardBusy, saveNotepadNote]);
 
   useEffect(() => {
     if (!isNotepadDrawerOpen) return;
@@ -3958,23 +4316,39 @@ export default function EmployeeDashboard({
   useEffect(() => {
     if (!isNotepadDrawerOpen) return;
 
+    const localDraft = readNotepadLocalDraft(notepadLocalDraftStorageKey);
     if (!selectedNotepadNote) {
-      setNotepadTitleDraft("");
-      setNotepadDeadlineDraft("");
-      setNotepadContentDraft(EMPTY_NOTEPAD_HTML);
-      setNotepadDirty(false);
-      setNotepadChecklistChangeVersion(0);
-      if (notepadEditorRef.current) notepadEditorRef.current.innerHTML = EMPTY_NOTEPAD_HTML;
+      const localContentHtml = String(localDraft?.contentHtml || EMPTY_NOTEPAD_HTML);
+      setNotepadTitleDraft(localDraft ? String(localDraft?.title || "") : "");
+      setNotepadColorDraft(normalizeNotepadColorKey(localDraft?.noteColorKey || DEFAULT_NOTEPAD_COLOR_KEY));
+      setNotepadDeadlineDraft(localDraft ? String(localDraft?.deadlineDraft || "") : "");
+      setNotepadContentDraft(localContentHtml);
+      setNotepadDirty(!!localDraft);
+      setNotepadChecklistChangeVersion(Number(localDraft?.checklistChangeVersion) || 0);
+      setNotepadLastChecklistChange(localDraft?.lastChecklistChange || null);
+      setNotepadStatusText(localDraft ? "Recovered local draft." : "");
+      if (notepadEditorRef.current) notepadEditorRef.current.innerHTML = localContentHtml;
       return;
     }
 
-    setNotepadTitleDraft(toText(selectedNotepadNote.title) || "Untitled note");
-    setNotepadColorDraft(normalizeNotepadColorKey(selectedNotepadNote?.noteColorKey));
-    setNotepadDeadlineDraft(toLocalDateTimeInputValue(selectedNotepadNote.deadlineAt));
-    setNotepadContentDraft(String(selectedNotepadNote.contentHtml || EMPTY_NOTEPAD_HTML));
-    setNotepadDirty(false);
-    setNotepadChecklistChangeVersion(0);
-  }, [isNotepadDrawerOpen, selectedNotepadNote]);
+    const localContentHtml = String(
+      localDraft?.contentHtml || selectedNotepadNote.contentHtml || EMPTY_NOTEPAD_HTML
+    );
+    setNotepadTitleDraft(
+      localDraft ? String(localDraft?.title || "") : toText(selectedNotepadNote.title) || "Untitled note"
+    );
+    setNotepadColorDraft(
+      normalizeNotepadColorKey(localDraft?.noteColorKey || selectedNotepadNote?.noteColorKey)
+    );
+    setNotepadDeadlineDraft(
+      localDraft ? String(localDraft?.deadlineDraft || "") : toLocalDateTimeInputValue(selectedNotepadNote.deadlineAt)
+    );
+    setNotepadContentDraft(localContentHtml);
+    setNotepadDirty(!!localDraft);
+    setNotepadChecklistChangeVersion(Number(localDraft?.checklistChangeVersion) || 0);
+    setNotepadLastChecklistChange(localDraft?.lastChecklistChange || null);
+    setNotepadStatusText(localDraft ? "Recovered local draft." : "");
+  }, [isNotepadDrawerOpen, selectedNotepadNote, notepadLocalDraftStorageKey]);
 
   useEffect(() => {
     if (!isNotepadDrawerOpen || !notepadEditorRef.current) return;
@@ -3985,17 +4359,18 @@ export default function EmployeeDashboard({
   }, [isNotepadDrawerOpen, notepadContentDraft]);
 
   useEffect(() => {
-    if (!isNotepadDrawerOpen) return;
-    if (String(notepadViewMode || "") === NOTEPAD_VIEW_BIN) return;
-    if (!notepadDirty) return;
-    if (savingNotepadNote) return;
+    if (!isNotepadDrawerOpen) return undefined;
+    if (String(notepadViewMode || "") === NOTEPAD_VIEW_BIN) return undefined;
+    if (!notepadDirty) return undefined;
+    if (savingNotepadNote) return undefined;
 
-    const autosaveTimerId = window.setTimeout(() => {
-      saveNotepadNoteRef.current?.();
-    }, 30000);
+    const localDraftTimerId = window.setTimeout(() => {
+      const didWrite = persistCurrentNotepadLocalDraft();
+      if (didWrite) setNotepadStatusText("Saved locally");
+    }, 250);
 
     return () => {
-      window.clearTimeout(autosaveTimerId);
+      window.clearTimeout(localDraftTimerId);
     };
   }, [
     isNotepadDrawerOpen,
@@ -4003,31 +4378,37 @@ export default function EmployeeDashboard({
     notepadDirty,
     savingNotepadNote,
     notepadTitleDraft,
+    notepadColorDraft,
     notepadDeadlineDraft,
     notepadContentDraft,
+    notepadChecklistChangeVersion,
+    persistCurrentNotepadLocalDraft,
   ]);
 
   useEffect(() => {
-    if (!isNotepadDrawerOpen) return;
-    if (String(notepadViewMode || "") === NOTEPAD_VIEW_BIN) return;
-    if (!notepadChecklistChangeVersion) return;
-    if (!notepadDirty) return;
-    if (savingNotepadNote) return;
+    if (!isNotepadDrawerOpen) return undefined;
+    if (String(notepadViewMode || "") === NOTEPAD_VIEW_BIN) return undefined;
+    if (!notepadDirty) return undefined;
 
-    const checklistAutosaveTimerId = window.setTimeout(() => {
-      saveNotepadNoteRef.current?.();
-    }, 10000);
-
-    return () => {
-      window.clearTimeout(checklistAutosaveTimerId);
+    const persistDraftBeforeUnload = () => {
+      persistCurrentNotepadLocalDraft();
     };
-  }, [
-    isNotepadDrawerOpen,
-    notepadViewMode,
-    notepadChecklistChangeVersion,
-    notepadDirty,
-    savingNotepadNote,
-  ]);
+
+    window.addEventListener("beforeunload", persistDraftBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", persistDraftBeforeUnload);
+    };
+  }, [isNotepadDrawerOpen, notepadViewMode, notepadDirty, persistCurrentNotepadLocalDraft]);
+
+  useEffect(() => {
+    if (!notepadColorDraftSaving) return undefined;
+    const colorSavingTimerId = window.setTimeout(() => {
+      setNotepadColorDraftSaving(false);
+    }, 900);
+    return () => {
+      window.clearTimeout(colorSavingTimerId);
+    };
+  }, [notepadColorDraftSaving]);
 
   const visitorAnnouncements = useMemo(() => {
     const rows = Array.isArray(announcementRows) ? announcementRows : [];
@@ -4289,7 +4670,7 @@ export default function EmployeeDashboard({
   const closeAnnouncementDrawer = () => {
     setIsAnnouncementDrawerOpen(false);
   };
-  const closeNotepadDrawer = () => {
+  const forceCloseNotepadDrawer = useCallback(() => {
     setNotepadConfirmState({
       open: false,
       mode: "",
@@ -4303,7 +4684,46 @@ export default function EmployeeDashboard({
     setNotepadAddMemberDraft([]);
     setNotepadAddMemberSavingNoteId("");
     setIsNotepadDrawerOpen(false);
-  };
+  }, []);
+  const closeNotepadDrawer = useCallback(() => {
+    requestNotepadDraftTransition(() => {
+      forceCloseNotepadDrawer();
+    }, "close_drawer");
+  }, [forceCloseNotepadDrawer, requestNotepadDraftTransition]);
+  const openBreakLogsPanel = useCallback(() => {
+    requestNotepadDraftTransition(() => {
+      setIsTaskListDrawerOpen(false);
+      setIsAnnouncementDrawerOpen(false);
+      forceCloseNotepadDrawer();
+      setBreakLogFilter("thisWeek");
+      setIsBreakLogsDrawerOpen(true);
+    }, "switch_panel");
+  }, [forceCloseNotepadDrawer, requestNotepadDraftTransition]);
+  const toggleTaskListPanel = useCallback(() => {
+    requestNotepadDraftTransition(() => {
+      setIsBreakLogsDrawerOpen(false);
+      setIsAnnouncementDrawerOpen(false);
+      forceCloseNotepadDrawer();
+      setIsTaskListDrawerOpen((prev) => !prev);
+    }, "switch_panel");
+  }, [forceCloseNotepadDrawer, requestNotepadDraftTransition]);
+  const toggleAnnouncementPanel = useCallback(() => {
+    requestNotepadDraftTransition(() => {
+      setIsBreakLogsDrawerOpen(false);
+      setIsTaskListDrawerOpen(false);
+      forceCloseNotepadDrawer();
+      setIsAnnouncementDrawerOpen((prev) => !prev);
+    }, "switch_panel");
+  }, [forceCloseNotepadDrawer, requestNotepadDraftTransition]);
+  const openMyNotepadPanel = useCallback(() => {
+    requestNotepadDraftTransition(() => {
+      setIsTaskListDrawerOpen(false);
+      setIsBreakLogsDrawerOpen(false);
+      setIsAnnouncementDrawerOpen(false);
+      setNotepadViewMode(NOTEPAD_VIEW_MY);
+      setIsNotepadDrawerOpen(true);
+    }, "switch_view");
+  }, [requestNotepadDraftTransition]);
   const closeAnnouncementModal = () => setSelectedAnnouncement(null);
   const notepadPersonalNotes = (Array.isArray(notepadNotes) ? notepadNotes : []).filter(
     (note) => normalizeNotepadScope(note?.noteScope) !== "group"
@@ -4349,6 +4769,11 @@ export default function EmployeeDashboard({
     notepadEditorRef.current?.innerHTML || notepadContentDraft || EMPTY_NOTEPAD_HTML
   );
   const notepadEditorIsEmpty = !hasMeaningfulNotepadContent(currentNotepadEditorHtml);
+  const notepadDraftCanSave =
+    !!String(selectedNotepadNoteId || "").trim() ||
+    !!toText(notepadTitleDraft) ||
+    !notepadEditorIsEmpty ||
+    Number.isFinite(notepadDraftDeadlineMs);
   const dashboardImportantNotes = useMemo(() => {
     const rows = (Array.isArray(notepadNotes) ? notepadNotes : []).filter((note) => !note?.isCompleted);
     const nowForPriorityMs = Number.isFinite(nowMsForNotepad) ? nowMsForNotepad : Date.now();
@@ -4454,6 +4879,10 @@ export default function EmployeeDashboard({
   const dashboardUnpinBusy =
     String(notepadPinningNoteId || "").trim() === String(topDashboardImportantNote?.id || "").trim();
   const dashboardColorUpdateBusy = !!String(dashboardNoteColorUpdatingId || "").trim();
+  const dashboardColorSaveVisible =
+    !!dashboardDisplayNoteId &&
+    (String(dashboardNoteColorUpdatingId || "").trim() === dashboardDisplayNoteId ||
+      String(dashboardColorSavePendingId || "").trim() === dashboardDisplayNoteId);
 
   useEffect(() => {
     if (dashboardColorSaveTimerRef.current) return;
@@ -4481,6 +4910,7 @@ export default function EmployeeDashboard({
     window.clearTimeout(dashboardColorSaveTimerRef.current);
     dashboardColorSaveTimerRef.current = null;
     dashboardColorPendingPayloadRef.current = null;
+    setDashboardColorSavePendingId("");
   }, [effectiveSelectedId]);
 
   useEffect(() => {
@@ -4571,15 +5001,17 @@ export default function EmployeeDashboard({
       if (actionKey === "edit") {
         const noteId = String(note?.id || "").trim();
         if (!noteId) return;
-        setIsBreakLogsDrawerOpen(false);
-        setIsTaskListDrawerOpen(false);
-        setIsAnnouncementDrawerOpen(false);
-        setIsNotepadGroupCreatorOpen(false);
-        setNotepadViewMode(
-          normalizeNotepadScope(note?.noteScope) === "group" ? NOTEPAD_VIEW_GROUP : NOTEPAD_VIEW_MY
-        );
-        setSelectedNotepadNoteId(noteId);
-        setIsNotepadDrawerOpen(true);
+        requestNotepadDraftTransition(() => {
+          setIsBreakLogsDrawerOpen(false);
+          setIsTaskListDrawerOpen(false);
+          setIsAnnouncementDrawerOpen(false);
+          setIsNotepadGroupCreatorOpen(false);
+          setNotepadViewMode(
+            normalizeNotepadScope(note?.noteScope) === "group" ? NOTEPAD_VIEW_GROUP : NOTEPAD_VIEW_MY
+          );
+          setSelectedNotepadNoteId(noteId);
+          setIsNotepadDrawerOpen(true);
+        }, "switch_note");
         return;
       }
       if (actionKey === "complete") {
@@ -4594,6 +5026,7 @@ export default function EmployeeDashboard({
     },
     [
       topDashboardImportantNote,
+      requestNotepadDraftTransition,
       toggleNotepadNotePinned,
       toggleNotepadNoteCompleted,
       openNotepadConfirm,
@@ -4633,6 +5066,7 @@ export default function EmployeeDashboard({
         await loadNotepadNotes(dashboardDisplayNoteId, { force: true });
       } finally {
         setDashboardNoteColorUpdatingId("");
+        setDashboardColorSavePendingId("");
       }
     },
     [
@@ -4661,6 +5095,7 @@ export default function EmployeeDashboard({
       const targetNoteId = String(topDashboardImportantNote?.id || "").trim();
       if (!targetNoteId) return;
 
+      setDashboardColorSavePendingId(targetNoteId);
       dashboardColorPendingPayloadRef.current = {
         nextColorKey,
         actorUserId,
@@ -4828,17 +5263,19 @@ export default function EmployeeDashboard({
       const noteId = String(note?.id || "").trim();
       if (!noteId) return;
 
-      setIsBreakLogsDrawerOpen(false);
-      setIsTaskListDrawerOpen(false);
-      setIsAnnouncementDrawerOpen(false);
-      setIsNotepadGroupCreatorOpen(false);
-      setNotepadViewMode(
-        normalizeNotepadScope(note?.noteScope) === "group" ? NOTEPAD_VIEW_GROUP : NOTEPAD_VIEW_MY
-      );
-      setSelectedNotepadNoteId(noteId);
-      setIsNotepadDrawerOpen(true);
+      requestNotepadDraftTransition(() => {
+        setIsBreakLogsDrawerOpen(false);
+        setIsTaskListDrawerOpen(false);
+        setIsAnnouncementDrawerOpen(false);
+        setIsNotepadGroupCreatorOpen(false);
+        setNotepadViewMode(
+          normalizeNotepadScope(note?.noteScope) === "group" ? NOTEPAD_VIEW_GROUP : NOTEPAD_VIEW_MY
+        );
+        setSelectedNotepadNoteId(noteId);
+        setIsNotepadDrawerOpen(true);
+      }, "switch_note");
     },
-    []
+    [requestNotepadDraftTransition]
   );
 
   useEffect(() => {
@@ -5573,7 +6010,7 @@ export default function EmployeeDashboard({
     if (!isInEditor) return;
     try {
       notepadSelectionRangeRef.current = selection.getRangeAt(0).cloneRange();
-    } catch (_err) {
+    } catch {
       // Ignore stale selection cloning errors.
     }
   }, []);
@@ -5816,14 +6253,9 @@ export default function EmployeeDashboard({
 
     const handleKeyDown = (event) => {
       if (event.key !== "Escape") return;
+      if (notepadExitGuardState.open || notepadConfirmState.open) return;
       if (isNotepadDrawerOpen) {
-        setIsNotepadGroupCreatorOpen(false);
-        setNotepadGroupMemberDraft([]);
-        setNotepadAddMemberNoteId("");
-        setNotepadAddMemberDraft([]);
-        setNotepadAddMemberSavingNoteId("");
-        setNotepadViewMode(NOTEPAD_VIEW_MY);
-        setIsNotepadDrawerOpen(false);
+        closeNotepadDrawer();
       }
       if (isBreakLogsDrawerOpen) setIsBreakLogsDrawerOpen(false);
       if (isTaskListDrawerOpen) {
@@ -5839,7 +6271,15 @@ export default function EmployeeDashboard({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isBreakLogsDrawerOpen, isNotepadDrawerOpen, isTaskListDrawerOpen, isAnnouncementDrawerOpen]);
+  }, [
+    isBreakLogsDrawerOpen,
+    isNotepadDrawerOpen,
+    isTaskListDrawerOpen,
+    isAnnouncementDrawerOpen,
+    closeNotepadDrawer,
+    notepadExitGuardState.open,
+    notepadConfirmState.open,
+  ]);
 
   useEffect(() => {
     if (!notepadAddMemberNoteId) return;
@@ -6095,7 +6535,12 @@ export default function EmployeeDashboard({
         <button
           type="button"
           className="empNotepadListItemMain"
-          onClick={() => setSelectedNotepadNoteId(noteId)}
+          onClick={() => {
+            if (isActive) return;
+            requestNotepadDraftTransition(() => {
+              setSelectedNotepadNoteId(noteId);
+            }, "switch_note");
+          }}
           disabled={savingNotepadNote}
         >
           <div className="empNotepadListItemTitle">{noteTitle}</div>
@@ -6165,7 +6610,7 @@ export default function EmployeeDashboard({
             title={isCompleted ? "Mark as active" : "Mark as complete"}
             aria-label={isCompleted ? "Mark note as active" : "Mark note as complete"}
           >
-            {isTogglingComplete ? "..." : isCompleted ? <RotateCcw size={13} aria-hidden="true" /> : <CheckSquare size={13} aria-hidden="true" />}
+            {isTogglingComplete ? "Saving..." : isCompleted ? "Reopen" : "Complete"}
           </button>
         </div>
         {isAddMemberOpen ? (
@@ -6261,7 +6706,12 @@ export default function EmployeeDashboard({
                 <select
                   className="employee-select"
                   value={String(effectiveSelectedId)}
-                  onChange={(e) => setSelected(e.target.value)}
+                  onChange={(e) => {
+                    const nextEmployeeId = e.target.value;
+                    requestNotepadDraftTransition(() => {
+                      setSelected(nextEmployeeId);
+                    }, "switch_employee");
+                  }}
                   disabled={!canSwitchEmployee || !!lockedEmployeeId}
                 >
                   {(Array.isArray(employees) ? employees : []).map((emp) => {
@@ -6320,13 +6770,7 @@ export default function EmployeeDashboard({
                 <button
                   type="button"
                   className="empBreakLogsBtn"
-                  onClick={() => {
-                    setIsTaskListDrawerOpen(false);
-                    setIsAnnouncementDrawerOpen(false);
-                    setIsNotepadDrawerOpen(false);
-                    setBreakLogFilter("thisWeek");
-                    setIsBreakLogsDrawerOpen(true);
-                  }}
+                  onClick={openBreakLogsPanel}
                 >
                   <Coffee size={14} aria-hidden="true" />
                   Break Logs
@@ -6334,12 +6778,7 @@ export default function EmployeeDashboard({
                 <button
                   type="button"
                   className={`empTaskListBtn ${isTaskListDrawerOpen ? "active" : ""}`}
-                  onClick={() => {
-                    setIsBreakLogsDrawerOpen(false);
-                    setIsAnnouncementDrawerOpen(false);
-                    setIsNotepadDrawerOpen(false);
-                    setIsTaskListDrawerOpen((prev) => !prev);
-                  }}
+                  onClick={toggleTaskListPanel}
                   title="Open tasks"
                   aria-label={`Open task list (${employeeTasks.length} tasks)`}
                 >
@@ -6354,12 +6793,7 @@ export default function EmployeeDashboard({
                 <button
                   type="button"
                   className={`empAnnouncementBtn ${isAnnouncementDrawerOpen ? "active" : ""}`}
-                  onClick={() => {
-                    setIsBreakLogsDrawerOpen(false);
-                    setIsTaskListDrawerOpen(false);
-                    setIsNotepadDrawerOpen(false);
-                    setIsAnnouncementDrawerOpen((prev) => !prev);
-                  }}
+                  onClick={toggleAnnouncementPanel}
                   title="Open announcements"
                   aria-label={`Open announcements (${visitorAnnouncements.length} items)`}
                 >
@@ -6374,13 +6808,7 @@ export default function EmployeeDashboard({
                 <button
                   type="button"
                   className={`empNotepadBtn ${notepadHasDueSoonNote ? "isDueSoon" : ""}`}
-                  onClick={() => {
-                    setIsTaskListDrawerOpen(false);
-                    setIsBreakLogsDrawerOpen(false);
-                    setIsAnnouncementDrawerOpen(false);
-                    setNotepadViewMode(NOTEPAD_VIEW_MY);
-                    setIsNotepadDrawerOpen(true);
-                  }}
+                  onClick={openMyNotepadPanel}
                   title={
                     notepadHasDueSoonNote
                       ? "Open notepad (urgent deadline note detected)"
@@ -6412,37 +6840,145 @@ export default function EmployeeDashboard({
                   </div>
 
                   <div className="progressCard">
-                    <div className="progressHead">
-                      <span>Break Time Left</span>
-                      <span>{Math.round(breakRemainingPct)}%</span>
-                    </div>
 
-                    <div
-                      className="progressBarWrap"
-                      style={{
-                        "--breakMarkerLeft": `${breakThirtyMinuteMarkerPct}%`,
-                        "--progressValue": `${breakSparkleLeftPct}%`,
-                        "--progressFill": breakProgressColor,
-                      }}
-                    >
-                      <progress
-                        className="progressBar progressBar-good"
-                        max={100}
-                        value={breakProgressPercent}
-                      />
-                      {showBreakWarningMarker ? (
-                        <span className="progressWarnIcon" aria-hidden="true">!</span>
-                      ) : (
-                        <span className="progressSparkle" aria-hidden="true" />
-                      )}
-                      <span className="progressMarker" aria-hidden="true" />
-                    </div>
+                    <div className="breakDonutRow">
+                      
 
-                    <div className="progressMetaRow">
-                      <span>Used</span>
-                      <span>
-                        {breakUsedLabel} / {breakLimitMinutes} min
-                      </span>
+                      <div className="donut-container">
+                        <button
+                          type="button"
+                          className={`breakDonutButton ${isOnBreak ? "back" : "break"} ${
+                            isOnBreak && breakMinutesLeft <= 0 && !breakLoading ? "limit-pulse" : ""
+                          } breakDonut-${breakProgressVariant}`}
+                          style={{
+                            "--progressFill": breakProgressColor,
+                            "--donutAngle": `${-breakDonutAngle}deg`,
+                            "--markerAngle": `${breakThirtyMinuteMarkerAngle}deg`,
+                          }}
+                          onClick={requestBreakToggle}
+                          disabled={breakLoading || (!isOnBreak && !canStartBreak)}
+                          aria-label={breakToggleLabel}
+                          data-tooltip={breakToggleLabel}
+                        >
+                          <span className="breakDonutOuter" aria-hidden="true">
+                            <svg className="breakDonutSvg" viewBox="0 0 120 120" focusable="false">
+                              <circle className="breakDonutTrack" cx="60" cy="60" r="48" pathLength="100" />
+                              <circle
+                                className="breakDonutProgress"
+                                cx="60"
+                                cy="60"
+                                r="48"
+                                pathLength="100"
+                                strokeDasharray="100"
+                                strokeDashoffset={breakDonutOffset}
+                              />
+                            </svg>
+                            {showBreakWarningMarker ? (
+                              <span className="breakDonutWarning">!</span>
+                            ) : (
+                              <span className="breakDonutDot" />
+                            )}
+                            <span className="breakDonutMarker" aria-hidden="true">
+                              <span className="breakDonutMarkerTick" />
+                              <span className="breakDonutMarkerLabel">30m</span>
+                            </span>
+                          </span>
+                        <span className="breakDonutCenter">
+                          <span className="breakDonutTitle">Break Time Left</span>
+                          <span className="breakDonutTime" aria-hidden="true">
+                            <span className="breakDonutValue">{breakLoading ? "--" : breakMinutesCounter}</span>
+                              <span className="breakDonutDivider">:</span>
+                              <span className="breakDonutValue seconds">{breakLoading ? "--" : breakSecondsLabel}</span>
+                            </span>
+                            <span className="breakDonutLabel">min sec</span>
+                            <span className="breakDonutIcon">
+                              {isOnBreak ? (
+                                <Play size={26} fill="currentColor" aria-hidden="true" />
+                              ) : (
+                                <Pause size={26} fill="currentColor" aria-hidden="true" />
+                              )}
+                            </span>
+                          </span>
+                        </button>
+
+                        <div className="progressMetaRow">
+                          <span>Used</span>
+                          <span>
+                            {breakUsedLabel} / {breakLimitMinutes} min
+                          </span>
+                        </div>
+                      </div>
+
+                      {effectiveSelectedId ? (
+                        <div
+                          className="breakEmployeeDotPanel"
+                          aria-label={`${toText(getDisplayName(employee)) || "Selected employee"} attendance dots`}
+                        >
+                          <div className="breakEmployeeDotPanelTop">
+                            <div>
+                              <div className="breakEmployeeDotPanelTitle">Employee Attendance</div>
+                              <div className="breakEmployeeDotPanelSub">{selectedEmployeeDotRangeLabel}</div>
+                            </div>
+                          </div>
+
+                          {!selectedEmployeeDotRow ? (
+                            <div className="breakEmployeeDotEmpty">No employee attendance records for this year.</div>
+                          ) : (
+                            <div className="breakEmployeeDotRows">
+                              <div className="breakEmployeeDotTableRow breakEmployeeDotTableHeadRow">
+                                <div className="breakEmployeeDotHeadLabel">Employee</div>
+                                <div className="breakEmployeeDotWeeksWrap">
+                                  <div
+                                    className="breakEmployeeDotWeekTrack breakEmployeeDotWeekTrackHead"
+                                    style={selectedEmployeeDotWeekTrackStyle}
+                                  >
+                                    {selectedEmployeeDotWeekLabels.map((label, idx) => (
+                                      <div
+                                        key={`break-employee-dot-week-label-${idx}`}
+                                        className="breakEmployeeDotWeekCell"
+                                      >
+                                        <span className="breakEmployeeDotWeekHeaderLabel">{label}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="breakEmployeeDotTableRow">
+                                <div className="breakEmployeeDotIdentity">
+                                  <div className="breakEmployeeDotAvatar">{selectedEmployeeDotRow.initials}</div>
+                                  <div className="breakEmployeeDotIdentityText">
+                                    <div className="breakEmployeeDotName">{selectedEmployeeDotRow.name}</div>
+                                    <div className="breakEmployeeDotMeta">{selectedEmployeeDotRow.meta}</div>
+                                  </div>
+                                </div>
+
+                                <div className="breakEmployeeDotWeeksWrap">
+                                  <div className="breakEmployeeDotWeekTrack" style={selectedEmployeeDotWeekTrackStyle}>
+                                    {selectedEmployeeDotRow.weeks.map((weekDots, weekIdx) => (
+                                      <div
+                                        key={`break-employee-dot-week-${selectedEmployeeDotRow.userId}-${weekIdx}`}
+                                        className="breakEmployeeDotWeekCell"
+                                      >
+                                        <div className="breakEmployeeDotWeek">
+                                          {weekDots.map((dot) => (
+                                            <span
+                                              key={dot.key}
+                                              className={`breakEmployeeDotItem ${dot.className}`}
+                                              title={`${prettyDayLabel(dot.dayKey)} - ${dot.label}`}
+                                              aria-label={`${prettyDayLabel(dot.dayKey)} ${dot.label}`}
+                                            />
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
 
                     {breakMinutesLeft <= 0 ? (
@@ -6468,19 +7004,20 @@ export default function EmployeeDashboard({
                         Daily break limit reached ({DAILY_BREAK_LIMIT_MINUTES} minutes).
                       </div>
                     ) : null}
-
-                    <button
-                      className={`breakBtn ${isOnBreak ? "back" : "break"} ${
-                        isOnBreak && breakMinutesLeft <= 0 && !breakLoading ? "limit-pulse" : ""
-                      }`}
-                      onClick={requestBreakToggle}
-                      disabled={breakLoading || (!isOnBreak && !canStartBreak)}
-                    >
-                      {breakLoading ? "Please wait..." : isOnBreak ? "BACK" : "BREAK"}
-                    </button>
                   </div>
 
                   <div className="greetingPanel">
+                    <div className="greetingLavaObjects" aria-hidden="true">
+                      <span className="greetingLavaBlob blobOne" />
+                      <span className="greetingLavaBlob blobTwo" />
+                      <span className="greetingLavaBlob blobThree" />
+                      <span className="greetingLavaBlob blobFour" />
+                      <span className="greetingLavaBlob blobFive" />
+                      <span className="greetingLavaBlob blobSix" />
+                      <span className="greetingLavaBlob blobSeven" />
+                      <span className="greetingLavaBlob blobEight" />
+                    </div>
+
                     <div className="greetingTitle">{greetingText}, {employee.name || employee.email}</div>
 
                     <div className="greetingSub">
@@ -6626,22 +7163,31 @@ export default function EmployeeDashboard({
                               <Trash2 size={13} className="dashboardNotepadMenuItemIcon" aria-hidden="true" />
                               Delete note
                             </button>
-                            <div className="dashboardNotepadMenuColorSection">
+                            <div
+                              className={`dashboardNotepadMenuColorSection${
+                                dashboardColorSaveVisible ? " saving" : ""
+                              }`}
+                            >
                               <div className="dashboardNotepadMenuColorLabel">
                                 <Palette size={13} className="dashboardNotepadMenuItemIcon" aria-hidden="true" />
-                                Customize color
+                                <span>
+                                  {dashboardColorSaveVisible ? "Saving color..." : "Customize color"}
+                                </span>
                               </div>
                               <div className="dashboardNotepadMenuColorOptions">
                                 {NOTEPAD_COLOR_OPTIONS.map((option) => {
                                   const optionKey = String(option?.key || "").trim();
                                   const isActive = optionKey === dashboardNotepadColorKey;
+                                  const isSavingOption = isActive && dashboardColorSaveVisible;
                                   const swatchColor =
                                     NOTEPAD_COLOR_THEMES[optionKey]?.vars?.["--dash-note-page-base"] || "#f4d15d";
                                   return (
                                     <button
                                       key={optionKey}
                                       type="button"
-                                      className={`dashboardNotepadMenuColorOption${isActive ? " active" : ""}`}
+                                      className={`dashboardNotepadMenuColorOption${isActive ? " active" : ""}${
+                                        isSavingOption ? " saving" : ""
+                                      }`}
                                       onClick={(event) => setDashboardNoteColor(optionKey, event)}
                                       disabled={dashboardColorUpdateBusy}
                                       title={option?.label || optionKey}
@@ -6657,7 +7203,7 @@ export default function EmployeeDashboard({
                                       </span>
                                       {isActive ? (
                                         <span className="dashboardNotepadMenuColorSelected" aria-hidden="true">
-                                          ✓
+                                          {isSavingOption ? "" : "✓"}
                                         </span>
                                       ) : null}
                                     </button>
@@ -6674,14 +7220,10 @@ export default function EmployeeDashboard({
                         }`}
                         style={dashboardHasFrontPage ? dashboardFrontThemeVars : undefined}
                         onClick={() => {
-                          setIsBreakLogsDrawerOpen(false);
-                          setIsTaskListDrawerOpen(false);
-                          setIsAnnouncementDrawerOpen(false);
-                          setNotepadViewMode(NOTEPAD_VIEW_MY);
                           if (topDashboardImportantNote?.id) {
                             openDashboardImportantNote(topDashboardImportantNote);
                           } else {
-                            setIsNotepadDrawerOpen(true);
+                            openMyNotepadPanel();
                           }
                         }}
                       >
@@ -7181,11 +7723,14 @@ export default function EmployeeDashboard({
                         type="button"
                         className={`empNotepadViewBtn ${isNotepadGroupView ? "active" : ""}`}
                         onClick={() => {
-                          setNotepadViewMode(NOTEPAD_VIEW_GROUP);
-                          setIsNotepadGroupCreatorOpen(false);
-                          setNotepadAddMemberNoteId("");
-                          setNotepadAddMemberDraft([]);
-                          setSelectedNotepadNoteId("");
+                          if (isNotepadGroupView && !isNotepadGroupCreatorOpen) return;
+                          requestNotepadDraftTransition(() => {
+                            setNotepadViewMode(NOTEPAD_VIEW_GROUP);
+                            setIsNotepadGroupCreatorOpen(false);
+                            setNotepadAddMemberNoteId("");
+                            setNotepadAddMemberDraft([]);
+                            setSelectedNotepadNoteId("");
+                          }, "switch_view");
                         }}
                         title="Open group notes"
                         aria-label={`Open group notes (${notepadGroupNoteCount})`}
@@ -7199,11 +7744,14 @@ export default function EmployeeDashboard({
                         type="button"
                         className={`empNotepadViewBtn ${notepadViewMode === NOTEPAD_VIEW_MY ? "active" : ""}`}
                         onClick={() => {
-                          setNotepadViewMode(NOTEPAD_VIEW_MY);
-                          setIsNotepadGroupCreatorOpen(false);
-                          setNotepadAddMemberNoteId("");
-                          setNotepadAddMemberDraft([]);
-                          setSelectedNotepadNoteId("");
+                          if (String(notepadViewMode || "") === NOTEPAD_VIEW_MY && !isNotepadGroupCreatorOpen) return;
+                          requestNotepadDraftTransition(() => {
+                            setNotepadViewMode(NOTEPAD_VIEW_MY);
+                            setIsNotepadGroupCreatorOpen(false);
+                            setNotepadAddMemberNoteId("");
+                            setNotepadAddMemberDraft([]);
+                            setSelectedNotepadNoteId("");
+                          }, "switch_view");
                         }}
                         title="Open my notes"
                         aria-label={`Open my notes (${notepadNoteCount})`}
@@ -7217,11 +7765,14 @@ export default function EmployeeDashboard({
                         type="button"
                         className={`empNotepadBinToggleBtn ${isNotepadRecycleBinView ? "active" : ""}`}
                         onClick={() => {
-                          setNotepadViewMode(NOTEPAD_VIEW_BIN);
-                          setIsNotepadGroupCreatorOpen(false);
-                          setNotepadAddMemberNoteId("");
-                          setNotepadAddMemberDraft([]);
-                          setSelectedNotepadNoteId("");
+                          if (isNotepadRecycleBinView) return;
+                          requestNotepadDraftTransition(() => {
+                            setNotepadViewMode(NOTEPAD_VIEW_BIN);
+                            setIsNotepadGroupCreatorOpen(false);
+                            setNotepadAddMemberNoteId("");
+                            setNotepadAddMemberDraft([]);
+                            setSelectedNotepadNoteId("");
+                          }, "switch_view");
                         }}
                         title="Open recycle bin"
                         aria-label={`Open recycle bin (${notepadTrashedNoteCount})`}
@@ -7499,7 +8050,7 @@ export default function EmployeeDashboard({
                       Clear
                     </button>
                   </div>
-                  <div className="empNotepadColorControl">
+                  <div className={`empNotepadColorControl${notepadColorDraftSaving ? " saving" : ""}`}>
                     <label htmlFor="emp-notepad-color">Color</label>
                     <select
                       id="emp-notepad-color"
@@ -7507,8 +8058,9 @@ export default function EmployeeDashboard({
                       value={notepadColorDraft}
                       onChange={(event) => {
                         setNotepadColorDraft(normalizeNotepadColorKey(event.target.value));
+                        setNotepadColorDraftSaving(true);
                         setNotepadDirty(true);
-                        setNotepadStatusText("");
+                        setNotepadStatusText("Saving color locally...");
                       }}
                     >
                       {NOTEPAD_COLOR_OPTIONS.map((option) => (
@@ -7517,6 +8069,11 @@ export default function EmployeeDashboard({
                         </option>
                       ))}
                     </select>
+                    {notepadColorDraftSaving ? (
+                      <span className="empNotepadColorSavingText" aria-live="polite">
+                        Saving
+                      </span>
+                    ) : null}
                   </div>
                   <div className="empNotepadEditorActions">
                     <span className={`empNotepadSaveState ${notepadDirty ? "dirty" : ""}`}>
@@ -7529,8 +8086,8 @@ export default function EmployeeDashboard({
                       type="button"
                       className="empNotepadSaveBtn"
                       onClick={saveNotepadNote}
-                      disabled={savingNotepadNote || notepadEditorIsEmpty}
-                      title={notepadEditorIsEmpty ? "Add note content to enable save" : "Save note"}
+                      disabled={savingNotepadNote || !notepadDraftCanSave}
+                      title={notepadDraftCanSave ? "Save note" : "Add a title, deadline, or note content to enable save"}
                     >
                       Save
                     </button>
@@ -7969,6 +8526,18 @@ export default function EmployeeDashboard({
               setIsDashboardUnpinConfirmOpen(false);
             }}
             onConfirm={confirmDashboardUnpin}
+          />
+
+          <ConfirmModal
+            open={!!notepadExitGuardState.open}
+            title="Save Notepad Changes?"
+            message="Your notepad changes are saved locally in this browser. Save them to the database before leaving, or continue editing."
+            confirmText="Save Changes"
+            cancelText="Continue Editing"
+            tone="primary"
+            busy={notepadExitGuardBusy || savingNotepadNote}
+            onCancel={continueEditingNotepadDraft}
+            onConfirm={saveAndContinueNotepadDraftTransition}
           />
 
           <ConfirmModal
