@@ -4,6 +4,7 @@ import { Eye, EyeOff } from "lucide-react";
 import "./login.css";
 import HHIUHAI from "../assets/hhi-uhai.png"
 import HHIPetals from "../assets/HHI-Petals.png";
+import ForgotPasswordModal from "./ForgotPasswordModal";
 
 export default function LoginPage({ onGoToRegister }) {
   const { signIn, loading } = useAuth();
@@ -15,6 +16,7 @@ export default function LoginPage({ onGoToRegister }) {
 
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
 
   function handleChange(e) {
     const { name, value } = e.target;
@@ -84,7 +86,15 @@ export default function LoginPage({ onGoToRegister }) {
               </div>
 
               {error ? <div className="login-error">{error}</div> : null}
-
+              <div className="login-forgot-row">
+                <button
+                  type="button"
+                  className="login-forgot-btn"
+                  onClick={() => setForgotOpen(true)}
+                >
+                  Forgot password?
+                </button>
+              </div>
             <div className="login-primary-actions">
               <button className="login-button" type="submit" disabled={loading}>
                 {loading ? "Signing in..." : "Log In"}
@@ -101,7 +111,7 @@ export default function LoginPage({ onGoToRegister }) {
 
           </form>
         </div>
-          
+        <ForgotPasswordModal open={forgotOpen} onClose={() => setForgotOpen(false)} />
         </div>
 
         <div className="login-right login-right--petals"> 

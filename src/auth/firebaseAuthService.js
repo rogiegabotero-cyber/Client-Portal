@@ -1784,13 +1784,27 @@ export async function sendPortalUserPasswordResetEmail(email) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) throw new Error("Email is required");
 
-  await sendPasswordResetEmail(auth, normalizedEmail);
-
-  return {
-    success: true,
-    email: normalizedEmail,
-    message: `Password reset email sent to ${normalizedEmail}.`,
-  };
+  try {
+    await sendPasswordResetEmail(auth, normalizedEmail);
+    return {
+      success: true,
+      email: normalizedEmail,
+      message: `Password reset email sent to ${normalizedEmail}.`,
+      sent: true,
+    };
+  } catch (error) {
+    const code = String(error?.code || "").toLowerCase();
+    // Do not reveal whether the email exists. If user-not-found, behave as if the reset was sent.
+    if (code === "auth/user-not-found") {
+      return {
+        success: true,
+        email: normalizedEmail,
+        message: `Password reset email sent to ${normalizedEmail}.`,
+        sent: false,
+      };
+    }
+    throw error;
+  }
 }
 
 export async function updatePortalUserAllowedPages(userId, allowedPages) {

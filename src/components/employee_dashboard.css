@@ -666,7 +666,7 @@
   display:flex;
   flex-direction:column;
   width:200px;
-  min-width: 200px;
+  min-width:200px;
   min-height: auto;
   position: relative;
   z-index: 3;
@@ -706,7 +706,6 @@
 }
 
 .breakDonutRow{
-  margin-top:5px;
   display:flex;
   align-items:stretch;
   justify-content:flex-start;
@@ -755,7 +754,6 @@
 }
 
 .breakEmployeeDotPanelSub{
-  margin-top:2px;
   color:#64748b;
   font-size:10px;
   font-weight:700;
@@ -771,12 +769,14 @@
 }
 
 .breakEmployeeDotTableRow{
-  display:grid;
-  grid-template-columns:minmax(96px, 118px) minmax(0, 1fr);
+  display:flex;
+  flex-direction: column;
   align-items:center;
-  gap:8px;
-  padding:7px 0;
+  justify-content: center;
+  gap:10px;
+  padding:15px 10px;
   border-top:1px solid rgba(15,23,42,.08);
+  height: 100%;
 }
 
 .breakEmployeeDotTableHeadRow{
@@ -800,6 +800,7 @@
   display:flex;
   align-items:center;
   gap:8px;
+  width: 100%;
 }
 
 .breakEmployeeDotAvatar{
@@ -842,32 +843,16 @@
 
 .breakEmployeeDotWeeksWrap{
   min-width:0;
-  overflow-x:auto;
-  overflow-y:hidden;
-  padding-bottom:2px;
-  scrollbar-width:thin;
-  scrollbar-color:rgba(100,116,139,.45) transparent;
-}
-
-.breakEmployeeDotWeeksWrap::-webkit-scrollbar{
-  height:6px;
-}
-
-.breakEmployeeDotWeeksWrap::-webkit-scrollbar-track{
-  background:transparent;
-}
-
-.breakEmployeeDotWeeksWrap::-webkit-scrollbar-thumb{
-  background:rgba(100,116,139,.45);
-  border-radius:999px;
+  overflow:visible;
+  padding-bottom:0;
 }
 
 .breakEmployeeDotWeekTrack{
-  display:grid;
-  grid-template-columns:repeat(var(--break-employee-dot-week-count, 1), minmax(36px, 1fr));
-  min-width:max(100%, calc(var(--break-employee-dot-week-count, 1) * 40px));
+  display:flex;
+  flex-wrap:wrap;
   align-items:center;
-  gap:4px;
+  justify-content: center;
+  gap:8px;
 }
 
 .breakEmployeeDotWeekTrackHead{
@@ -875,10 +860,14 @@
 }
 
 .breakEmployeeDotWeekCell{
-  min-height:16px;
+  flex:1 1 clamp(34px, 8vw, 44px);
+  min-width:34px;
+  min-height:30px;
   display:flex;
+  flex-direction:column;
   align-items:center;
   justify-content:center;
+  gap:4px;
 }
 
 .breakEmployeeDotWeekHeaderLabel{
@@ -937,7 +926,7 @@
 }
 
 .breakDonutButton{
-  --donutSize:200px;
+  --donutSize:160px;
   width:var(--donutSize);
   min-width:var(--donutSize);
   height:var(--donutSize);
@@ -1048,9 +1037,9 @@
   content:"";
   position:absolute;
   left:50%;
-  top:18px;
-  width:4px;
-  height:4px;
+  top:14px;
+  width:3px;
+  height:3px;
   border-radius:50%;
   background:#ffffff;
   transform:translateX(-50%);
@@ -1063,9 +1052,9 @@
   content:"";
   position:absolute;
   left:50%;
-  top:15px;
-  width:10px;
-  height:10px;
+  top:12px;
+  width:8px;
+  height:8px;
   border-radius:50%;
   transform:translateX(-50%);
   background:
@@ -1090,15 +1079,15 @@
   content:"!";
   position:absolute;
   left:46%;
-  top:9.5px;
-  width:18px;
-  height:18px;
+  top:7px;
+  width:15px;
+  height:15px;
   border-radius:50%;
   display:grid;
   place-items:center;
   background:#facc15;
   color:#7c2d12;
-  font-size:12px;
+  font-size:10px;
   font-weight:900;
   transform:translateX(-50%);
   box-shadow:0 0 14px rgba(245,158,11,.68);
@@ -1117,9 +1106,9 @@
 .breakDonutMarkerTick{
   position:absolute;
   left:50%;
-  top:5px;
+  top:4px;
   width:2px;
-  height:12px;
+  height:10px;
   border-radius:999px;
   background:rgba(255,255,255,.74);
   box-shadow:none;
@@ -1129,14 +1118,14 @@
 .breakDonutMarkerLabel{
   position:absolute;
   left:50%;
-  top:18px;
+  top:15px;
   transform:translateX(-50%) rotate(calc(-1 * var(--markerAngle, -180deg)));
-  min-width:24px;
-  padding:2px 4px;
+  min-width:20px;
+  padding:1px 3px;
   border-radius:999px;
   background:transparent;
   color:#0f172a;
-  font-size:9px;
+  font-size:8px;
   font-weight:900;
   line-height:1;
   letter-spacing:0;
@@ -1146,8 +1135,8 @@
 .breakDonutCenter{
   position:relative;
   z-index:3;
-  width:82px;
-  height:82px;
+  width:68px;
+  height:68px;
   border-radius:50%;
   display:flex;
   flex-direction:column;
@@ -1162,15 +1151,15 @@
   display:inline-flex;
   align-items:baseline;
   justify-content:center;
-  min-width:66px;
+  min-width:54px;
   font-variant-numeric:tabular-nums;
   transition:opacity .16s ease, transform .16s ease;
 }
 
 .breakDonutTitle{
-  max-width:86px;
+  max-width:72px;
   color:#0f172a;
-  font-size:9px;
+  font-size:8px;
   font-weight:900;
   line-height:1.1;
   text-align:center;
@@ -1211,39 +1200,126 @@
 }
 
 .breakDonutValue{
-  font-size:23px;
+  font-size:19px;
   font-weight:900;
   line-height:.92;
   font-variant-numeric:tabular-nums;
 }
 
 .breakDonutValue.seconds{
-  font-size:17px;
+  font-size:14px;
   font-weight:800;
 }
 
 .breakDonutDivider{
   margin:0 2px;
   color:#0f172a;
-  font-size:17px;
+  font-size:14px;
   font-weight:800;
 }
 
 .breakDonutLabel{
   color:#0f172a;
-  font-size:10px;
+  font-size:8px;
   font-weight:700;
   line-height:1;
   transition:opacity .16s ease, transform .16s ease;
 }
 
 .breakDonutButton.back .breakDonutProgress{
-  stroke:#22c55e;
+  stroke:var(--progressFill, #f59e0b);
   filter:none;
+}
+
+.breakDonutButton.back{
+  color:#64748b;
+}
+
+.breakDonutButton.back .breakDonutOuter{
+  background:
+    radial-gradient(circle, rgba(236,72,153,.16) 0 46%, rgba(139,92,246,.12) 47% 64%, transparent 65%);
+  box-shadow:inset 0 0 0 999px rgba(255,255,255,.14);
+}
+
+.breakDonutButton.back .breakDonutMarkerLabel,
+.breakDonutButton.back .breakDonutTitle,
+.breakDonutButton.back .breakDonutTime,
+.breakDonutButton.back .breakDonutLabel,
+.breakDonutButton.back .breakDonutDivider{
+  color:#64748b;
+}
+
+.breakDonutButton.back .breakDonutIcon{
+  position:absolute;
+  inset:0;
+  width:auto;
+  height:auto;
+  opacity:1;
+  transform:scale(1);
+  color:#475569;
+}
+
+.breakDonutButton.back .breakDonutCenter{
+  gap:0;
+}
+
+.breakDonutButton.back .breakDonutTitle{
+  max-width:62px;
+  font-size:7px;
+  line-height:1;
+  opacity:.72;
+  transform:translateY(-20px);
+}
+
+.breakDonutButton.back .breakDonutTime{
+  min-width:42px;
+  opacity:.7;
+  transform:translateY(20px);
+}
+
+.breakDonutButton.back .breakDonutValue{
+  font-size:12px;
+}
+
+.breakDonutButton.back .breakDonutValue.seconds,
+.breakDonutButton.back .breakDonutDivider{
+  font-size:10px;
+}
+
+.breakDonutButton.back .breakDonutLabel{
+  font-size:7px;
+  opacity:.66;
+  transform:translateY(20px);
+}
+
+.breakDonutButton.back:hover .breakDonutTime,
+.breakDonutButton.back:hover .breakDonutTitle,
+.breakDonutButton.back:hover .breakDonutLabel,
+.breakDonutButton.back:focus-visible .breakDonutTime,
+.breakDonutButton.back:focus-visible .breakDonutTitle,
+.breakDonutButton.back:focus-visible .breakDonutLabel{
+  opacity:.7;
+}
+
+.breakDonutButton.back:hover:not(:disabled) .breakDonutIcon,
+.breakDonutButton.back:focus-visible .breakDonutIcon{
+  animation:breakBackIconHoverPulse .92s ease-in-out infinite;
+  color:#334155;
 }
 
 .breakDonutButton.limit-pulse{
   animation:breakBackUrgentPulse 1s ease-in-out infinite;
+}
+
+@keyframes breakBackIconHoverPulse{
+  0%, 100%{
+    transform:scale(1);
+    filter:drop-shadow(0 0 0 rgba(71,85,105,0));
+  }
+  50%{
+    transform:scale(1.18);
+    filter:drop-shadow(0 0 10px rgba(71,85,105,.34));
+  }
 }
 
 @keyframes breakDonutDotSparkle{
@@ -2839,6 +2915,38 @@
   overflow:hidden;
 }
 
+/* Make all scrollable areas inside the notepad drawer transparent (no scroller background) */
+.empNotepadDrawer .empNotepadList,
+.empNotepadDrawer .empNotepadEditor,
+.empNotepadDrawer .empNotepadListPane,
+.empNotepadDrawer .empNotepadGroupCreateList,
+.empNotepadDrawer .empNotepadCompletedList {
+  background: transparent !important;
+}
+
+/* Transparent scrollbar tracks for supported browsers */
+.empNotepadDrawer .empNotepadList,
+.empNotepadDrawer .empNotepadEditor {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100,116,139,0.35) transparent;
+}
+.empNotepadDrawer .empNotepadList::-webkit-scrollbar,
+.empNotepadDrawer .empNotepadEditor::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.empNotepadDrawer .empNotepadList::-webkit-scrollbar-track,
+.empNotepadDrawer .empNotepadEditor::-webkit-scrollbar-track {
+  background: transparent;
+}
+.empNotepadDrawer .empNotepadList::-webkit-scrollbar-thumb,
+.empNotepadDrawer .empNotepadEditor::-webkit-scrollbar-thumb {
+  background: rgba(100,116,139,0.35);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
 .empNotepadListPane{
   border-right:1px solid var(--borderSoft);
   background:#f8fafc;
@@ -3857,6 +3965,59 @@
   border-radius:5px;
 }
 
+/* Disabled toolbar state when no note is selected */
+.empNotepadToolbar.disabled {
+  opacity: 0.6;
+}
+.empNotepadToolbar.disabled .empNotepadToolBtn,
+.empNotepadToolbar.disabled .empNotepadToolSelect,
+.empNotepadToolbar.disabled .empNotepadToolColorInput {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+/* Editor overlay when no note selected */
+.empNotepadEditorWrap { 
+  position: relative; 
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.empNotepadEditorOverlay {
+  position: absolute; /* inside .empNotepadEditorWrap so it only covers editor */
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0; /* span the editor area */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(rgba(255,255,255,0.95), rgba(255,255,255,0.95));
+  z-index: 50;
+  height: 100%;
+  min-height: 350px;
+}
+.empNotepadEditorOverlayInner {
+  text-align: center;
+  font-size: 10px; /* smaller text as requested */
+  color: rgba(17,24,39,0.65); /* slightly faded */
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateY(10px); /* nudge slightly lower */
+}
+.empNotepadCreateNoteBtn {
+  background: none;
+  border: none;
+  color: #0066cc;
+  font-weight: 600;
+  margin-left: 6px;
+  cursor: pointer;
+  font-size: 10px;
+  opacity: 0.95;
+}
+
 .empNotepadToolBtn svg{
   width:14px;
   height:14px;
@@ -3931,7 +4092,7 @@
   min-height:0;
   border:1px solid rgba(15,23,42,.12);
   border-radius:12px;
-  background:#ffffff;
+  background: transparent; /* make scroller background transparent */
   padding:12px;
   font-size:13px;
   line-height:1.5;
@@ -4261,7 +4422,7 @@
   content:"";
   position:absolute;
   inset:-12%;
-  opacity:.5;
+  opacity:.1;
   background-image:
     radial-gradient(circle, rgba(255, 255, 255, .78) 0 2px, transparent 3px),
     radial-gradient(circle, rgba(255, 255, 255, .38) 0 3px, transparent 4px),
@@ -4285,7 +4446,7 @@
   display:block;
   aspect-ratio:1 / 1;
   border-radius:50%;
-  opacity:0.8;
+  opacity:.2;
   background:
     radial-gradient(circle at 40% 30%, rgba(255, 255, 255, .72) 0 15%, transparent 33%),
     radial-gradient(circle at 52% 52%, rgba(255, 255, 255, .28) 0 45%, rgba(255, 255, 255, .18) 61%, rgba(66, 0, 4, .12) 73%, transparent 80%);
@@ -5186,10 +5347,6 @@
   margin-top: 8px;
 }
 
-.progressMetaRow {
-  margin-top: 4px;
-}
-
 .scheduleBreakActions {
   margin-top: 9px;
 }
@@ -5346,6 +5503,7 @@
 .empNotepadEditor {
   min-height: 180px;
   padding: 10px;
+  overflow: auto;
 }
 
 .announcementModalOverlay {

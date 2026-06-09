@@ -42,8 +42,10 @@ import {
   Underline,
   UserPlus,
   Users,
+  DownloadCloud,
 } from "lucide-react";
 import ConfirmModal from "./ConfirmModal";
+import SaveAsModal from "./SaveAsModal";
 import { db } from "../firebase";
 import {
   addDoc,
@@ -1254,6 +1256,7 @@ export default function EmployeeDashboard({
   const [notepadLoading, setNotepadLoading] = useState(false);
   const [notepadError, setNotepadError] = useState("");
   const [selectedNotepadNoteId, setSelectedNotepadNoteId] = useState("");
+  const [isNotepadNewDraftOpen, setIsNotepadNewDraftOpen] = useState(false);
   const [notepadCompletingNoteId, setNotepadCompletingNoteId] = useState("");
   const [notepadPinningNoteId, setNotepadPinningNoteId] = useState("");
   const [notepadTitleDraft, setNotepadTitleDraft] = useState("");
@@ -1345,6 +1348,9 @@ export default function EmployeeDashboard({
   const notepadRefreshSignalSeenRef = useRef("");
   const notepadRefreshSignalCheckBusyRef = useRef(false);
   const portalRoot = typeof document !== "undefined" ? document.body : null;
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
+  const [saveAsHtml, setSaveAsHtml] = useState("");
+  
 
   const viewerRole = normalize(
     pageData?.viewer?.role || pageData?.currentUser?.role || pageData?.user?.role || ""
@@ -2334,6 +2340,20 @@ export default function EmployeeDashboard({
       ) || null,
     [notepadNotes, selectedNotepadNoteId]
   );
+
+  useEffect(() => {
+    if (String(selectedNotepadNoteId || "").trim()) {
+      setIsNotepadNewDraftOpen(false);
+    }
+  }, [selectedNotepadNoteId]);
+
+  const notepadNewDraftCanEdit =
+    isNotepadNewDraftOpen &&
+    String(notepadViewMode || "") === NOTEPAD_VIEW_MY &&
+    !isNotepadGroupCreatorOpen;
+  const notepadDisabled = !String(selectedNotepadNoteId || "").trim() && !notepadNewDraftCanEdit;
+
+  
   const notepadLocalDraftStorageKey = useMemo(
     () => getNotepadLocalDraftStorageKey(effectiveSelectedId, selectedNotepadNoteId),
     [effectiveSelectedId, selectedNotepadNoteId]
@@ -3112,6 +3132,7 @@ export default function EmployeeDashboard({
         setIsNotepadGroupCreatorOpen(false);
         setNotepadGroupMemberDraft([]);
         setSelectedNotepadNoteId("");
+        setIsNotepadNewDraftOpen(false);
         setNotepadTitleDraft("");
         setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
         setNotepadDeadlineDraft("");
@@ -3171,6 +3192,7 @@ export default function EmployeeDashboard({
     requestNotepadDraftTransition(() => {
       setNotepadViewMode(NOTEPAD_VIEW_MY);
       setIsNotepadGroupCreatorOpen(false);
+      setIsNotepadNewDraftOpen(true);
       setNotepadGroupMemberDraft([]);
       setNotepadAddMemberNoteId("");
       setNotepadAddMemberDraft([]);
@@ -3189,6 +3211,25 @@ export default function EmployeeDashboard({
     }, "new_note");
   }, [requestNotepadDraftTransition]);
 
+  const handleOverlayCreateNote = useCallback(() => {
+    try {
+      startNewNotepadNote();
+      // ensure the notepad drawer is open and editor focused
+      setIsNotepadDrawerOpen(true);
+      setTimeout(() => {
+        try {
+          if (notepadEditorRef?.current) notepadEditorRef.current.focus();
+        } catch (e) {
+          // ignore
+        }
+      }, 50);
+    } catch (err) {
+      // swallow errors to avoid breaking overlay click
+      // eslint-disable-next-line no-console
+      console.error("Failed to create new notepad note from overlay:", err);
+    }
+  }, [startNewNotepadNote, setIsNotepadDrawerOpen]);
+
   const openCreateGroupNotepad = useCallback(() => {
     const selectedEmployeeUserId = String(effectiveSelectedId || "").trim();
     if (!selectedEmployeeUserId) {
@@ -3199,6 +3240,7 @@ export default function EmployeeDashboard({
     requestNotepadDraftTransition(() => {
       const defaultMemberIds = sanitizeNotepadMemberUserIds([selectedEmployeeUserId]);
       setNotepadViewMode(NOTEPAD_VIEW_GROUP);
+      setIsNotepadNewDraftOpen(false);
       setSelectedNotepadNoteId("");
       setNotepadTitleDraft("");
       setNotepadColorDraft(DEFAULT_NOTEPAD_COLOR_KEY);
@@ -4745,6 +4787,7 @@ export default function EmployeeDashboard({
     employeeTasks.length > 99 ? "99+" : String(Math.max(0, employeeTasks.length));
   const notepadGroupMemberSelectionCount = sanitizeNotepadMemberUserIds(notepadGroupMemberDraft).length;
   const isNotepadPersonalNewMode =
+    isNotepadNewDraftOpen &&
     String(notepadViewMode || "") === NOTEPAD_VIEW_MY &&
     !isNotepadGroupCreatorOpen &&
     !String(selectedNotepadNoteId || "").trim();
@@ -6925,25 +6968,6 @@ export default function EmployeeDashboard({
                             <div className="breakEmployeeDotEmpty">No employee attendance records for this year.</div>
                           ) : (
                             <div className="breakEmployeeDotRows">
-                              <div className="breakEmployeeDotTableRow breakEmployeeDotTableHeadRow">
-                                <div className="breakEmployeeDotHeadLabel">Employee</div>
-                                <div className="breakEmployeeDotWeeksWrap">
-                                  <div
-                                    className="breakEmployeeDotWeekTrack breakEmployeeDotWeekTrackHead"
-                                    style={selectedEmployeeDotWeekTrackStyle}
-                                  >
-                                    {selectedEmployeeDotWeekLabels.map((label, idx) => (
-                                      <div
-                                        key={`break-employee-dot-week-label-${idx}`}
-                                        className="breakEmployeeDotWeekCell"
-                                      >
-                                        <span className="breakEmployeeDotWeekHeaderLabel">{label}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </div>
-
                               <div className="breakEmployeeDotTableRow">
                                 <div className="breakEmployeeDotIdentity">
                                   <div className="breakEmployeeDotAvatar">{selectedEmployeeDotRow.initials}</div>
@@ -6960,6 +6984,9 @@ export default function EmployeeDashboard({
                                         key={`break-employee-dot-week-${selectedEmployeeDotRow.userId}-${weekIdx}`}
                                         className="breakEmployeeDotWeekCell"
                                       >
+                                        <span className="breakEmployeeDotWeekHeaderLabel">
+                                          {selectedEmployeeDotWeekLabels[weekIdx] || `W${weekIdx + 1}`}
+                                        </span>
                                         <div className="breakEmployeeDotWeek">
                                           {weekDots.map((dot) => (
                                             <span
@@ -7727,6 +7754,7 @@ export default function EmployeeDashboard({
                           requestNotepadDraftTransition(() => {
                             setNotepadViewMode(NOTEPAD_VIEW_GROUP);
                             setIsNotepadGroupCreatorOpen(false);
+                            setIsNotepadNewDraftOpen(false);
                             setNotepadAddMemberNoteId("");
                             setNotepadAddMemberDraft([]);
                             setSelectedNotepadNoteId("");
@@ -7748,6 +7776,7 @@ export default function EmployeeDashboard({
                           requestNotepadDraftTransition(() => {
                             setNotepadViewMode(NOTEPAD_VIEW_MY);
                             setIsNotepadGroupCreatorOpen(false);
+                            setIsNotepadNewDraftOpen(false);
                             setNotepadAddMemberNoteId("");
                             setNotepadAddMemberDraft([]);
                             setSelectedNotepadNoteId("");
@@ -7769,6 +7798,7 @@ export default function EmployeeDashboard({
                           requestNotepadDraftTransition(() => {
                             setNotepadViewMode(NOTEPAD_VIEW_BIN);
                             setIsNotepadGroupCreatorOpen(false);
+                            setIsNotepadNewDraftOpen(false);
                             setNotepadAddMemberNoteId("");
                             setNotepadAddMemberDraft([]);
                             setSelectedNotepadNoteId("");
@@ -8031,6 +8061,7 @@ export default function EmployeeDashboard({
                       id="emp-notepad-deadline"
                       type="datetime-local"
                       className={`empNotepadDeadlineInput tone-${notepadDraftDeadlineTone}`}
+                      disabled={notepadDisabled}
                       value={notepadDeadlineDraft}
                       onChange={(event) => {
                         setNotepadDeadlineDraft(event.target.value);
@@ -8046,6 +8077,7 @@ export default function EmployeeDashboard({
                         setNotepadDirty(true);
                         setNotepadStatusText("");
                       }}
+                      disabled={notepadDisabled}
                     >
                       Clear
                     </button>
@@ -8056,6 +8088,7 @@ export default function EmployeeDashboard({
                       id="emp-notepad-color"
                       className="empNotepadColorSelect"
                       value={notepadColorDraft}
+                      disabled={notepadDisabled}
                       onChange={(event) => {
                         setNotepadColorDraft(normalizeNotepadColorKey(event.target.value));
                         setNotepadColorDraftSaving(true);
@@ -8086,7 +8119,7 @@ export default function EmployeeDashboard({
                       type="button"
                       className="empNotepadSaveBtn"
                       onClick={saveNotepadNote}
-                      disabled={savingNotepadNote || !notepadDraftCanSave}
+                      disabled={savingNotepadNote || !notepadDraftCanSave || notepadDisabled}
                       title={notepadDraftCanSave ? "Save note" : "Add a title, deadline, or note content to enable save"}
                     >
                       Save
@@ -8094,7 +8127,7 @@ export default function EmployeeDashboard({
                   </div>
                 </div>
 
-                <div className="empNotepadToolbar" role="toolbar" aria-label="Notepad formatting toolbar">
+                <div className={`empNotepadToolbar ${notepadDisabled ? "disabled" : ""}`} role="toolbar" aria-label="Notepad formatting toolbar">
                   <select
                     className="empNotepadToolSelect fontSize"
                     value={String(notepadToolbarState.fontSizePx || NOTEPAD_TOOLBAR_DEFAULT.fontSizePx)}
@@ -8330,26 +8363,54 @@ export default function EmployeeDashboard({
                   >
                     <Eraser size={14} aria-hidden="true" />
                   </button>
+                  <button
+                    type="button"
+                    className="empNotepadToolBtn"
+                    onMouseDown={handleNotepadToolMouseDown}
+                    onClick={() => {
+                      const html = notepadEditorRef.current?.innerHTML || "";
+                      setSaveAsHtml(String(html || ""));
+                      setSaveAsOpen(true);
+                    }}
+                    aria-label="Save as"
+                    title="Save as"
+                  >
+                    <DownloadCloud size={14} aria-hidden="true" />
+                  </button>
                 </div>
 
-                <div
-                  ref={notepadEditorRef}
-                  className="empNotepadEditor"
-                  contentEditable
-                  suppressContentEditableWarning
-                  spellCheck
-                  onFocus={handleNotepadEditorFocus}
-                  onBlur={handleNotepadEditorBlur}
-                  onKeyDown={handleNotepadEditorKeyDown}
-                  onKeyUp={handleNotepadEditorKeyUp}
-                  onInput={handleNotepadEditorInput}
-                  onClick={handleNotepadEditorClick}
-                  onMouseMove={handleNotepadEditorMouseMove}
-                  onMouseDown={handleNotepadEditorMouseDown}
-                  onMouseLeave={handleNotepadEditorMouseLeave}
-                  onContextMenu={handleNotepadEditorContextMenu}
-                  aria-label="Notepad editor"
-                />
+                <div className="empNotepadEditorWrap">
+                  <div
+                    ref={notepadEditorRef}
+                    className="empNotepadEditor"
+                    contentEditable={!notepadDisabled}
+                    suppressContentEditableWarning
+                    spellCheck
+                    onFocus={handleNotepadEditorFocus}
+                    onBlur={handleNotepadEditorBlur}
+                    onKeyDown={handleNotepadEditorKeyDown}
+                    onKeyUp={handleNotepadEditorKeyUp}
+                    onInput={handleNotepadEditorInput}
+                    onClick={handleNotepadEditorClick}
+                    onMouseMove={handleNotepadEditorMouseMove}
+                    onMouseDown={handleNotepadEditorMouseDown}
+                    onMouseLeave={handleNotepadEditorMouseLeave}
+                    onContextMenu={handleNotepadEditorContextMenu}
+                    aria-label="Notepad editor"
+                    aria-disabled={notepadDisabled}
+                  />
+
+                  {notepadDisabled ? (
+                    <div className="empNotepadEditorOverlay" role="status" aria-live="polite">
+                      <div className="empNotepadEditorOverlayInner">
+                        <span>Select a Note or </span>
+                            <button type="button" className="empNotepadCreateNoteBtn" onClick={handleOverlayCreateNote}>
+                              CREATE A NOTE
+                            </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
                 {portalRoot && notepadTableMoveHandleState.visible ? (
                   createPortal(
                     <button
@@ -8566,6 +8627,7 @@ export default function EmployeeDashboard({
             onCancel={cancelBreakConfirm}
             onConfirm={confirmBreakToggle}
           />
+          <SaveAsModal open={saveAsOpen} html={saveAsHtml} onClose={() => setSaveAsOpen(false)} />
         </>
       )}
       </div>
