@@ -1,0 +1,675 @@
+.callReportsPage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #172033;
+}
+.callReportsHero,
+.callReportCard,
+.callReportStat {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(125, 142, 170, 0.18);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+}
+.callReportsHero {
+  padding: 8px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 18px;
+}
+.callReportsHeroActions {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+.callReportsEyebrow {
+  color: #7c3aed;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+}
+.callReportsHero h2 {
+  margin: 6px 0;
+  font-size: 1.6rem;
+}
+.callReportsHero p {
+  margin: 0;
+  max-width: 760px;
+  color: #64748b;
+}
+.callReportsFilters {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.callReportsFilters label {
+  display: flex;
+  flex-direction: column;
+  color: #475569;
+  font-size: 12px;
+}
+.callReportsFilters input,
+.callReportsFilters select {
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  padding: 4px 5px;
+  background: white;
+}
+.callReportsFilters select {
+  min-width: 180px;
+}
+.callReportsHeroMenu {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+}
+.callReportsHeroMenuButton {
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 14px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  font-size: 1.35rem;
+  font-weight: 900;
+  line-height: 1;
+}
+.callReportsHeroMenuButton:hover {
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+  border: 1px solid #dbe3ef;
+}
+.callReportsHeroMenuPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  min-width: 260px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.14);
+  padding: 10px;
+}
+.callReportsImportAction,
+.callReportsMenuAction {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  color: #172033;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+}
+.callReportsImportAction:hover,
+.callReportsMenuAction:hover {
+  background: #eff6ff;
+}
+.callReportsMenuIcon {
+  height: 20px;
+  border-radius: 12px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 34px;
+  font-weight: 900;
+}
+.callReportsMenuText {
+  display: flex;
+  flex-direction: column;
+  
+}
+.callReportsMenuText strong {
+  font-size: 12px;
+}
+.callReportsImportAction input {
+  display: none;
+}
+.callReportsStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.callReportStat {
+  flex: 1 1 140px;
+  padding: 16px;
+}
+.callReportStat b {
+  display: block;
+  font-size: 1.45rem;
+}
+.callReportStat span {
+  color: #64748b;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.callReportsGrid {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.callReportsRow {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.callReportWide {
+  flex: 1 1 100%;
+}
+
+.callActivityTypeCard {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.callActivityReportsLeaderboardPanel {
+  flex: 0 0 auto;
+  min-width: 0;
+  width: auto;
+  max-width: 100%;
+  margin-top: 0;
+  margin-left: auto;
+  border-color: rgba(37, 99, 235, 0.14);
+  background: linear-gradient(180deg, #f8fbff 0%, #eef6ff 100%);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+}
+
+.callActivityReportsLeaderboardPanel .callReportCardHead {
+  margin-bottom: 6px;
+  color: #0f172a;
+}
+
+.callActivityReportsLeaderboardPanel .callReportCardHead h3 {
+  white-space: nowrap;
+}
+
+.callActivityReportsLeaderboardPanel .callReportCardHead span {
+  color: #475569;
+}
+
+.callActivityReportsLeaderboardStrip {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 6px 2px 2px;
+}
+
+.callActivityReportsLeaderboardItem {
+  flex: 1 1 132px;
+  min-width: 124px;
+  max-width: 170px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.callActivityReportsLeaderboardItem.isSelected {
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.98), rgba(191, 219, 254, 0.9));
+  border-color: rgba(37, 99, 235, 0.35);
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.16);
+}
+
+.callActivityReportsLeaderboardBars {
+  width: 100%;
+  min-height: 118px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.callActivityReportsLeaderboardBarsTop {
+  width: 100%;
+  min-height: 14px;
+  position: relative;
+}
+
+.callActivityReportsLeaderboardRank {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.callActivityReportsLeaderboardYou {
+  position: absolute;
+  right: 0;
+  top: 0;
+  border-radius: 999px;
+  background: rgba(29, 78, 216, 0.14);
+  color: #1d4ed8;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.callActivityReportsLeaderboardBarGroup {
+  width: 100%;
+  height: 100px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+}
+
+.callActivityReportsLeaderboardBar {
+  height: 100%;
+  width: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.callActivityReportsLeaderboardBar span {
+  min-height: 12px;
+  color: #0f172a;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.callActivityReportsLeaderboardBar i {
+  width: 18px;
+  height: var(--barPct, 4%);
+  min-height: 7px;
+  border-radius: 999px 999px 4px 4px;
+  background: #0891b2;
+  box-shadow: 0 8px 16px rgba(8, 145, 178, 0.18);
+}
+
+.callActivityReportsLeaderboardBar.isHours i {
+  background: #60a5fa;
+  box-shadow: 0 8px 16px rgba(96, 165, 250, 0.18);
+}
+
+.callActivityReportsLeaderboardBar.isEntries i {
+  background: #1d4ed8;
+  box-shadow: 0 8px 16px rgba(29, 78, 216, 0.18);
+}
+
+.callActivityReportsLeaderboardBar em {
+  color: #334155;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.callActivityReportsLeaderboardAvatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #dbeafe;
+  border: 2px solid rgba(30, 64, 175, 0.2);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.callActivityReportsLeaderboardAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.callActivityReportsLeaderboardName {
+  width: 100%;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.callActivityReportsLeaderboardMeta {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.callReportCard {
+  border-color: rgba(125, 142, 170, 0.18);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+}
+.callReportCardHead {
+  display: flex;
+  color: #172033;
+  font-weight: 900;
+  width: 100%;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 8px;
+}
+.callReportCardHead h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.callReportCardHead span {
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.callReportPager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.callReportPager button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #dbe3ef;
+  border-radius: 999px;
+  background: #fff;
+  color: #1d4ed8;
+  cursor: pointer;
+  font-size: 1.15rem;
+  font-weight: 900;
+  line-height: 1;
+}
+.callReportPager button:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.callReportChart {
+  min-height: 280px;
+}
+.callActivityTypeCard .callReportChart {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.employeeCompareLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -2px 0 4px;
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.employeeCompareLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.employeeCompareLegend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.employeeCompareLegend .count { background: #0891b2; }
+.employeeCompareLegend .hours { background: #60a5fa; }
+.employeeCompareLegend .entries { background: #1d4ed8; }
+.employeeCompareWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 0;
+  overflow: visible;
+  padding: 0 6px 2px;
+  margin-top: 30px;
+}
+.employeeCompareBarsRow,
+.employeeCompareProfilesRow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  column-gap: 28px;
+  row-gap: 18px;
+  flex-wrap: wrap;
+}
+.employeeCompareDivider {
+  width: 100%;
+  height: 1px;
+  flex: 0 0 1px;
+  background: rgba(100, 116, 139, 0.46);
+}
+.employeeCompareItem {
+  flex: 0 0 112px;
+  max-width: 112px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  text-align: center;
+}
+.employeeCompareProfileItem {
+  justify-content: flex-start;
+  gap: 7px;
+}
+.employeeCompareBars {
+  height: 90px;
+  flex: 0 0 90px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+}
+.employeeCompareMetric {
+  height: 100%;
+  width: 31px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  position: relative;
+}
+.employeeCompareValue {
+  color: #334155;
+  font-size: 0.58rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.employeeCompareBar {
+  width: 20px;
+  min-height: 10px;
+  margin-top: auto;
+  border-radius: 8px 8px 2px 2px;
+  box-shadow: 0 6px 12px rgba(37, 99, 235, 0.1);
+}
+.employeeCompareBar.count {
+  background: linear-gradient(180deg, #06b6d4, #0891b2);
+}
+.employeeCompareBar.hours {
+  background: linear-gradient(180deg, #93c5fd, #4f7cff);
+}
+.employeeCompareBar.entries {
+  background: linear-gradient(180deg, #2563eb, #0f4aaa);
+}
+.employeeCompareLabel {
+  color: #475569;
+  font-size: 0.5rem;
+  font-weight: 900;
+  width: 100%;
+  text-align: center;
+}
+.employeeCompareProfile {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  overflow: hidden;
+  border: 2px solid #0f172a;
+  border-radius: 999px;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.employeeCompareProfile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.employeeCompareFallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #e0f2fe, #eff6ff);
+  color: #1d4ed8;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+.employeeCompareItem strong {
+  max-width: 96px;
+  color: #0f172a;
+  font-size: 0.6rem;
+  line-height: 1.25;
+}
+.employeeCompareEmpty {
+  width: 100%;
+  align-self: center;
+  color: #64748b;
+  font-weight: 800;
+  text-align: center;
+}
+.callReportTableWrap {
+  overflow: auto;
+}
+.callReportTableWrap.compact {
+  max-height: 304px;
+}
+.callReportTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.callReportTable th,
+.callReportTable td {
+  text-align: left;
+  border-bottom: 1px solid #edf2f7;
+  padding: 10px;
+  vertical-align: top;
+}
+.callReportTable th {
+  color: #475569;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.callReportsError,
+.callReportsLoading {
+  border-radius: 16px;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+.callReportsError { background: #fff1f2; color: #be123c; }
+.callReportsLoading { background: #eff6ff; color: #1d4ed8; }
+.callImportModalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(6px);
+}
+.callImportModal {
+  width: min(520px, 100%);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.28);
+  padding: 24px;
+}
+.callImportModalHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.callImportModalHead h3 {
+  margin: 5px 0 0;
+  font-size: 1.2rem;
+}
+.callImportModalHead strong {
+  color: #2563eb;
+  font-size: 1.25rem;
+}
+.callImportProgressTrack {
+  height: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+.callImportProgressBar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7c3aed, #2563eb, #06b6d4);
+  transition: width 180ms ease;
+}
+.callImportModal p {
+  margin: 14px 0 0;
+  color: #475569;
+  font-weight: 700;
+}
+@media (max-width: 980px) {
+  .callReportsHero { align-items: stretch; flex-direction: column; }
+  .callReportsHeroActions { align-items: stretch; }
+  .callReportsHeroMenu { align-items: flex-end; }
+  .callReportsStats { flex-direction: row; }
+  .callReportsRow { flex-direction: column; }
+  .callActivityTypeCard,
+  .callActivityReportsLeaderboardPanel,
+  .callReportWide { width: 100%; max-width: 100%; }
+}

@@ -1,0 +1,1162 @@
+/* src/components/attendancePage.css */
+
+/* ---------- Premium SaaS Theme ---------- */
+:root{
+  --bg0:#ffffff;
+  --bg1:#f8fafc;
+
+  --card:#ffffff;
+  --card2:#f8fafc;
+  --card3:linear-gradient(180deg, rgba(91,0,8,.03), rgba(42,0,3,.015));
+
+  --border:rgba(15,23,42,.08);
+  --borderSoft:rgba(15,23,42,.06);
+
+  --text:#0f172a;
+  --muted:#64748b;
+  --muted2:#94a3b8;
+
+  --blue:#3b82f6;
+  --cyan:#06b6d4;
+  --green:#16a34a;
+  --amber:#d97706;
+  --red:#dc2626;
+  --purple:#7c3aed;
+
+  --navy:#111827;
+  --navy2:#1e293b;
+
+  --accent:linear-gradient(180deg, #5b0008, #2a0003);
+  --accentDark:linear-gradient(145deg, #111827, #1e293b);
+
+  --shadow:
+    0 1px 2px rgba(15,23,42,.04),
+    0 16px 40px rgba(15,23,42,.08);
+
+  --shadow2:
+    0 1px 2px rgba(15,23,42,.03),
+    0 10px 24px rgba(15,23,42,.06);
+}
+
+/* ---------- Page Shell ---------- */
+.attx{
+  min-width:0;
+  padding:8px;
+  color:var(--text);
+  width:100%;
+  box-sizing:border-box;
+}
+
+.attxBadge.absent {
+  border-color: rgba(220, 38, 38, 0.18);
+  background: rgba(220, 38, 38, 0.08);
+  color: var(--red);
+}
+
+/* ---------- Topbar ---------- */
+.attxTop{
+  display:flex;
+  flex-direction:row;
+  justify-content:space-between;
+  gap:16px;
+}
+
+.attxTopRight{
+  display:flex;
+  flex-direction:column;
+  width:100%;
+}
+
+.attxTitleWrap{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  width: 100%;
+}
+
+.attxTitleWrapCard{
+  gap:4px;
+}
+
+.attxTitle{
+  font-weight:700;
+  letter-spacing:-.03em;
+  text-transform:none;
+  font-size:22px;
+  color:var(--text);
+}
+.attxTitleWrapCard{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+}
+
+.attxTitleCard{
+  font-size:20px;
+  color:#ffffff;
+}
+
+.attxSub{
+  display: flex;
+  font-size:12px;
+  color:var(--muted);
+  font-weight:500;
+  min-height:16px;
+  justify-content: start;
+  align-items: start;
+}
+
+.attxSubCard{
+  color:rgba(255,255,255,.78);
+}
+
+/* ---------- Controls ---------- */
+.attxControls{
+  display:flex;
+  flex-direction:row;
+  justify-content:end;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+}
+
+/* ---------- Loading Overlay ---------- */
+.attxLoadingOverlay {
+  inset: 0;
+  z-index: 3;
+  background: rgba(255,255,255,.18);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: attxFadeIn 120ms ease-out;
+}
+
+@keyframes attxFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.attxLoadingModal {
+  width: min(420px, calc(100vw - 32px));
+  padding: 22px 20px;
+  border-radius: 18px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.attxSpinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid rgba(15, 23, 42, 0.10);
+  border-top-color: #5b0008;
+  animation: attxSpin 0.9s linear infinite;
+}
+
+@keyframes attxSpin {
+  to { transform: rotate(360deg); }
+}
+
+.attxLoadingText {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.attxLoadingSub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.attxField{ 
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:end;
+  margin-bottom:10px;
+  width:100%;
+  gap:10px;
+}
+
+.attxField1{ 
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:start;
+  width: 100%;
+}
+
+.attxLabel{
+  font-size:10px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--text);
+  width: 100%;
+  text-align: start;
+}
+
+.attxInput{
+  height:40px;
+  padding:0 12px;
+  border-radius:12px;
+  border:1px solid var(--border);
+  background:#ffffff;
+  color:var(--text);
+  font-weight:600;
+  font-size:12px;
+  outline:none;
+  box-shadow:0 1px 2px rgba(15,23,42,.03);
+  width: 100%;
+  max-width: 30%;
+}
+
+.attxInput::placeholder{
+  color: var(--muted2);
+}
+
+.attxInput:focus{
+  border-color: rgba(91,0,8,.22);
+  box-shadow: 0 0 0 4px rgba(91,0,8,.08);
+}
+
+#badeng{
+  height:40px;
+  padding:0 14px;
+  border-radius:12px;
+  border:1px solid rgba(15,23,42,.08);
+  background:linear-gradient(180deg, #212e4b, #101825);
+  color:var(--text);
+  font-weight:600;
+  font-size:12px;
+  letter-spacing:.01em;
+  cursor:pointer;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  margin:0 5px;
+  box-shadow:0 1px 2px rgba(15,23,42,.03);
+  color: #ffffff;
+}
+
+.attxBtn{
+  height:40px;
+  padding:0 14px;
+  border-radius:12px;
+  border:1px solid rgba(15,23,42,.08);
+  background:#ffffff;
+  color:var(--text);
+  font-weight:600;
+  font-size:12px;
+  letter-spacing:.01em;
+  cursor:pointer;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  margin: 5px;
+  box-shadow:0 1px 2px rgba(15,23,42,.03);
+}
+
+.attxBtn:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--shadow2);
+  border-color: rgba(91,0,8,.16);
+}
+
+.attxBtn:disabled{
+  opacity:.6;
+  cursor:not-allowed;
+  transform:none;
+  box-shadow:none;
+}
+
+.attxBtnReload{
+  min-width:110px;
+  text-align:center;
+}
+
+.attxLiveText {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.attxBtn.active {
+  background: var(--accent);
+  color: var(--text);
+  border-color: transparent;
+  transform: translateY(-1px);
+}
+
+.attxPill{
+  height:38px;
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:0 12px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:#ffffff;
+  font-weight:600;
+  font-size:12px;
+  color:var(--muted);
+  min-width:90px;
+  justify-content:center;
+  white-space:nowrap;
+  flex: 0 0 auto;
+}
+
+.attxPillValue {
+  color: var(--text);
+}
+
+.attxPillToday {
+  align-self: center;
+}
+
+/* ---------- Alerts ---------- */
+.attxAlert{
+  margin-top:12px;
+  border:1px solid rgba(220,38,38,.14);
+  background: rgba(220,38,38,.06);
+  color: var(--red);
+  border-radius:16px;
+  padding:12px 14px;
+  font-weight:600;
+  box-shadow: var(--shadow2);
+}
+
+.attxAlertFlat {
+  margin: 0;
+}
+
+/* ---------- KPI Tiles ---------- */
+.attxKpis{
+  margin-top:8px;
+  display:grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap:14px;
+}
+
+.attxTile{
+  border:1px solid var(--border);
+  background:#ffffff;
+  border-radius:18px;
+  padding:16px;
+  box-shadow: var(--shadow2);
+  position:relative;
+  overflow:hidden;
+}
+
+.attxTile::before{
+  content:"";
+  position:absolute;
+  top:0;
+  left:16px;
+  right:16px;
+  height:3px;
+  border-radius:999px;
+  background:var(--accent);
+}
+
+.attxTileLabel{
+  font-size:10px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.10em;
+  color:var(--muted);
+}
+
+.attxTileValue{
+  margin-top:10px;
+  font-size:18px;
+  font-weight:600;
+  letter-spacing:-.02em;
+  color:var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.attxTileHint{
+  margin-top:8px;
+  font-size:11px;
+  font-weight:500;
+  color:var(--muted2);
+}
+
+/* ---------- Table Card ---------- */
+.attxCard{
+  border:1px solid var(--border);
+  background:#ffffff;
+  border-radius:20px;
+  overflow:hidden;
+  box-shadow: var(--shadow);
+}
+
+.attxCardHead{
+  padding:7px 9px;
+  border-bottom:1px solid var(--borderSoft);
+  background: linear-gradient(180deg, #353a448a, #707885);
+}
+
+.attxTitleWrapCard{
+display: flex;
+
+}
+
+.attxCardTitle{
+  font-size:10px;
+  font-weight:600;
+  letter-spacing:.10em;
+  text-transform:uppercase;
+  color:var(--card);
+}
+
+.attxCardMetaWrap {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.attxCardMeta {
+  color: rgba(255, 255, 255, 0.65);
+  font-weight: 900;
+  font-size: 12px;
+}
+
+.attxTableWrap{
+  overflow:auto;
+}
+
+.attxTable{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  min-width:980px;
+}
+
+.badenggg{
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.badenggg2{
+  width: 100%;
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  justify-content: end;
+
+}
+
+.attxTable th{
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  text-align:left;
+  padding:12px 14px;
+  font-size:10px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color: #ffffff;
+  background: linear-gradient(145deg, #111827, #1e293b);
+  border-bottom:1px solid rgba(255,255,255,.06);
+}
+
+.attxTable td{
+  padding:12px 14px;
+  border-bottom:1px solid var(--borderSoft);
+  font-size:12px;
+  font-weight:500;
+  color: var(--text);
+  vertical-align:top;
+}
+
+.attxTableEmpty {
+  padding: 16px;
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 900;
+}
+
+.attxTr:hover td{
+  background: rgba(15,23,42,.025);
+}
+
+/* ---------- Person cell ---------- */
+.attxPerson{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width:260px;
+}
+
+.attxAvatar{
+  width:38px;
+  height:38px;
+  border-radius:50%;
+  place-items:center;
+  text-align: center;
+  display: flex;
+  justify-content: center;
+  font-weight:700;
+  letter-spacing:.02em;
+  color: #ffffff;
+  border:1px solid rgba(15,23,42,.06);
+  background: linear-gradient(180deg, #a11622, #791219);
+}
+
+.attxAvatarImg {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.attxName{
+  font-weight:600;
+  color:var(--text);
+}
+
+.attxEmail{
+  margin-top:2px;
+  font-size:11px;
+  color: var(--muted);
+  font-weight:500;
+}
+
+.attxTzView {
+  font-weight: 950;
+}
+
+#attxEmail{
+  display:none;
+}
+
+/* ---------- Badges ---------- */
+.attxBadge{
+  all: unset;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background: #ffffff;
+  font-size:10px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.05em;
+  white-space:nowrap;
+  color: var(--text);
+}
+
+.attxDot{
+  width:8px;
+  height:8px;
+  border-radius:999px;
+  background: currentColor;
+  opacity:.9;
+}
+
+.attxBadge.early{
+  background: rgba(59,130,246,.08);
+  border-color: rgba(59,130,246,.14);
+  color: var(--blue);
+}
+.attxBadge.ontime{
+  background: rgba(22,163,74,.08);
+  border-color: rgba(22,163,74,.14);
+  color: var(--green);
+}
+.attxBadge.late{
+  background: rgba(217,119,6,.08);
+  border-color: rgba(217,119,6,.16);
+  color: var(--amber);
+}
+.attxBadge.done{
+  background: rgba(124,58,237,.08);
+  border-color: rgba(124,58,237,.14);
+  color: var(--purple);
+}
+.attxBadge.notimeout{
+  background: rgba(220,38,38,.08);
+  border-color: rgba(220,38,38,.16);
+  color: var(--red);
+}
+.attxBadge.nosched{
+  background: rgba(148,163,184,.12);
+  border-color: rgba(148,163,184,.16);
+  color: #64748b;
+}
+.attxBadge.warn{
+  background: rgba(217,119,6,.08);
+  border-color: rgba(217,119,6,.16);
+  color: var(--amber);
+}
+
+/* ---------- timeDiff chip ---------- */
+.chip{
+  display:inline-flex;
+  align-items:center;
+  padding:6px 10px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:600;
+  border:1px solid var(--border);
+  background:#ffffff;
+  white-space:nowrap;
+  color:var(--text);
+}
+
+.chip.good{
+  border-color: rgba(22,163,74,.16);
+  background: rgba(22,163,74,.06);
+  color: var(--green);
+}
+.chip.mid{
+  border-color: rgba(217,119,6,.16);
+  background: rgba(217,119,6,.06);
+  color: var(--amber);
+}
+.chip.bad{
+  border-color: rgba(220,38,38,.16);
+  background: rgba(220,38,38,.06);
+  color: var(--red);
+}
+
+/* ---------- Expand ---------- */
+.attxExpand{
+  border:1px solid var(--border);
+  background:#ffffff;
+  color: var(--text);
+  border-radius:12px;
+  padding:8px 10px;
+  font-size:11px;
+  font-weight:600;
+  cursor:pointer;
+  transition: transform .12s ease, background .12s ease, border-color .12s ease;
+}
+
+.attxExpand:hover{
+  transform: translateY(-1px);
+  background: #f8fafc;
+  border-color: rgba(91,0,8,.14);
+}
+
+.attxJson{
+  margin:0;
+  padding:12px 14px;
+  background: #0f172a;
+  border-top:1px solid var(--borderSoft);
+  color: #d1fae5;
+  font-size:12px;
+  font-weight:500;
+  overflow:auto;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 1200px){
+  .attxKpis{ grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+
+@media (max-width: 720px){
+  .attx{ padding:14px; border-radius:14px; }
+  .attxTable{ min-width: 860px; }
+}
+
+/* ---------- Drawer ---------- */
+.attxDrawerBackdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,.24);
+  backdrop-filter: blur(4px);
+  z-index: 9998;
+}
+
+.attxDrawer{
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  height: 100%;
+  max-height: 100%;
+  width: min(60%, 92vw);
+  background: #ffffff;
+  border-left: 1px solid var(--border);
+  z-index: 9999;
+  transform: translateX(100%);
+  transition: transform 220ms ease;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 30px rgba(15,23,42,.08);
+  overflow: hidden;
+}
+
+.attxDrawer.open{
+  transform: translateX(0);
+}
+
+.attxDrawerHead{
+  padding: 16px 18px;
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--borderSoft);
+  background: var(--card3);
+}
+
+.attxDrawerTitle{
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.attxDrawerIdentity{
+  min-width: 0;
+}
+
+.attxDrawerPerson{
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.attxDrawerMeta{
+  min-width: 0;
+}
+
+.attxDrawerName{
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.attxDrawerSub{
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attxDrawerClose{
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.attxDrawerBody{
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  background:#ffffff;
+}
+
+.attxDrawerJsonTitle{
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.attxDrawerJson{
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+/* ---------- Drawer details UI ---------- */
+.attxDetailChips{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:12px;
+}
+
+.attxChip{
+  display:inline-flex;
+  align-items:center;
+  padding:6px 10px;
+  border-radius:999px;
+  font-weight:600;
+  font-size:11px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.attxChipGood{
+  background: rgba(22,163,74,.08);
+  border-color: rgba(22,163,74,.14);
+  color: var(--green);
+}
+
+.attxDetailGrid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:10px;
+}
+
+@media (max-width: 520px){
+  .attxDetailGrid{ grid-template-columns: 1fr; }
+}
+
+.attxDetailCard{
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(15,23,42,.02);
+}
+
+.attxDetailCard.full{
+  grid-column: 1 / -1;
+}
+
+.attxDetailLabel{
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.attxDetailValue{
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.attxDetailValue.mono{
+  font-size: 12px;
+  color: var(--text);
+  opacity: .9;
+}
+
+/* ---------- Collapsible raw JSON ---------- */
+.attxRawDetails{
+  margin-top: 14px;
+  background: #f8fafc;
+  border: 1px dashed rgba(15,23,42,.12);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.attxRawSummary{
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.attxRawJson{
+  margin-top: 10px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.badge.early{
+  background: rgba(59,130,246,.08);
+  border: 1px solid rgba(59,130,246,.14);
+}
+.badge.ontime{
+  background: rgba(22,163,74,.08);
+  border: 1px solid rgba(22,163,74,.14);
+}
+.badge.late{
+  background: rgba(217,119,6,.08);
+  border: 1px solid rgba(217,119,6,.16);
+}
+.badge.done{
+  background: rgba(124,58,237,.08);
+  border: 1px solid rgba(124,58,237,.14);
+}
+.badge.notimeout{
+  background: rgba(220,38,38,.08);
+  border: 1px solid rgba(220,38,38,.16);
+}
+.badge.nosched{
+  background: rgba(148,163,184,.12);
+  border: 1px solid rgba(148,163,184,.16);
+}
+
+/* ---------- Drawer History Table ---------- */
+.attxHistoryTop {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.attxHistoryMeta {
+  font-weight: 500;
+  color: var(--muted);
+  opacity: 0.9;
+}
+
+.attxHistoryTableWrap {
+  position: relative;
+  overflow: auto;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  height: min(95%, 92vw);
+  background: #ffffff;
+  padding-bottom: 56px;
+}
+
+.attxHistoryTable {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 920px;
+}
+
+.attxHistoryTable thead th {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 12px 10px;
+  color:#ffffff;
+  background: linear-gradient(145deg, #111827, #1e293b);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  white-space: nowrap;
+}
+
+.attxHistoryTable tbody td {
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--borderSoft);
+  font-weight: 500;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.attxHistoryEmpty {
+  padding: 14px;
+  font-weight: 900;
+  opacity: 0.8;
+}
+
+.attxHistoryNotes {
+  font-weight: 800;
+}
+
+.attxHistoryMore {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 6;
+  pointer-events: none;
+}
+
+.attxHistoryMore .attxBtn {
+  pointer-events: auto;
+  box-shadow: 0 10px 24px rgba(15,23,42,.18);
+  border-color: rgba(91,0,8,.28);
+  background: #ffffff;
+}
+
+.attxHistTime {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: default;
+}
+
+.attxHistPill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--text);
+}
+
+/* Scheduled */
+.attxBadge.scheduled {
+  background: rgba(59,130,246,0.08);
+  color: var(--blue);
+  border: 1px solid rgba(59,130,246,0.16);
+}
+
+/* Day Off */
+.attxBadge.dayoff {
+  background: rgba(148,163,184,0.12);
+  color: #64748b;
+  border: 1px solid rgba(148,163,184,0.16);
+}
+
+.attxBadge.break,
+.attxHistPill.break {
+  background: rgba(217,119,6,0.08);
+  color: var(--amber);
+  border: 1px solid rgba(217,119,6,0.16);
+}
+
+.attxHistPill.early {
+  background: rgba(59,130,246,0.08);
+  border-color: rgba(59,130,246,0.16);
+  color: var(--blue);
+}
+.attxHistPill.ontime {
+  background: rgba(22,163,74,0.08);
+  border-color: rgba(22,163,74,0.16);
+  color: var(--green);
+}
+.attxHistPill.late {
+  background: rgba(217,119,6,0.08);
+  border-color: rgba(217,119,6,0.16);
+  color: var(--amber);
+}
+.attxHistPill.done {
+  background: rgba(22,163,74,0.08);
+  border-color: rgba(22,163,74,0.16);
+  color: var(--green);
+}
+.attxHistPill.warn {
+  background: rgba(148,163,184,0.12);
+  border-color: rgba(148,163,184,0.16);
+  color: #64748b;
+}
+
+/* Compact spacing pass */
+.attx {
+  padding: 6px;
+}
+
+.attxTop {
+  gap: 10px;
+}
+
+.attxTitleWrap {
+  gap: 4px;
+}
+
+.attxControls {
+  gap: 8px;
+}
+
+.attxField {
+  margin-bottom: 8px;
+  gap: 8px;
+}
+
+.attxInput,
+.attxBtn,
+#badeng {
+  height: 36px;
+}
+
+.attxBtn,
+#badeng {
+  padding: 0 10px;
+}
+
+.attxPill {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.attxAlert {
+  margin-top: 8px;
+  padding: 9px 11px;
+}
+
+.attxKpis {
+  gap: 10px;
+}
+
+.attxTile {
+  padding: 12px;
+}
+
+.attxTile::before {
+  left: 12px;
+  right: 12px;
+}
+
+.attxCard {
+  border-radius: 16px;
+}
+
+.attxCardHead {
+  padding: 6px 7px;
+}
+
+.attxTable th,
+.attxTable td {
+  padding: 9px 10px;
+}
+
+.attxAvatar {
+  width: 34px;
+  height: 34px;
+}
+
+.attxDrawerHead {
+  padding: 12px 14px;
+}
+
+.attxDrawerBody {
+  padding: 1px 12px;
+}
+
+.attxDetailGrid {
+  gap: 8px;
+}
+
+.attxDetailCard {
+  padding: 10px;
+}
+
+.attxRawDetails {
+  margin-top: 10px;
+  padding: 8px 10px;
+}
+
+.attxHistoryTop {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.attxHistoryTable thead th,
+.attxHistoryTable tbody td {
+  padding: 9px 8px;
+}

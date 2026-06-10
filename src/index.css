@@ -1,0 +1,88 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background-color: #ffffff;
+  color: #fff;
+  font-family: 'Montserrat', 'Poppins', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  background: #ebebeb;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+
+
+/* ================================
+   Global Scrollbar Styling (App-wide)
+   Works on: Chrome/Edge/Safari + Firefox
+   ================================ */
+
+/* Optional: theme variables (tweak these) */
+:root {
+  --sb-size: 10px;
+  --sb-track: rgba(0, 0, 0, 0.171);
+  --sb-thumb: rgba(0, 0, 0, 0.26);
+  --sb-thumb-hover: rgba(255, 255, 255, 0);
+  --sb-thumb-active: rgba(255, 255, 255, 0);
+  --sb-radius: 999px;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin; /* auto | thin | none */
+  scrollbar-color: var(--sb-thumb) var(--sb-track);
+}
+
+/* WebKit (Chrome/Edge/Safari) */
+*::-webkit-scrollbar {
+  width: var(--sb-size);
+  height: var(--sb-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--sb-track);
+  border-radius: var(--sb-radius);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--sb-thumb);
+  border-radius: var(--sb-radius);
+
+  /* gives "padding" around thumb so it looks nicer */
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--sb-thumb-hover);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: var(--sb-thumb-active);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* Optional: hide scrollbar buttons (mostly Windows) */
+*::-webkit-scrollbar-button {
+  display: none;
+}
+
+/* Optional: corner for both-axis scroll areas */
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}

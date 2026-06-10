@@ -1,0 +1,616 @@
+.prpPage {
+  width: 100%;
+  min-width: 0;
+  color: #0f172a;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.prpHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.prpHeader h2 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  color: #111827;
+}
+
+.prpHeader p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.prpHeaderControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prpEmployeeFilter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prpEmployeeFilter label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.prpEmployeeFilter select {
+  min-width: 170px;
+  border-radius: 10px;
+  border: 1px solid rgba(17, 24, 39, 0.2);
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
+}
+
+.prpRangePill {
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.prpYearFilter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prpYearFilter label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.prpYearFilter select {
+  min-width: 92px;
+  border-radius: 10px;
+  border: 1px solid rgba(17, 24, 39, 0.2);
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
+}
+
+.prpBanner {
+  border-radius: 12px;
+  border: 1px solid rgba(17, 24, 39, 0.1);
+  background: #ffffff;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.prpBanner.error {
+  border-color: rgba(220, 38, 38, 0.2);
+  background: rgba(254, 242, 242, 0.8);
+  color: #991b1b;
+}
+
+.prpSection {
+  background: #ffffff;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(17, 24, 39, 0.06);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.prpSectionHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.prpSectionHead h3 {
+  margin: 0;
+  font-size: 17px;
+  color: #111827;
+}
+
+.prpSectionHead p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.prpStatsGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.prpStatCard {
+  border-radius: 12px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+.prpStatCard.total {
+  background: linear-gradient(135deg, rgba(30, 64, 175, 0.9), rgba(29, 78, 216, 0.75));
+  border-color: transparent;
+}
+
+.prpStatLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.prpStatCard.total .prpStatLabel {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.prpStatValue {
+  margin-top: 5px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #0f172a;
+}
+
+.prpStatCard.total .prpStatValue {
+  color: #ffffff;
+}
+
+.prpCard {
+  border-radius: 14px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  background: #ffffff;
+  padding: 12px;
+  min-width: 0;
+}
+
+.prpCardHead {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #475569;
+  margin-bottom: 10px;
+}
+
+.prpCardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.prpCardTop .prpCardHead {
+  margin-bottom: 0;
+}
+
+.prpLogFilters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.prpMonthFilter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prpMonthFilter label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.prpMonthFilter select {
+  min-width: 160px;
+  border-radius: 10px;
+  border: 1px solid rgba(17, 24, 39, 0.2);
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
+}
+
+.prpStatusFilter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.prpStatusFilterLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.prpStatusFilterChips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.prpStatusChip {
+  border: 1px solid rgba(17, 24, 39, 0.2);
+  background: #ffffff;
+  color: #334155;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease,
+    filter 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
+  opacity: 0.85;
+}
+
+.prpStatusChip:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 16px rgba(15, 23, 42, 0.14),
+    inset 0 0 0 999px rgba(255, 255, 255, 0.14);
+}
+
+.prpStatusChip:not(.isAll):hover {
+  filter: saturate(1.15) brightness(0.98);
+}
+
+.prpStatusChip.isActive {
+  opacity: 1;
+  transform: translateY(-1px);
+  border-color: rgba(15, 23, 42, 0.38);
+  box-shadow:
+    0 9px 18px rgba(15, 23, 42, 0.16),
+    0 0 0 2px rgba(15, 23, 42, 0.2),
+    inset 0 0 0 999px rgba(15, 23, 42, 0.08);
+}
+
+.prpStatusChip:not(.isAll).isActive {
+  filter: saturate(1.22) brightness(0.95);
+}
+
+.prpStatusChip.isAll {
+  color: #334155;
+  border-color: rgba(17, 24, 39, 0.2);
+  background: #ffffff;
+}
+
+.prpStatusChip.isAll:hover {
+  background: rgba(17, 24, 39, 0.12);
+}
+
+.prpStatusChip.isAll.isActive {
+  color: #111827;
+  background: rgba(17, 24, 39, 0.2);
+  border-color: rgba(17, 24, 39, 0.45);
+}
+
+.prpStatusChip:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px rgba(37, 99, 235, 0.35);
+}
+
+.prpChartWrap {
+  width: 100%;
+  height: 300px;
+  min-width: 0;
+  min-height: 300px;
+}
+
+.prpEmpty {
+  min-height: 90px;
+  border-radius: 12px;
+  border: 1px dashed rgba(17, 24, 39, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.prpTableWrap {
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+}
+
+.prpTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.prpTable th {
+  text-align: left;
+  padding: 9px 10px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  background: rgba(15, 23, 42, 0.03);
+  border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+}
+
+.prpTable td {
+  padding: 9px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(17, 24, 39, 0.06);
+  color: #1f2937;
+}
+
+.prpTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.prpNotesCell {
+  color: #475569;
+  max-width: 260px;
+  white-space: normal;
+}
+
+.prpStatusPill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.prpComingBadge {
+  border-radius: 999px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.14);
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+}
+
+.prpComingGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.prpComingCard {
+  border-radius: 12px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(17, 24, 39, 0.05);
+  padding: 12px;
+}
+
+.prpComingCard.wide {
+  min-height: 160px;
+}
+
+.prpComingTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.prpComingValue {
+  margin-top: 8px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.prpComingHint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.prpComingChart {
+  margin-top: 10px;
+  min-height: 100px;
+  border-radius: 10px;
+  border: 1px dashed rgba(15, 23, 42, 0.22);
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.14), rgba(226, 232, 240, 0.35));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.prpTooltip {
+  border-radius: 10px;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+  padding: 10px 12px;
+}
+
+.prpTooltipTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 7px;
+}
+
+.prpTooltipRow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #334155;
+  margin-top: 4px;
+}
+
+.prpTooltipDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.prpTooltipDot.prpStatusTone-early {
+  background: #4b9fea;
+}
+
+.prpTooltipDot.prpStatusTone-onTime {
+  background: #66bb6a;
+}
+
+.prpTooltipDot.prpStatusTone-late {
+  background: #f39c12;
+}
+
+.prpTooltipDot.prpStatusTone-pto {
+  background: #8e44ad;
+}
+
+.prpTooltipDot.prpStatusTone-absent {
+  background: #e74c3c;
+}
+
+.prpTooltipDot.prpStatusTone-ncns {
+  background: #4b5563;
+}
+
+.prpStatusChip.prpStatusTone-early,
+.prpStatusPill.prpStatusTone-early {
+  color: #4b9fea;
+  border-color: rgba(75, 159, 234, 0.4);
+  background: rgba(75, 159, 234, 0.16);
+}
+
+.prpStatusChip.prpStatusTone-onTime,
+.prpStatusPill.prpStatusTone-onTime {
+  color: #66bb6a;
+  border-color: rgba(102, 187, 106, 0.4);
+  background: rgba(102, 187, 106, 0.16);
+}
+
+.prpStatusChip.prpStatusTone-late,
+.prpStatusPill.prpStatusTone-late {
+  color: #f39c12;
+  border-color: rgba(243, 156, 18, 0.45);
+  background: rgba(243, 156, 18, 0.16);
+}
+
+.prpStatusChip.prpStatusTone-pto,
+.prpStatusPill.prpStatusTone-pto {
+  color: #8e44ad;
+  border-color: rgba(142, 68, 173, 0.45);
+  background: rgba(142, 68, 173, 0.16);
+}
+
+.prpStatusChip.prpStatusTone-absent,
+.prpStatusPill.prpStatusTone-absent {
+  color: #e74c3c;
+  border-color: rgba(231, 76, 60, 0.45);
+  background: rgba(231, 76, 60, 0.16);
+}
+
+.prpStatusChip.prpStatusTone-ncns,
+.prpStatusPill.prpStatusTone-ncns {
+  color: #4b5563;
+  border-color: rgba(75, 85, 99, 0.45);
+  background: rgba(75, 85, 99, 0.16);
+}
+
+@media (max-width: 1200px) {
+  .prpStatsGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .prpHeaderControls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .prpEmployeeFilter {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .prpEmployeeFilter select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .prpMonthFilter {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .prpMonthFilter select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .prpStatusFilter {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .prpStatusFilterChips {
+    width: 100%;
+  }
+
+  .prpStatsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prpComingGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .prpChartWrap {
+    height: 250px;
+  }
+}
