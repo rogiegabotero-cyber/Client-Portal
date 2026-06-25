@@ -17,6 +17,11 @@ import {
   resolveAttendanceDisplayTimeZone,
   sanitizeTimeZone,
 } from "../services/attendanceSettingsService";
+import {
+  getDefaultEmployeeProcessSettings,
+  saveEmployeeProcessRotation,
+  subscribeEmployeeProcessSettings,
+} from "../services/employeeProcessService";
 import { getDeviceTimeZone } from "../utils/common";
 import { auth, db } from "../firebase";
 import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
@@ -37,6 +42,7 @@ import {
   Database,
   Eye,
   FileText,
+  GripVertical,
   Settings,
   MoreVertical,
   Pencil,
@@ -48,6 +54,7 @@ import {
   Trash2,
   User,
   UserPlus,
+  Users,
   X,
 } from "lucide-react";
 import "./controlPanelPage.css";
@@ -130,6 +137,7 @@ const DATA_TABS = {
 };
 const SETTINGS_DRAWER_VIEWS = {
   ATTENDANCE: "attendance",
+  EMPLOYEE_PROCESS: "employee_process",
   ROLE_BULK: "role_bulk",
   USER_ACTIONS: "user_actions",
   PENDING_REQUESTS: "pending_requests",
@@ -452,6 +460,15 @@ const getUserDisplayLabel = (user = {}) =>
   String(user?.email || "").trim() ||
   getPortalUserDocId(user) ||
   "Unnamed User";
+const getEmployeeProcessUserId = (employee = {}) =>
+  String(
+    employee?.userId ||
+      employee?.uid ||
+      employee?.id ||
+      employee?.employeeUserId ||
+      employee?.employeeId ||
+      ""
+  ).trim();
 const formatDateTime = (value, timeZone = "America/New_York") => {
   const resolved = timestampToDate(value);
   if (!resolved) return "-";
@@ -571,6 +588,13 @@ export default function ControlPanelPage({
   const [bulkRolePerformancePagesDraft, setBulkRolePerformancePagesDraft] = useState([]);
   const [applyingRoleCorePages, setApplyingRoleCorePages] = useState(false);
   const [savingAttendanceSettings, setSavingAttendanceSettings] = useState(false);
+  const [employeeProcessSettings, setEmployeeProcessSettings] = useState(getDefaultEmployeeProcessSettings());
+  const [employeeProcessDraftIds, setEmployeeProcessDraftIds] = useState([]);
+  const [employeeProcessLoading, setEmployeeProcessLoading] = useState(false);
+  const [employeeProcessSaving, setEmployeeProcessSaving] = useState(false);
+  const [employeeProcessMessage, setEmployeeProcessMessage] = useState("");
+  const [employeeProcessError, setEmployeeProcessError] = useState("");
+  const [draggingEmployeeProcessId, setDraggingEmployeeProcessId] = useState("");
   const [localError, setLocalError] = useState("");
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
   const [settingsDrawerView, setSettingsDrawerView] = useState("");
@@ -627,6 +651,89 @@ export default function ControlPanelPage({
   const [editorError, setEditorError] = useState("");
   const [savingDataRow, setSavingDataRow] = useState(false);
 
+  const employeeProcessOptions = useMemo(
+    () =>
+      (Array.isArray(employees) ? employees : [])
+        .map((employee) => {
+          const userId = getEmployeeProcessUserId(employee);
+          if (!userId) return null;
+          return {
+            userId,
+            name: getUserDisplayLabel(employee),
+            email: toSafeText(employee?.email),
+          };
+        })
+        .filter(Boolean),
+    [employees]
+  );
+
+  const employeeProcessOptionById = useMemo(
+    () => new Map(employeeProcessOptions.map((row) => [row.userId, row])),
+    [employeeProcessOptions]
+  );
+
+  const employeeProcessIncludedRows = useMemo(
+    () => employeeProcessDraftIds.map((userId) => employeeProcessOptionById.get(userId)).filter(Boolean),
+    [employeeProcessDraftIds, employeeProcessOptionById]
+  );
+
+  const employeeProcessAvailableRows = useMemo(() => {
+    const included = new Set(employeeProcessDraftIds);
+    return employeeProcessOptions.filter((row) => !included.has(row.userId));
+  }, [employeeProcessDraftIds, employeeProcessOptions]);
+
+  const resetEmployeeProcessDraft = (settings = employeeProcessSettings) => {
+    const savedIds = Array.isArray(settings?.rotationUserIds) ? settings.rotationUserIds : [];
+    const optionIds = new Set(employeeProcessOptions.map((row) => row.userId));
+    const nextIds = savedIds.map((userId) => String(userId || "").trim()).filter((userId) => optionIds.has(userId));
+    setEmployeeProcessDraftIds(nextIds.length ? nextIds : employeeProcessOptions.map((row) => row.userId));
+  };
+
+  const moveEmployeeProcessDraftId = (fromId, toId) => {
+    const sourceId = String(fromId || "").trim();
+    const targetId = String(toId || "").trim();
+    if (!sourceId || !targetId || sourceId === targetId) return;
+
+    setEmployeeProcessDraftIds((prev) => {
+      const next = [...prev];
+      const fromIndex = next.indexOf(sourceId);
+      const toIndex = next.indexOf(targetId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const addEmployeeToProcessDraft = (userId) => {
+    const nextId = String(userId || "").trim();
+    if (!nextId) return;
+    setEmployeeProcessDraftIds((prev) => (prev.includes(nextId) ? prev : [...prev, nextId]));
+  };
+
+  const removeEmployeeFromProcessDraft = (userId) => {
+    const nextId = String(userId || "").trim();
+    setEmployeeProcessDraftIds((prev) => prev.filter((id) => id !== nextId));
+  };
+
+  const saveEmployeeProcessDraft = async () => {
+    setEmployeeProcessSaving(true);
+    setEmployeeProcessError("");
+    setEmployeeProcessMessage("");
+    try {
+      await saveEmployeeProcessRotation({
+        rotationUserIds: employeeProcessDraftIds,
+        updatedByUserId: getPortalUserDocId(viewer),
+        updatedByName: getUserDisplayLabel(viewer || {}),
+      });
+      setEmployeeProcessMessage("Saved IB/NL employee order.");
+    } catch (err) {
+      setEmployeeProcessError(err?.message || "Failed to save IB/NL employee order.");
+    } finally {
+      setEmployeeProcessSaving(false);
+    }
+  };
+
   useEffect(() => {
     setResetTimeDraft(normalizeResetTime(attendanceResetTime));
   }, [attendanceResetTime]);
@@ -648,6 +755,41 @@ export default function ControlPanelPage({
       String(storageTimeZone || "").trim() || DEFAULT_STORAGE_TIME_ZONE
     );
   }, [storageTimeZone]);
+
+  useEffect(() => {
+    let active = true;
+    setEmployeeProcessLoading(true);
+    setEmployeeProcessError("");
+
+    const unsubscribe = subscribeEmployeeProcessSettings(
+      (settings) => {
+        if (!active) return;
+        setEmployeeProcessSettings(settings || getDefaultEmployeeProcessSettings());
+        setEmployeeProcessLoading(false);
+      },
+      (err) => {
+        if (!active) return;
+        setEmployeeProcessError(err?.message || "Failed to load IB/NL employee order.");
+        setEmployeeProcessLoading(false);
+      }
+    );
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (settingsDrawerView !== SETTINGS_DRAWER_VIEWS.EMPLOYEE_PROCESS) return;
+    const savedIds = Array.isArray(employeeProcessSettings?.rotationUserIds)
+      ? employeeProcessSettings.rotationUserIds
+      : [];
+    const optionIds = new Set(employeeProcessOptions.map((row) => row.userId));
+    const nextIds = savedIds.map((userId) => String(userId || "").trim()).filter((userId) => optionIds.has(userId));
+    setEmployeeProcessDraftIds(nextIds.length ? nextIds : employeeProcessOptions.map((row) => row.userId));
+    setEmployeeProcessMessage("");
+  }, [employeeProcessOptions, employeeProcessSettings?.rotationUserIds, settingsDrawerView]);
 
   useEffect(() => {
     if (displayTimeZoneModeDraft !== DISPLAY_TIME_ZONE_MODE_FIXED) return;
@@ -2266,6 +2408,8 @@ export default function ControlPanelPage({
   const settingsDrawerTitle =
     settingsDrawerView === SETTINGS_DRAWER_VIEWS.ROLE_BULK
       ? "Role Core Pages (Bulk)"
+      : settingsDrawerView === SETTINGS_DRAWER_VIEWS.EMPLOYEE_PROCESS
+        ? "IB/NL Employee Process"
       : settingsDrawerView === SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS
         ? breakLogArchiveView
           ? "Break Archive"
@@ -2321,6 +2465,18 @@ export default function ControlPanelPage({
               <span className="control-panel-attendance-icon-gear">
                 <Settings size={9} />
               </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="control-panel-tab control-panel-tab-icon control-panel-tab-employee-process"
+            onClick={() => openSettingsDrawer(SETTINGS_DRAWER_VIEWS.EMPLOYEE_PROCESS)}
+            aria-label="Open IB/NL employee process"
+            title="IB/NL Employee Process"
+          >
+            <span className="control-panel-process-icon-wrap" aria-hidden="true">
+              <Users size={16} />
+              <span className="control-panel-process-icon-badge">IB</span>
             </span>
           </button>
           <button
@@ -2810,6 +2966,8 @@ export default function ControlPanelPage({
                 <p>
                   {settingsDrawerView === SETTINGS_DRAWER_VIEWS.ROLE_BULK
                     ? "Manage default page access for all users in a selected role."
+                    : settingsDrawerView === SETTINGS_DRAWER_VIEWS.EMPLOYEE_PROCESS
+                      ? "Choose who appears in the IB/NL process and drag employees into the saved order."
                     : settingsDrawerView === SETTINGS_DRAWER_VIEWS.BREAK_LOG_RECORDS
                       ? "Review all break logs, filter by employee, and archive logs into Break Archive."
                     : settingsDrawerView === SETTINGS_DRAWER_VIEWS.PENDING_REQUESTS
@@ -2904,6 +3062,122 @@ export default function ControlPanelPage({
                     Display timezone in app: <strong>{resolvedDisplayTimeZonePreview}</strong>{" "}
                     | Active app timezone: <strong>{String(businessTimeZone || "").trim() || resolvedDisplayTimeZonePreview}</strong>{" "}
                     | Saved timestamp timezone tag: <strong>{storageTimeZoneDraft || DEFAULT_STORAGE_TIME_ZONE}</strong>
+                  </div>
+                </div>
+              ) : null}
+
+              {settingsDrawerView === SETTINGS_DRAWER_VIEWS.EMPLOYEE_PROCESS ? (
+                <div className="control-panel-process-settings">
+                  <div className="control-panel-process-toolbar">
+                    <div>
+                      <h3>Included Employees</h3>
+                      <p>Drag rows to set the top-to-bottom IB/NL rotation.</p>
+                    </div>
+                    <div className="control-panel-process-actions">
+                      <button
+                        type="button"
+                        className="control-panel-btn secondary"
+                        onClick={() => resetEmployeeProcessDraft()}
+                        disabled={employeeProcessSaving}
+                      >
+                        Reset Draft
+                      </button>
+                      <button
+                        type="button"
+                        className="control-panel-btn primary"
+                        onClick={saveEmployeeProcessDraft}
+                        disabled={employeeProcessSaving}
+                      >
+                        {employeeProcessSaving ? "Saving..." : "Save Order"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {employeeProcessLoading ? (
+                    <div className="control-panel-state">Loading IB/NL process settings...</div>
+                  ) : null}
+                  {employeeProcessError ? <div className="control-panel-error">{employeeProcessError}</div> : null}
+                  {employeeProcessMessage ? (
+                    <div className="control-panel-success">{employeeProcessMessage}</div>
+                  ) : null}
+
+                  <div className="control-panel-process-grid">
+                    <section className="control-panel-process-card">
+                      <div className="control-panel-process-list">
+                        {employeeProcessIncludedRows.length === 0 ? (
+                          <div className="control-panel-state">No employees included yet.</div>
+                        ) : (
+                          employeeProcessIncludedRows.map((row, index) => (
+                            <div
+                              key={`process-included-${row.userId}`}
+                              className={`control-panel-process-row${
+                                draggingEmployeeProcessId === row.userId ? " dragging" : ""
+                              }`}
+                              draggable
+                              onDragStart={(event) => {
+                                setDraggingEmployeeProcessId(row.userId);
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/plain", row.userId);
+                              }}
+                              onDragOver={(event) => event.preventDefault()}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                const sourceId =
+                                  event.dataTransfer.getData("text/plain") || draggingEmployeeProcessId;
+                                moveEmployeeProcessDraftId(sourceId, row.userId);
+                                setDraggingEmployeeProcessId("");
+                              }}
+                              onDragEnd={() => setDraggingEmployeeProcessId("")}
+                            >
+                              <div className="control-panel-process-drag">
+                                <GripVertical size={16} aria-hidden="true" />
+                                <span>{index + 1}</span>
+                              </div>
+                              <div className="control-panel-process-person">
+                                <strong>{row.name}</strong>
+                                <span>{row.email || row.userId}</span>
+                              </div>
+                              <button
+                                type="button"
+                                className="control-panel-btn danger"
+                                onClick={() => removeEmployeeFromProcessDraft(row.userId)}
+                                disabled={employeeProcessSaving}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="control-panel-process-card">
+                      <div className="control-panel-process-card-head">
+                        <h3>Available To Add</h3>
+                      </div>
+                      <div className="control-panel-process-list compact">
+                        {employeeProcessAvailableRows.length === 0 ? (
+                          <div className="control-panel-state">All employees are included.</div>
+                        ) : (
+                          employeeProcessAvailableRows.map((row) => (
+                            <div key={`process-available-${row.userId}`} className="control-panel-process-row">
+                              <div className="control-panel-process-person">
+                                <strong>{row.name}</strong>
+                                <span>{row.email || row.userId}</span>
+                              </div>
+                              <button
+                                type="button"
+                                className="control-panel-btn secondary"
+                                onClick={() => addEmployeeToProcessDraft(row.userId)}
+                                disabled={employeeProcessSaving}
+                              >
+                                Add
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </section>
                   </div>
                 </div>
               ) : null}

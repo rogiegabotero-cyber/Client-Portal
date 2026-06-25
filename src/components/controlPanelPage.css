@@ -1660,3 +1660,167 @@
   margin: 0 12px 12px;
   padding: 10px;
 }
+
+.control-panel-process-icon-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.control-panel-process-icon-badge {
+  position: absolute;
+  right: -10px;
+  bottom: -8px;
+  border-radius: 999px;
+  padding: 1px 4px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 900;
+}
+
+.control-panel-success {
+  border: 1px solid rgba(34, 197, 94, .28);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.control-panel-process-settings {
+  display: grid;
+  gap: 14px;
+}
+
+.control-panel-process-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, .28);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.control-panel-process-toolbar h3,
+.control-panel-process-card h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.control-panel-process-toolbar p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.control-panel-process-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.control-panel-process-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(260px, .75fr);
+  gap: 14px;
+}
+
+.control-panel-process-card {
+  border: 1px solid rgba(148, 163, 184, .28);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.control-panel-process-card-head {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, .22);
+  background: #f8fafc;
+}
+
+.control-panel-process-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.control-panel-process-list.compact {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.control-panel-process-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(148, 163, 184, .22);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+
+.control-panel-process-row.dragging {
+  opacity: .55;
+}
+
+.control-panel-process-drag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #64748b;
+  cursor: grab;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.control-panel-process-person {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.control-panel-process-person strong,
+.control-panel-process-person span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-panel-process-person strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.control-panel-process-person span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .control-panel-process-toolbar,
+  .control-panel-process-row {
+    grid-template-columns: 1fr;
+  }
+
+  .control-panel-process-toolbar {
+    display: grid;
+  }
+
+  .control-panel-process-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .control-panel-process-actions {
+    justify-content: flex-start;
+  }
+}

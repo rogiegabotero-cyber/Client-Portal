@@ -5108,16 +5108,6 @@ export default function App() {
       if (!isUserLiveNow(userId)) continue;
       const onBreak = isUserOnBreak(userId);
 
-      // UI-only safeguard:
-      // if an employee is still marked on break after scheduled shift end,
-      // hide them from live list even if break wasn't manually ended.
-      if (onBreak) {
-        const scheduleEndUtcMs = getTodayScheduleEndUtcMs(userId);
-        if (Number.isFinite(scheduleEndUtcMs) && nowMs >= scheduleEndUtcMs) {
-          continue;
-        }
-      }
-
       const profileImg =
         String(profileImagesByUserId?.[userId] || "").trim() ||
         String(getProfileImageUrl(emp) || "").trim();
@@ -5136,9 +5126,7 @@ export default function App() {
     validEmployees,
     isUserLiveNow,
     isUserOnBreak,
-    getTodayScheduleEndUtcMs,
     profileImagesByUserId,
-    nowMs,
   ]);
 
   const canUseAssignTaskShortcut = useMemo(() => {

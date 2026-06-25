@@ -8,6 +8,7 @@ import {
   calculateBreakUsageMinutes,
   getBreakLogsByUserIdsInRange,
 } from "../services/breakService";
+import { isClockedOutLog, isIn } from "../utils/attendanceLog";
 import {
   AlignCenter,
   AlignLeft,
@@ -19,6 +20,7 @@ import {
   CheckSquare,
   ClipboardList,
   Columns3,
+  CircleHelp,
   Eraser,
   FileText,
   Italic,
@@ -76,6 +78,13 @@ import {
   getDateKey,
   subscribeCallActivityLogs,
 } from "../services/callActivityService";
+import {
+  advanceEmployeeProcessAssignment,
+  getDefaultEmployeeProcessSettings,
+  getNextEmployeeProcessUserId,
+  setEmployeeProcessAssignments,
+  subscribeEmployeeProcessSettings,
+} from "../services/employeeProcessService";
 
 /* ----------------------------- helpers ----------------------------- */
 const buildFallbackHeadline = (text) => {
@@ -85,6 +94,55 @@ const buildFallbackHeadline = (text) => {
 };
 
 const normalize = (value = "") => String(value || "").trim().toLowerCase();
+const EMPLOYEE_PROCESS_LOCAL_STORAGE_KEY = "hyacinth_employee_process_assignment_v1";
+const EMPLOYEE_PROCESS_GUIDE_TEXT =
+  "IB and NL start on the first available employee, move separately when finished, and skip break, day off, completed, or unavailable rows. Purple IB is one optional secondary IB for the next available employee and clears if they become unavailable.";
+
+const normalizeEmployeeProcessLocalSettings = (settings = {}) => ({
+  ...getDefaultEmployeeProcessSettings(),
+  ...(settings && typeof settings === "object" ? settings : {}),
+  rotationUserIds: Array.from(
+    new Set(
+      (Array.isArray(settings?.rotationUserIds) ? settings.rotationUserIds : [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  ),
+  ibUserId: String(settings?.ibUserId || settings?.ibCurrentUserId || "").trim(),
+  nlUserId: String(settings?.nlUserId || settings?.nlCurrentUserId || "").trim(),
+  purpleIbUserId: String(settings?.purpleIbUserId || settings?.secondaryIbUserId || "").trim(),
+});
+
+const readEmployeeProcessLocalSettings = () => {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return getDefaultEmployeeProcessSettings();
+  }
+
+  try {
+    const raw = window.localStorage.getItem(EMPLOYEE_PROCESS_LOCAL_STORAGE_KEY);
+    if (!raw) return getDefaultEmployeeProcessSettings();
+    return normalizeEmployeeProcessLocalSettings(JSON.parse(raw));
+  } catch {
+    return getDefaultEmployeeProcessSettings();
+  }
+};
+
+const writeEmployeeProcessLocalSettings = (settings = {}) => {
+  if (typeof window === "undefined" || !window.localStorage) return false;
+
+  try {
+    window.localStorage.setItem(
+      EMPLOYEE_PROCESS_LOCAL_STORAGE_KEY,
+      JSON.stringify({
+        ...normalizeEmployeeProcessLocalSettings(settings),
+        localUpdatedAtMs: Date.now(),
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const formatLabelList = (labels = []) => {
   const cleanLabels = labels.map((label) => String(label || "").trim()).filter(Boolean);
@@ -1300,6 +1358,13 @@ export default function EmployeeDashboard({
   const [activeCallActivityTimeField, setActiveCallActivityTimeField] = useState("");
   const [callActivityMissingFields, setCallActivityMissingFields] = useState([]);
   const [callActivityRecentPage, setCallActivityRecentPage] = useState(0);
+  const [employeeProcessSettings, setEmployeeProcessSettings] = useState(() =>
+    readEmployeeProcessLocalSettings()
+  );
+  const [employeeProcessLoading, setEmployeeProcessLoading] = useState(false);
+  const [employeeProcessError, setEmployeeProcessError] = useState("");
+  const [employeeProcessBusy, setEmployeeProcessBusy] = useState("");
+  const [employeeProcessConfirmAction, setEmployeeProcessConfirmAction] = useState(null);
   const [notepadPinningNoteId, setNotepadPinningNoteId] = useState("");
   const [notepadTitleDraft, setNotepadTitleDraft] = useState("");
   const [notepadColorDraft, setNotepadColorDraft] = useState(DEFAULT_NOTEPAD_COLOR_KEY);
@@ -1390,6 +1455,7 @@ export default function EmployeeDashboard({
   const notepadNotificationEventCacheRef = useRef(NOTEPAD_NOTIFICATION_EVENT_CACHE);
   const notepadRefreshSignalSeenRef = useRef("");
   const notepadRefreshSignalCheckBusyRef = useRef(false);
+  const employeeProcessAutoSyncRef = useRef("");
   const portalRoot = typeof document !== "undefined" ? document.body : null;
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [saveAsHtml, setSaveAsHtml] = useState("");
@@ -1538,12 +1604,479 @@ export default function EmployeeDashboard({
     return () => unsubscribe?.();
   }, [viewMode]);
 
+  useEffect(() => {
+    let active = true;
+    setEmployeeProcessLoading(true);
+    setEmployeeProcessError("");
+
+    const unsubscribe = subscribeEmployeeProcessSettings(
+      (settings) => {
+        if (!active) return;
+        const nextSettings = normalizeEmployeeProcessLocalSettings(
+          settings || getDefaultEmployeeProcessSettings()
+        );
+        setEmployeeProcessSettings(nextSettings);
+        writeEmployeeProcessLocalSettings(nextSettings);
+        setEmployeeProcessError("");
+        setEmployeeProcessLoading(false);
+      },
+      (err) => {
+        if (!active) return;
+        setEmployeeProcessError(err?.message || "Unable to load IB/NL process settings.");
+        setEmployeeProcessLoading(false);
+      }
+    );
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
+
   const employee = useMemo(
     () =>
       (Array.isArray(employees) ? employees : []).find(
         (e) => String(getUserId(e) ?? "") === String(effectiveSelectedId)
       ) || null,
     [employees, effectiveSelectedId]
+  );
+
+  const getScheduledDayItemForUser = useCallback(
+    (userId) => {
+      const sched = schedulesByUserId?.[String(userId || "").trim()];
+      if (!Array.isArray(sched) || sched.length === 0) return null;
+
+      const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+      const d = new Date(`${endDate}T12:00:00Z`);
+      if (Number.isNaN(d.getTime())) return null;
+      const targetWeekday = weekdays[d.getUTCDay()];
+
+      return (
+        sched.find(
+          (item) => String(pick(item, ["dayOfWeek", "day", "weekday"], "")).toLowerCase() === targetWeekday
+        ) || null
+      );
+    },
+    [schedulesByUserId, endDate]
+  );
+
+  const resolveEmployeeProcessStatus = useCallback(
+    (userId) => {
+      const uid = String(userId || "").trim();
+      if (!uid) return { available: false, label: "Unavailable", tone: "unavailable" };
+      if (activeBreaksByUserId?.[uid]) return { available: false, label: "On break", tone: "break" };
+
+      const logs = Array.isArray(logsByUserId?.[uid]) ? logsByUserId[uid] : [];
+      const statusTexts = logs.map((log) => normalize(getAttendanceStatusText(log))).filter(Boolean);
+      const hasDayOffStatus = statusTexts.some(
+        (status) =>
+          status.includes("day off") ||
+          status.includes("rest day") ||
+          status.includes("holiday") ||
+          status.includes("pto") ||
+          status.includes("leave") ||
+          status.includes("vacation") ||
+          status.includes("no schedule")
+      );
+      if (hasDayOffStatus) return { available: false, label: "Day Off", tone: "dayoff" };
+
+      const hasCompletedStatus = statusTexts.some(
+        (status) => status.includes("completed") || status.includes("complete")
+      );
+      if (hasCompletedStatus || logs.some((log) => isClockedOutLog(log))) {
+        return { available: false, label: "Completed", tone: "completed" };
+      }
+
+      const scheduledItem = getScheduledDayItemForUser(uid);
+      if (!scheduledItem) return { available: false, label: "Day Off", tone: "dayoff" };
+
+      const hasClockIn = logs.some((log) => isIn(log));
+      if (!hasClockIn) return { available: false, label: "Scheduled", tone: "scheduled" };
+
+      return { available: true, label: "Available", tone: "available" };
+    },
+    [activeBreaksByUserId, getScheduledDayItemForUser, logsByUserId]
+  );
+
+  const employeeProcessRows = useMemo(() => {
+    const rowsById = new Map();
+    for (const row of Array.isArray(employees) ? employees : []) {
+      const userId = String(getUserId(row) || "").trim();
+      if (!userId || rowsById.has(userId)) continue;
+      rowsById.set(userId, {
+        userId,
+        name: getDisplayName(row) || row?.email || userId,
+        email: row?.email || "",
+        profileImg: getProfileImageUrl(row),
+        initials: initialsFromName(getDisplayName(row) || row?.email || userId),
+      });
+    }
+
+    const savedIds = Array.isArray(employeeProcessSettings?.rotationUserIds)
+      ? employeeProcessSettings.rotationUserIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    const orderedIds = savedIds.length ? savedIds : Array.from(rowsById.keys());
+
+    return orderedIds
+      .map((userId) => rowsById.get(userId))
+      .filter(Boolean)
+      .map((row) => {
+        const status = resolveEmployeeProcessStatus(row.userId);
+        return {
+          ...row,
+          statusLabel: status.label,
+          statusTone: status.tone,
+          isAvailable: !!status.available,
+        };
+      });
+  }, [employeeProcessSettings?.rotationUserIds, employees, resolveEmployeeProcessStatus]);
+
+  const employeeProcessRotationUserIds = useMemo(
+    () => employeeProcessRows.map((row) => row.userId).filter(Boolean),
+    [employeeProcessRows]
+  );
+
+  const employeeProcessUnavailableUserIds = useMemo(
+    () => employeeProcessRows.filter((row) => !row.isAvailable).map((row) => row.userId),
+    [employeeProcessRows]
+  );
+
+  const firstAvailableProcessUserId =
+    employeeProcessRows.find((row) => row.isAvailable)?.userId || "";
+
+  const savedIbUserId = String(employeeProcessSettings?.ibUserId || "").trim();
+  const savedNlUserId = String(employeeProcessSettings?.nlUserId || "").trim();
+  const savedPurpleIbUserId = String(employeeProcessSettings?.purpleIbUserId || "").trim();
+  const hasSavedIbUser = employeeProcessRows.some((row) => row.userId === savedIbUserId);
+  const hasSavedNlUser = employeeProcessRows.some((row) => row.userId === savedNlUserId);
+  const hasSavedPurpleIbUser = employeeProcessRows.some((row) => row.userId === savedPurpleIbUserId);
+  const isSavedIbUserAvailable = employeeProcessRows.some(
+    (row) => row.userId === savedIbUserId && row.isAvailable
+  );
+  const isSavedNlUserAvailable = employeeProcessRows.some(
+    (row) => row.userId === savedNlUserId && row.isAvailable
+  );
+  const isSavedPurpleIbUserAvailable = employeeProcessRows.some(
+    (row) => row.userId === savedPurpleIbUserId && row.isAvailable
+  );
+  const effectiveIbUserId = hasSavedIbUser
+    ? savedIbUserId
+    : firstAvailableProcessUserId;
+  const effectiveNlUserId = hasSavedNlUser
+    ? savedNlUserId
+    : firstAvailableProcessUserId;
+  const employeeProcessSecondaryIbUnavailableUserIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...employeeProcessUnavailableUserIds, effectiveIbUserId]
+            .map((userId) => String(userId || "").trim())
+            .filter(Boolean)
+        )
+      ),
+    [effectiveIbUserId, employeeProcessUnavailableUserIds]
+  );
+  const employeeProcessNextPurpleIbUserId = useMemo(() => {
+    if (!effectiveIbUserId || savedPurpleIbUserId) return "";
+    return getNextEmployeeProcessUserId({
+      rotationUserIds: employeeProcessRotationUserIds,
+      currentUserId: effectiveIbUserId,
+      unavailableUserIds: employeeProcessSecondaryIbUnavailableUserIds,
+    });
+  }, [
+    effectiveIbUserId,
+    employeeProcessRotationUserIds,
+    employeeProcessSecondaryIbUnavailableUserIds,
+    savedPurpleIbUserId,
+  ]);
+
+  useEffect(() => {
+    if (employeeProcessLoading || employeeProcessError) return;
+    if (!employeeProcessRotationUserIds.length) return;
+
+    const nextAssignments = {};
+    if ((!hasSavedIbUser || !isSavedIbUserAvailable) && firstAvailableProcessUserId) {
+      nextAssignments.ibUserId = getNextEmployeeProcessUserId({
+        rotationUserIds: employeeProcessRotationUserIds,
+        currentUserId: savedIbUserId,
+        unavailableUserIds: employeeProcessUnavailableUserIds,
+      });
+    }
+    if ((!hasSavedNlUser || !isSavedNlUserAvailable) && firstAvailableProcessUserId) {
+      nextAssignments.nlUserId = getNextEmployeeProcessUserId({
+        rotationUserIds: employeeProcessRotationUserIds,
+        currentUserId: savedNlUserId,
+        unavailableUserIds: employeeProcessUnavailableUserIds,
+      });
+    }
+    if (
+      savedPurpleIbUserId &&
+      (
+        !hasSavedPurpleIbUser ||
+        !isSavedPurpleIbUserAvailable ||
+        savedPurpleIbUserId === effectiveIbUserId
+      )
+    ) {
+      nextAssignments.purpleIbUserId = "";
+    }
+    if (nextAssignments.ibUserId === savedIbUserId) delete nextAssignments.ibUserId;
+    if (nextAssignments.nlUserId === savedNlUserId) delete nextAssignments.nlUserId;
+    if (nextAssignments.purpleIbUserId === savedPurpleIbUserId) {
+      delete nextAssignments.purpleIbUserId;
+    }
+    if (!Object.keys(nextAssignments).length) return;
+
+    const signature = [
+      savedIbUserId,
+      savedNlUserId,
+      savedPurpleIbUserId,
+      nextAssignments.ibUserId || "",
+      nextAssignments.nlUserId || "",
+      typeof nextAssignments.purpleIbUserId === "undefined" ? "" : nextAssignments.purpleIbUserId,
+    ].join("|");
+    if (employeeProcessAutoSyncRef.current === signature) return;
+    employeeProcessAutoSyncRef.current = signature;
+
+    setEmployeeProcessAssignments({
+      ...nextAssignments,
+      updatedByUserId: viewerUserId,
+      updatedByName: pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+    })
+      .then(() => {
+        setEmployeeProcessSettings((prev) => {
+          const nextSettings = normalizeEmployeeProcessLocalSettings({
+            ...prev,
+            ...nextAssignments,
+          });
+          writeEmployeeProcessLocalSettings(nextSettings);
+          return nextSettings;
+        });
+      })
+      .catch((err) => {
+        employeeProcessAutoSyncRef.current = "";
+        setEmployeeProcessError(err?.message || "Unable to sync IB/NL assignment.");
+      });
+  }, [
+    employeeProcessError,
+    employeeProcessLoading,
+    employeeProcessRotationUserIds,
+    employeeProcessUnavailableUserIds,
+    employeeProcessRotationUserIds.length,
+    effectiveIbUserId,
+    firstAvailableProcessUserId,
+    hasSavedIbUser,
+    hasSavedNlUser,
+    hasSavedPurpleIbUser,
+    isSavedIbUserAvailable,
+    isSavedNlUserAvailable,
+    isSavedPurpleIbUserAvailable,
+    pageData,
+    savedIbUserId,
+    savedNlUserId,
+    savedPurpleIbUserId,
+    viewerUserId,
+  ]);
+
+  const canAdvanceEmployeeProcessForRow = useCallback(
+    (userId) => {
+      const uid = String(userId || "").trim();
+      if (!uid) return false;
+      if (viewerRole === "admin" || viewerRole === "super_admin") {
+        return uid === String(normalizedSelectedUserId || "").trim();
+      }
+      if (viewerRole !== "employee") return false;
+      return !viewerLinkedEmployeeId || viewerLinkedEmployeeId === uid;
+    },
+    [normalizedSelectedUserId, viewerLinkedEmployeeId, viewerRole]
+  );
+
+  const handleAdvanceEmployeeProcess = useCallback(
+    async (type, currentUserId) => {
+      const uid = String(currentUserId || "").trim();
+      if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return false;
+
+      setEmployeeProcessBusy(type);
+      setEmployeeProcessError("");
+      try {
+        const nextUserId = await advanceEmployeeProcessAssignment({
+          type,
+          unavailableUserIds: employeeProcessUnavailableUserIds,
+          fallbackRotationUserIds: employeeProcessRotationUserIds,
+          updatedByUserId: viewerUserId,
+          updatedByName: pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+        });
+        const settingKey = String(type || "").toLowerCase() === "nl" ? "nlUserId" : "ibUserId";
+        setEmployeeProcessSettings((prev) => {
+          const nextSettings = normalizeEmployeeProcessLocalSettings({
+            ...prev,
+            [settingKey]: nextUserId,
+          });
+          writeEmployeeProcessLocalSettings(nextSettings);
+          return nextSettings;
+        });
+        return true;
+      } catch (err) {
+        setEmployeeProcessError(err?.message || `Unable to advance ${String(type).toUpperCase()}.`);
+        return false;
+      } finally {
+        setEmployeeProcessBusy("");
+      }
+    },
+    [
+      canAdvanceEmployeeProcessForRow,
+      employeeProcessRotationUserIds,
+      employeeProcessUnavailableUserIds,
+      pageData,
+      viewerUserId,
+    ]
+  );
+
+  const requestEmployeeProcessFinish = useCallback(
+    (type, currentUserId) => {
+      const uid = String(currentUserId || "").trim();
+      if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return;
+      setEmployeeProcessConfirmAction({
+        type: String(type || "").toLowerCase() === "nl" ? "nl" : "ib",
+        userId: uid,
+      });
+    },
+    [canAdvanceEmployeeProcessForRow]
+  );
+
+  const handleSetEmployeeProcessPurpleIb = useCallback(
+    async (nextPurpleIbUserId, actionUserId) => {
+      const targetUserId = String(nextPurpleIbUserId || "").trim();
+      const uid = String(actionUserId || targetUserId || savedPurpleIbUserId || "").trim();
+      if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return false;
+      if (targetUserId && targetUserId !== employeeProcessNextPurpleIbUserId) return false;
+      if (!targetUserId && uid !== savedPurpleIbUserId) return false;
+
+      setEmployeeProcessBusy(targetUserId ? "purple_ib_mark" : "purple_ib_remove");
+      setEmployeeProcessError("");
+      try {
+        await setEmployeeProcessAssignments({
+          purpleIbUserId: targetUserId,
+          updatedByUserId: viewerUserId,
+          updatedByName: pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+        });
+        setEmployeeProcessSettings((prev) => {
+          const nextSettings = normalizeEmployeeProcessLocalSettings({
+            ...prev,
+            purpleIbUserId: targetUserId,
+          });
+          writeEmployeeProcessLocalSettings(nextSettings);
+          return nextSettings;
+        });
+        return true;
+      } catch (err) {
+        setEmployeeProcessError(
+          err?.message || (targetUserId ? "Unable to mark secondary IB." : "Unable to remove secondary IB.")
+        );
+        return false;
+      } finally {
+        setEmployeeProcessBusy("");
+      }
+    },
+    [
+      canAdvanceEmployeeProcessForRow,
+      employeeProcessNextPurpleIbUserId,
+      pageData,
+      savedPurpleIbUserId,
+      viewerUserId,
+    ]
+  );
+
+  const requestEmployeeProcessPurpleIb = useCallback(
+    (mode, userId) => {
+      const uid = String(userId || "").trim();
+      const actionMode = String(mode || "").toLowerCase() === "remove" ? "remove" : "mark";
+      if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return;
+      if (actionMode === "mark" && uid !== employeeProcessNextPurpleIbUserId) return;
+      if (actionMode === "remove" && uid !== savedPurpleIbUserId) return;
+      setEmployeeProcessConfirmAction({
+        type: "purple_ib",
+        mode: actionMode,
+        userId: uid,
+      });
+    },
+    [
+      canAdvanceEmployeeProcessForRow,
+      employeeProcessNextPurpleIbUserId,
+      savedPurpleIbUserId,
+    ]
+  );
+
+  const cancelEmployeeProcessFinish = useCallback(() => {
+    if (employeeProcessBusy) return;
+    setEmployeeProcessConfirmAction(null);
+  }, [employeeProcessBusy]);
+
+  const confirmEmployeeProcessFinish = useCallback(async () => {
+    const action = employeeProcessConfirmAction;
+    if (!action?.type || !action?.userId) return;
+    if (action.type === "purple_ib") {
+      const didUpdate = await handleSetEmployeeProcessPurpleIb(
+        action.mode === "remove" ? "" : action.userId,
+        action.userId
+      );
+      if (didUpdate) setEmployeeProcessConfirmAction(null);
+      return;
+    }
+    const didFinish = await handleAdvanceEmployeeProcess(action.type, action.userId);
+    if (didFinish) setEmployeeProcessConfirmAction(null);
+  }, [employeeProcessConfirmAction, handleAdvanceEmployeeProcess, handleSetEmployeeProcessPurpleIb]);
+
+  const employeeProcessConfirmEmployee = useMemo(
+    () =>
+      employeeProcessRows.find(
+        (row) => row.userId === String(employeeProcessConfirmAction?.userId || "").trim()
+      ) || null,
+    [employeeProcessConfirmAction?.userId, employeeProcessRows]
+  );
+  const employeeProcessConfirmIsPurpleIb = employeeProcessConfirmAction?.type === "purple_ib";
+  const employeeProcessConfirmIsPurpleRemove =
+    employeeProcessConfirmIsPurpleIb && employeeProcessConfirmAction?.mode === "remove";
+  const employeeProcessConfirmIsNl = employeeProcessConfirmAction?.type === "nl";
+  const employeeProcessConfirmLabel = employeeProcessConfirmIsNl ? "new lead" : "inbound";
+  const employeeProcessConfirmTitle = employeeProcessConfirmIsPurpleIb
+    ? employeeProcessConfirmIsPurpleRemove
+      ? "Remove Secondary IB?"
+      : "Mark Secondary IB?"
+    : employeeProcessConfirmIsNl
+      ? "Finish New Lead?"
+      : "Finish Inbound?";
+  const employeeProcessConfirmMessage = employeeProcessConfirmIsPurpleIb
+    ? employeeProcessConfirmIsPurpleRemove
+      ? `Remove the secondary IB mark from ${employeeProcessConfirmEmployee?.name || "this employee"}?`
+      : `Mark ${employeeProcessConfirmEmployee?.name || "this employee"} as the secondary IB?`
+    : `Finish ${employeeProcessConfirmLabel} for ${
+        employeeProcessConfirmEmployee?.name || "this employee"
+      } and move the mark to the next available employee?`;
+  const employeeProcessConfirmButtonText = employeeProcessConfirmIsPurpleIb
+    ? employeeProcessConfirmIsPurpleRemove
+      ? "Remove IB Mark"
+      : "Mark IB"
+    : employeeProcessConfirmIsNl
+      ? "Finish new lead"
+      : "Finish Inbound";
+
+  const employeeProcessActionUserId =
+    viewerRole === "employee"
+      ? String(viewerLinkedEmployeeId || normalizedSelectedUserId || "").trim()
+      : viewerRole === "admin" || viewerRole === "super_admin"
+        ? String(normalizedSelectedUserId || "").trim()
+      : "";
+  const showEmployeeProcessActionModal =
+    !!employeeProcessActionUserId &&
+    (
+      employeeProcessActionUserId === effectiveIbUserId ||
+      employeeProcessActionUserId === effectiveNlUserId
+    );
+  const employeeProcessActionEmployee = useMemo(
+    () =>
+      employeeProcessRows.find((row) => row.userId === employeeProcessActionUserId) ||
+      null,
+    [employeeProcessActionUserId, employeeProcessRows]
   );
 
   const callActivityDurationMinutes = useMemo(
@@ -7408,42 +7941,191 @@ export default function EmployeeDashboard({
                     ) : null}
                   </div>
 
-                  <div className="greetingPanel">
-                    <div className="greetingLavaObjects" aria-hidden="true">
-                      <span className="greetingLavaBlob blobOne" />
-                      <span className="greetingLavaBlob blobTwo" />
-                      <span className="greetingLavaBlob blobThree" />
-                      <span className="greetingLavaBlob blobFour" />
-                      <span className="greetingLavaBlob blobFive" />
-                      <span className="greetingLavaBlob blobSix" />
-                      <span className="greetingLavaBlob blobSeven" />
-                      <span className="greetingLavaBlob blobEight" />
+                  <div className="agentAttendancePanel dashboardAttendancePanel employeeLeadProcessPanel">
+                    <div className="agentAttendancePanelTop employeeLeadProcessTop">
+                      <div>
+                        <div className="employeeLeadProcessTitleRow">
+                          <div className="agentAttendancePanelHead">Inbound and New Lead</div>
+                          <button
+                            type="button"
+                            className="employeeLeadGuideBtn"
+                            aria-label={`Inbound and New Lead guide: ${EMPLOYEE_PROCESS_GUIDE_TEXT}`}
+                            data-tooltip={EMPLOYEE_PROCESS_GUIDE_TEXT}
+                          >
+                            <CircleHelp size={14} aria-hidden="true" />
+                          </button>
+                        </div>
+                        <div className="employeeLeadProcessSub">
+                          IB and NL move top to bottom, skipping unavailable employees.
+                        </div>
+                      </div>
+                      <div className="employeeLeadProcessBadge">
+                        {employeeProcessLoading ? "Loading" : firstAvailableProcessUserId ? "Live" : "Waiting"}
+                      </div>
                     </div>
 
-                    <div className="greetingTitle">{greetingText}, {employee.name || employee.email}</div>
+                    {employeeProcessError ? (
+                      <div className="agentAttendanceEmpty">{employeeProcessError}</div>
+                    ) : employeeProcessRows.length === 0 ? (
+                      <div className="agentAttendanceEmpty">No employees are included in the IB/NL process.</div>
+                    ) : (
+                      <div className="employeeLeadProcessTableWrap">
+                        <table className="employeeLeadProcessTable" aria-label="Inbound and new lead process">
+                          <thead>
+                            <tr>
+                              <th scope="col">Employee</th>
+                              <th scope="col">Inbound (IB)</th>
+                              <th scope="col">New Lead (NL)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {employeeProcessRows.map((row) => {
+                              const isIb = row.userId === effectiveIbUserId;
+                              const isNl = row.userId === effectiveNlUserId;
+                              const isPurpleIb =
+                                row.userId === savedPurpleIbUserId &&
+                                row.isAvailable &&
+                                row.userId !== effectiveIbUserId;
+                              const canFinishMark =
+                                (
+                                  (viewerRole === "admin" || viewerRole === "super_admin") &&
+                                  String(row.userId || "").trim() === String(normalizedSelectedUserId || "").trim()
+                                ) ||
+                                (
+                                  viewerRole === "employee" &&
+                                  String(row.userId || "").trim() === String(viewerLinkedEmployeeId || "").trim()
+                                );
+                              const canMarkPurpleIb =
+                                !savedPurpleIbUserId &&
+                                row.isAvailable &&
+                                row.userId === employeeProcessNextPurpleIbUserId &&
+                                canFinishMark;
+                              const canRemovePurpleIb = isPurpleIb && canFinishMark;
 
-                    <div className="greetingSub">
-                      {now.toLocaleDateString(undefined, {
-                        weekday: "long",
-                        year: "numeric",
-                        month: "long",
-                        day: "numeric",
-                        timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
-                      })}{" "}
-                      at{" "}
-                      {now.toLocaleTimeString(undefined, {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
-                      })}
-                    </div>
-
-                    <div className="statsRow">
-                      <StatCard value={stats.monthlyAttendance} label="Monthly Attendance" />
-                      <StatCard value={stats.earlyCheckins} label="Early Check-ins" />
-                      <StatCard value={stats.onTimeCheckins} label="On-Time Check-ins" />
-                      <StatCard value={stats.lateCheckins} label="Late Check-ins" />
-                    </div>
+                              return (
+                                <tr
+                                  key={`employee-lead-process-${row.userId}`}
+                                  className={[
+                                    "employeeLeadProcessRow",
+                                    row.isAvailable ? "isAvailable" : "isUnavailable",
+                                    isIb ? "isIb" : "",
+                                    isPurpleIb ? "isPurpleIb" : "",
+                                    isNl ? "isNl" : "",
+                                    canMarkPurpleIb ? "canMarkPurpleIb" : "",
+                                  ].filter(Boolean).join(" ")}
+                                >
+                                  {!row.isAvailable ? (
+                                    <td colSpan={3} className={`employeeLeadUnavailableCell tone-${row.statusTone}`}>
+                                      <div className="employeeLeadUnavailableContent">
+                                        <div className="employeeLeadIdentity">
+                                          <div className="employeeLeadAvatar">
+                                            {row.profileImg ? (
+                                              <img src={row.profileImg} alt={`${row.name} profile`} />
+                                            ) : (
+                                              row.initials
+                                            )}
+                                          </div>
+                                          <div>
+                                            <div className="employeeLeadName">{row.name}</div>
+                                            <div className="employeeLeadUnavailableMeta">{row.email || row.userId}</div>
+                                          </div>
+                                        </div>
+                                        <div className={`employeeLeadStatus employeeLeadUnavailableStatus tone-${row.statusTone}`}>
+                                          {row.statusLabel}
+                                        </div>
+                                      </div>
+                                    </td>
+                                  ) : (
+                                    <>
+                                      <td>
+                                        <div className="employeeLeadIdentity">
+                                          <div className="employeeLeadAvatar">
+                                            {row.profileImg ? (
+                                              <img src={row.profileImg} alt={`${row.name} profile`} />
+                                            ) : (
+                                              row.initials
+                                            )}
+                                          </div>
+                                          <div>
+                                            <div className="employeeLeadName">{row.name}</div>
+                                            <div className={`employeeLeadStatus tone-${row.statusTone}`}>
+                                              {row.statusLabel}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </td>
+                                      <td>
+                                        {isIb ? (
+                                          <div className="employeeLeadMarkStack">
+                                            <button
+                                              type="button"
+                                              className={`employeeLeadMark isIb ${canFinishMark ? "canFinish" : ""}`}
+                                              onClick={() => requestEmployeeProcessFinish("ib", row.userId)}
+                                              disabled={!canFinishMark || employeeProcessBusy === "ib"}
+                                              aria-label="Finish Inbound"
+                                            >
+                                              <span className="employeeLeadMarkTextDefault">IB</span>
+                                              <span className="employeeLeadMarkTextHover">
+                                                {employeeProcessBusy === "ib" ? "Finishing..." : "Finish Inbound"}
+                                              </span>
+                                            </button>
+                                          </div>
+                                        ) : isPurpleIb ? (
+                                          <div className="employeeLeadMarkStack">
+                                            <button
+                                              type="button"
+                                              className={`employeeLeadMark isPurpleIb ${canRemovePurpleIb ? "canFinish" : ""}`}
+                                              onClick={() => requestEmployeeProcessPurpleIb("remove", row.userId)}
+                                              disabled={!canRemovePurpleIb || employeeProcessBusy === "purple_ib_remove"}
+                                              aria-label="Remove secondary IB mark"
+                                            >
+                                              <span className="employeeLeadMarkTextDefault">IB</span>
+                                              <span className="employeeLeadMarkTextHover">
+                                                {employeeProcessBusy === "purple_ib_remove" ? "Removing..." : "Remove IB Mark"}
+                                              </span>
+                                            </button>
+                                          </div>
+                                        ) : canMarkPurpleIb ? (
+                                          <div className="employeeLeadMarkStack">
+                                            <button
+                                              type="button"
+                                              className="employeeLeadSecondaryPrompt"
+                                              onClick={() => requestEmployeeProcessPurpleIb("mark", row.userId)}
+                                              disabled={employeeProcessBusy === "purple_ib_mark"}
+                                              aria-label="Mark secondary IB"
+                                            >
+                                              {employeeProcessBusy === "purple_ib_mark" ? "Marking..." : "Mark IB"}
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                      </td>
+                                      <td>
+                                        {isNl ? (
+                                          <div className="employeeLeadMarkStack">
+                                            <button
+                                              type="button"
+                                              className={`employeeLeadMark isNl ${canFinishMark ? "canFinish" : ""}`}
+                                              onClick={() => requestEmployeeProcessFinish("nl", row.userId)}
+                                              disabled={!canFinishMark || employeeProcessBusy === "nl"}
+                                              aria-label="Finish new lead"
+                                            >
+                                              <span className="employeeLeadMarkTextDefault">NL</span>
+                                              <span className="employeeLeadMarkTextHover">
+                                                {employeeProcessBusy === "nl" ? "Finishing..." : "Finish new lead"}
+                                              </span>
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                      </td>
+                                    </>
+                                  )}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -7694,70 +8376,42 @@ export default function EmployeeDashboard({
             </div>
           </div>
 
-          <div className="agentAttendancePanel dashboardAttendancePanel">
-            <div className="agentAttendancePanelTop">
-              <div className="agentAttendancePanelHead">
-                Best Attendance Per Employee (Early/On Time/PTO full credit, Late/Absent lower score, NCNS biggest deduction)
-              </div>
-              <div className="agentAttendanceMonthFilter">
-                <label htmlFor="employee-agent-attendance-month-filter">Month</label>
-                <select
-                  id="employee-agent-attendance-month-filter"
-                  className="agentAttendanceMonthSelect"
-                  value={effectiveSelectedAgentAttendanceMonth}
-                  onChange={(e) => setSelectedAgentAttendanceMonth(e.target.value)}
-                >
-                  <option value={AGENT_ATTENDANCE_MONTH_ALL}>All months</option>
-                  {availableAgentAttendanceMonths.map((monthKey) => (
-                    <option key={`emp-agent-att-month-${monthKey}`} value={monthKey}>
-                      {prettyMonthLabel(monthKey)}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          <div className="greetingPanel">
+            <div className="greetingLavaObjects" aria-hidden="true">
+              <span className="greetingLavaBlob blobOne" />
+              <span className="greetingLavaBlob blobTwo" />
+              <span className="greetingLavaBlob blobThree" />
+              <span className="greetingLavaBlob blobFour" />
+              <span className="greetingLavaBlob blobFive" />
+              <span className="greetingLavaBlob blobSix" />
+              <span className="greetingLavaBlob blobSeven" />
+              <span className="greetingLavaBlob blobEight" />
             </div>
 
-            <div className="agentAttendanceLegend">
-              {ATTENDANCE_BUCKETS.map((item) => (
-                <span key={`emp-agent-legend-${item.key}`} className="agentAttendanceLegendItem">
-                  <span className={`dot dash-tone-${item.key}`} />
-                  <span>{item.label}</span>
-                </span>
-              ))}
+            <div className="greetingTitle">{greetingText}, {employee.name || employee.email}</div>
+
+            <div className="greetingSub">
+              {now.toLocaleDateString(undefined, {
+                weekday: "long",
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+                timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
+              })}{" "}
+              at{" "}
+              {now.toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+                timeZone: String(businessTimeZone || "").trim() || "America/Chicago",
+              })}
             </div>
 
-            {agentAttendanceRates.length === 0 ? (
-              <div className="agentAttendanceEmpty">{agentAttendanceEmptyText}</div>
-            ) : (
-              <>
-                <div className="agentAttendanceStrip">
-                  {visibleAgentAttendanceRates.map((agent, index) => (
-                    <div
-                      key={`emp-agent-att-${agent.userId || `${agent.name}-${index}`}`}
-                      className="agentAttendanceItem"
-                      title={`Score: ${agent.rate}% | ${agent.tooltipSummary}`}
-                    >
-                      <div className="agentAttendanceDonut" style={{ background: agent.pieBackground }}>
-                        <div className="agentAttendanceCenter">{agent.rate}%</div>
-                      </div>
-                      <div className="agentAttendanceName">{agent.shortName}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {hiddenAgentAttendanceRates > 0 ? (
-                  <div className="agentAttendanceFoot">
-                    <button
-                      type="button"
-                      className="attSummaryToggleBtn"
-                      onClick={() => setShowAllAgentRates(true)}
-                    >
-                      Show all agents ({hiddenAgentAttendanceRates} more)
-                    </button>
-                  </div>
-                ) : null}
-              </>
-            )}
+            <div className="statsRow">
+              <StatCard value={stats.monthlyAttendance} label="Monthly Attendance" />
+              <StatCard value={stats.earlyCheckins} label="Early Check-ins" />
+              <StatCard value={stats.onTimeCheckins} label="On-Time Check-ins" />
+              <StatCard value={stats.lateCheckins} label="Late Check-ins" />
+            </div>
           </div>
 
           {portalRoot
@@ -9244,6 +9898,18 @@ export default function EmployeeDashboard({
           />
 
           <ConfirmModal
+            open={!!employeeProcessConfirmAction}
+            title={employeeProcessConfirmTitle}
+            message={employeeProcessConfirmMessage}
+            confirmText={employeeProcessConfirmButtonText}
+            cancelText="Cancel"
+            tone="primary"
+            busy={!!employeeProcessBusy}
+            onCancel={cancelEmployeeProcessFinish}
+            onConfirm={confirmEmployeeProcessFinish}
+          />
+
+          <ConfirmModal
             open={!!breakConfirmAction}
             title={breakConfirmAction === "end" ? "End Break?" : "Start Break?"}
             message={
@@ -9262,6 +9928,39 @@ export default function EmployeeDashboard({
         </>
       )}
       </div>
+
+      {showEmployeeProcessActionModal ? (
+        <div className="employeeLeadFloatingModal" role="region" aria-label="IB and NL advance actions">
+          <div className="employeeLeadFloatingHead">
+            <span>Current turn</span>
+            <strong>{employeeProcessActionEmployee?.name || "Your row"}</strong>
+          </div>
+          <div className="employeeLeadFloatingMarks">
+            {employeeProcessActionUserId === effectiveIbUserId ? (
+              <button
+                type="button"
+                className="employeeLeadFloatingBtn isIb"
+                onClick={() => requestEmployeeProcessFinish("ib", employeeProcessActionUserId)}
+                disabled={employeeProcessBusy === "ib"}
+              >
+                <span>IB</span>
+                {employeeProcessBusy === "ib" ? "Finishing..." : "Finish Inbound"}
+              </button>
+            ) : null}
+            {employeeProcessActionUserId === effectiveNlUserId ? (
+              <button
+                type="button"
+                className="employeeLeadFloatingBtn isNl"
+                onClick={() => requestEmployeeProcessFinish("nl", employeeProcessActionUserId)}
+                disabled={employeeProcessBusy === "nl"}
+              >
+                <span>NL</span>
+                {employeeProcessBusy === "nl" ? "Finishing..." : "Finish new lead"}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {breakLoading ? (
         <div className="breakSavingOverlay" role="status" aria-live="polite" aria-label="Saving break status">
