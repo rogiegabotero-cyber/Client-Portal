@@ -1229,6 +1229,10 @@ export default function App() {
     const role = normalizeRole(user.role);
     return role === ROLES.SUPER_ADMIN || role === ROLES.ADMIN;
   }, [isAuthenticated, user]);
+  const canViewEmployeeCallActivityLog = useMemo(() => {
+    if (!isAuthenticated || !user) return false;
+    return normalizeRole(user.role) !== ROLES.EMPLOYEE;
+  }, [isAuthenticated, user]);
   const hasStoredAuthenticatedSession = useMemo(() => {
     try {
       const stored = getStoredSession();
@@ -4174,6 +4178,13 @@ export default function App() {
   }, [user, activePage]);
 
   useEffect(() => {
+    if (canViewEmployeeCallActivityLog) return;
+    if (employeeDashboardView !== "dashboard") {
+      setEmployeeDashboardView("dashboard");
+    }
+  }, [canViewEmployeeCallActivityLog, employeeDashboardView]);
+
+  useEffect(() => {
     if (!user) return;
 
     const normalizedRole = normalizeRole(user?.role);
@@ -5732,7 +5743,7 @@ export default function App() {
 
         <div className="portal-topbar">
           <div className="portal-topbar-left">
-            {activePage === "employee_dashboard" ? (
+            {activePage === "employee_dashboard" && canViewEmployeeCallActivityLog ? (
               <div className="portal-topbar-switch" role="tablist" aria-label="My dashboard views">
                 <button
                   type="button"
@@ -6007,7 +6018,7 @@ export default function App() {
               {activePage === "employee_dashboard" && (
                 <div className="portal-page-pad">
                   <EmployeeDashboard
-                    viewMode={employeeDashboardView}
+                    viewMode={canViewEmployeeCallActivityLog ? employeeDashboardView : "dashboard"}
                     employees={employeeDashboardEmployees}
                     announcements={announcements}
                     assignments={assignments}

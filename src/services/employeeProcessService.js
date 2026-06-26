@@ -15,6 +15,7 @@ export const getDefaultEmployeeProcessSettings = () => ({
   ibUserId: "",
   nlUserId: "",
   purpleIbUserId: "",
+  readyOverrides: {},
   updatedAt: null,
   updatedByUserId: "",
   updatedByName: "",
@@ -25,6 +26,19 @@ const normalizeUserIds = (value = []) =>
     new Set((Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean))
   );
 
+const normalizeReadyOverrides = (value = {}) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([userId, signature]) => [
+        String(userId || "").trim(),
+        String(signature || "").trim(),
+      ])
+      .filter(([userId, signature]) => userId && signature)
+  );
+};
+
 const normalizeSettings = (data = {}) => ({
   ...getDefaultEmployeeProcessSettings(),
   ...data,
@@ -32,6 +46,7 @@ const normalizeSettings = (data = {}) => ({
   ibUserId: String(data?.ibUserId || data?.ibCurrentUserId || "").trim(),
   nlUserId: String(data?.nlUserId || data?.nlCurrentUserId || "").trim(),
   purpleIbUserId: String(data?.purpleIbUserId || data?.secondaryIbUserId || "").trim(),
+  readyOverrides: normalizeReadyOverrides(data?.readyOverrides || data?.readyStateOverrides || {}),
 });
 
 const settingsRef = () => doc(db, COLLECTION_NAME, DEFAULT_DOC_ID);
@@ -125,6 +140,23 @@ export async function setEmployeeProcessAssignments({
   }
 
   await setDoc(settingsRef(), payload, { merge: true });
+}
+
+export async function setEmployeeProcessReadyOverrides({
+  readyOverrides = {},
+  updatedByUserId = "",
+  updatedByName = "",
+} = {}) {
+  await setDoc(
+    settingsRef(),
+    {
+      readyOverrides: normalizeReadyOverrides(readyOverrides),
+      updatedAt: serverTimestamp(),
+      updatedByUserId: String(updatedByUserId || "").trim(),
+      updatedByName: String(updatedByName || "").trim(),
+    },
+    { merge: true }
+  );
 }
 
 export async function advanceEmployeeProcessAssignment({

@@ -26,6 +26,8 @@ export const PAGE_KEYS = [
   "control_panel",
 ];
 
+const EMPLOYEE_BLOCKED_PAGES = new Set(["call_reports"]);
+
 export const DEFAULT_ROLE_PAGES = {
   [ROLES.SUPER_ADMIN]: PAGE_KEYS,
   [ROLES.ADMIN]: [
@@ -97,9 +99,15 @@ export function normalizeRole(role) {
 
 export function getAllowedPages(role, customAllowedPages = null) {
   const normalizedRole = normalizeRole(role);
+  const applyRolePageRestrictions = (pages = []) => {
+    const normalizedPages = Array.isArray(pages) ? pages : [];
+    if (normalizedRole !== ROLES.EMPLOYEE) return normalizedPages;
+    return normalizedPages.filter((page) => !EMPLOYEE_BLOCKED_PAGES.has(page));
+  };
   const includeProfilePage = (pages = []) => {
-    const normalizedPages = Array.isArray(pages)
-      ? pages.filter((page) => PAGE_KEYS.includes(page))
+    const restrictedPages = applyRolePageRestrictions(pages);
+    const normalizedPages = Array.isArray(restrictedPages)
+      ? restrictedPages.filter((page) => PAGE_KEYS.includes(page))
       : [];
 
     if (!normalizedPages.includes("profile")) {
@@ -121,6 +129,9 @@ export function getAllowedPages(role, customAllowedPages = null) {
 
 export function canAccessPage(role, page, customAllowedPages = null) {
   const targetPage = String(page || "").trim().toLowerCase();
+  if (normalizeRole(role) === ROLES.EMPLOYEE && EMPLOYEE_BLOCKED_PAGES.has(targetPage)) {
+    return false;
+  }
   const allowedPages = getAllowedPages(role, customAllowedPages);
   return allowedPages.includes(targetPage);
 }

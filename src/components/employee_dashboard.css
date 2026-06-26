@@ -580,7 +580,7 @@
   width:100%;
   flex:0 0 30%;
   max-width:30%;
-  padding: 20px;
+  padding: 5px;
 }
 
 .empSideColumnTopRow{
@@ -6952,6 +6952,10 @@
   color: #b91c1c;
 }
 
+.employeeLeadStatus.tone-loggedin {
+  color: #1d4ed8;
+}
+
 .employeeLeadStatus.tone-scheduled,
 .employeeLeadStatus.tone-dayoff,
 .employeeLeadStatus.tone-unavailable {
@@ -6997,6 +7001,54 @@
 .employeeLeadUnavailableStatus.tone-completed {
   background: rgba(185, 28, 28, .12);
   color: #991b1b !important;
+}
+
+.employeeLeadUnavailableStatus.tone-loggedin {
+  background: rgba(59, 130, 246, .13);
+  color: #1d4ed8 !important;
+}
+
+.employeeLeadReadyStatus {
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: background .16s ease, color .16s ease, transform .16s ease;
+}
+
+.employeeLeadReadyStatus:hover,
+.employeeLeadReadyStatus:focus-visible {
+  background: rgba(22, 163, 74, .16);
+  color: #047857 !important;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.employeeLeadReadyTextDefault,
+.employeeLeadReadyTextHover {
+  transition: opacity .14s ease, transform .14s ease;
+}
+
+.employeeLeadReadyTextHover {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.employeeLeadReadyStatus:hover .employeeLeadReadyTextDefault,
+.employeeLeadReadyStatus:focus-visible .employeeLeadReadyTextDefault {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.employeeLeadReadyStatus:hover .employeeLeadReadyTextHover,
+.employeeLeadReadyStatus:focus-visible .employeeLeadReadyTextHover {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 @media (max-width: 720px) {
@@ -7123,6 +7175,201 @@
 .employeeLeadAdvanceBtn:disabled {
   opacity: .55;
   cursor: not-allowed;
+}
+
+.employeeProcessLogPane{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  padding:6px;
+  border:1px solid rgba(148,163,184,.28);
+  border-radius:8px;
+  background:transparent;
+  box-shadow:none;
+  min-width:0;
+}
+
+.employeeProcessLogHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:6px;
+}
+
+.employeeProcessLogKicker{
+  color:#64748b;
+  font-size:10px;
+  font-weight:900;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+}
+
+.employeeProcessLogHead h4{
+  margin:2px 0 0;
+  color:#0f172a;
+  font-size:13px;
+  line-height:1.1;
+  font-weight:900;
+}
+
+.employeeProcessLogCount{
+  min-width:24px;
+  height:24px;
+  padding:0 7px;
+  border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(91,0,8,.08);
+  color:#5b0008;
+  font-size:10px;
+  font-weight:900;
+  box-shadow:inset 0 0 0 1px rgba(91,0,8,.05);
+}
+
+.employeeProcessLogEmpty{
+  border:1px dashed rgba(148,163,184,.42);
+  border-radius:6px;
+  padding:6px;
+  background:#ffffff;
+  color:#64748b;
+  font-size:11px;
+  line-height:1.25;
+  overflow-wrap:anywhere;
+}
+
+.employeeProcessLogEmpty.error{
+  border-style:solid;
+  border-color:rgba(248,113,113,.35);
+  background:rgba(254,242,242,.96);
+  color:#991b1b;
+}
+
+.employeeProcessLogList{
+  display:grid;
+  gap:4px;
+  max-height:174px;
+  overflow:auto;
+  padding-right:0;
+  background:none;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(100,116,139,.35) transparent;
+}
+
+.employeeProcessLogList::-webkit-scrollbar{
+  width:8px;
+  height:8px;
+  background:transparent;
+}
+
+.employeeProcessLogList::-webkit-scrollbar-track,
+.employeeProcessLogList::-webkit-scrollbar-corner{
+  background:transparent;
+}
+
+.employeeProcessLogList::-webkit-scrollbar-thumb{
+  border:2px solid transparent;
+  border-radius:999px;
+  background:rgba(100,116,139,.35);
+  background-clip:padding-box;
+}
+
+.employeeProcessLogItem{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:center;
+  gap:6px;
+  padding:6px;
+  border:1px solid rgba(148,163,184,.2);
+  border-radius:6px;
+  background:#ffffff;
+  min-width:0;
+  transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+
+.employeeProcessLogItem:hover{
+  transform:translateY(-1px);
+  border-color:rgba(91,0,8,.18);
+  box-shadow:0 8px 18px rgba(15,23,42,.06);
+}
+
+.employeeProcessLogAvatar{
+  width:28px;
+  height:28px;
+  border-radius:50%;
+  overflow:hidden;
+  display:grid;
+  place-items:center;
+  flex:0 0 auto;
+  background:linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
+  color:#334155;
+  font-size:10px;
+  font-weight:900;
+}
+
+.employeeProcessLogAvatar img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
+
+.employeeProcessLogMain{
+  min-width:0;
+  display:grid;
+  gap:1px;
+}
+
+.employeeProcessLogName{
+  color:#0f172a;
+  font-size:11px;
+  font-weight:900;
+  line-height:1.15;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.employeeProcessLogAction{
+  color:#475569;
+  font-size:10px;
+  font-weight:700;
+  line-height:1.2;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.employeeProcessLogTime{
+  color:#64748b;
+  font-size:9px;
+  font-weight:800;
+  white-space:nowrap;
+  text-align:right;
+}
+
+@media (max-width: 720px) {
+  .employeeProcessLogPane{
+    padding:6px;
+  }
+
+  .employeeProcessLogHead{
+    align-items:flex-start;
+  }
+
+  .employeeProcessLogHead h4{
+    font-size:12px;
+  }
+
+  .employeeProcessLogItem{
+    grid-template-columns:auto minmax(0,1fr);
+    align-items:start;
+  }
+
+  .employeeProcessLogTime{
+    grid-column:2;
+    text-align:left;
+    padding-top:2px;
+  }
 }
 
 .employeeLeadFloatingModal {

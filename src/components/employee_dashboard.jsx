@@ -83,8 +83,13 @@ import {
   getDefaultEmployeeProcessSettings,
   getNextEmployeeProcessUserId,
   setEmployeeProcessAssignments,
+  setEmployeeProcessReadyOverrides as setEmployeeProcessReadyOverridesInDb,
   subscribeEmployeeProcessSettings,
 } from "../services/employeeProcessService";
+import {
+  createEmployeeProcessActionLog,
+  subscribeEmployeeProcessActionLogs,
+} from "../services/employeeProcessLogService";
 
 /* ----------------------------- helpers ----------------------------- */
 const buildFallbackHeadline = (text) => {
@@ -95,6 +100,7 @@ const buildFallbackHeadline = (text) => {
 
 const normalize = (value = "") => String(value || "").trim().toLowerCase();
 const EMPLOYEE_PROCESS_LOCAL_STORAGE_KEY = "hyacinth_employee_process_assignment_v1";
+const EMPLOYEE_PROCESS_READY_STORAGE_KEY = "hyacinth_employee_process_ready_overrides_v1";
 const EMPLOYEE_PROCESS_GUIDE_TEXT =
   "IB and NL start on the first available employee, move separately when finished, and skip break, day off, completed, or unavailable rows. Purple IB is one optional secondary IB for the next available employee and clears if they become unavailable.";
 
@@ -111,6 +117,9 @@ const normalizeEmployeeProcessLocalSettings = (settings = {}) => ({
   ibUserId: String(settings?.ibUserId || settings?.ibCurrentUserId || "").trim(),
   nlUserId: String(settings?.nlUserId || settings?.nlCurrentUserId || "").trim(),
   purpleIbUserId: String(settings?.purpleIbUserId || settings?.secondaryIbUserId || "").trim(),
+  readyOverrides: normalizeEmployeeProcessReadyOverrides(
+    settings?.readyOverrides || settings?.readyStateOverrides || {}
+  ),
 });
 
 const readEmployeeProcessLocalSettings = () => {
@@ -142,6 +151,67 @@ const writeEmployeeProcessLocalSettings = (settings = {}) => {
   } catch {
     return false;
   }
+};
+
+const normalizeEmployeeProcessReadyOverrides = (value = {}) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([userId, signature]) => [
+        String(userId || "").trim(),
+        String(signature || "").trim(),
+      ])
+      .filter(([userId, signature]) => userId && signature)
+  );
+};
+
+const readEmployeeProcessReadyOverrides = () => {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+
+  try {
+    const raw = window.localStorage.getItem(EMPLOYEE_PROCESS_READY_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return normalizeEmployeeProcessReadyOverrides(parsed);
+  } catch {
+    return {};
+  }
+};
+
+const writeEmployeeProcessReadyOverrides = (overrides = {}) => {
+  if (typeof window === "undefined" || !window.localStorage) return false;
+
+  try {
+    const cleanOverrides = normalizeEmployeeProcessReadyOverrides(overrides);
+    window.localStorage.setItem(EMPLOYEE_PROCESS_READY_STORAGE_KEY, JSON.stringify(cleanOverrides));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const buildEmployeeProcessReadySignature = (userId, scheduledItem, logs = [], endDate = "") => {
+  const uid = String(userId || "").trim();
+  const startMs = resolveScheduledStartUtcMsForDayKey(scheduledItem, endDate);
+  const logSignature = (Array.isArray(logs) ? logs : [])
+    .map((log) => {
+      const inMs = toMillis(
+        pick(log || {}, ["timeIn", "clockIn", "startedAt", "createdAt", "inAt"], null)
+      );
+      const outMs = toMillis(
+        pick(log || {}, ["timeOut", "clockOut", "endedAt", "completedAt", "updatedAt", "outAt"], null)
+      );
+      return [
+        normalize(getAttendanceStatusText(log)),
+        isIn(log) ? "in" : "",
+        isClockedOutLog(log) ? "out" : "",
+        Number.isFinite(inMs) ? inMs : "",
+        Number.isFinite(outMs) ? outMs : "",
+      ].join(":");
+    })
+    .join("|");
+
+  return `${uid}|${endDate}|${Number.isFinite(startMs) ? startMs : "no-start"}|${logSignature}`;
 };
 
 const formatLabelList = (labels = []) => {
@@ -560,6 +630,8 @@ const NOTEPAD_NOTIFICATION_EVENT_CACHE = new Set();
 const NOTEPAD_REFRESH_SIGNAL_COLLECTION = "employee_notepad_refresh_signals";
 const NOTEPAD_LOCAL_DRAFT_STORAGE_PREFIX = "emp_notepad_local_draft";
 const NOTEPAD_LOCAL_DRAFT_VERSION = 1;
+const NOTEPAD_LOCAL_DRAFT_MAX_ENTRIES = 12;
+const NOTEPAD_LOCAL_DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 14;
 const EMP_SIDE_COLUMN_MIN_WIDTH_PX = 220;
 const EMP_SIDE_COLUMN_MAX_WIDTH_RATIO = 0.6;
 const EMP_SIDE_COLUMN_WIDTH_STORAGE_PREFIX = "emp_dash_side_col_width";
@@ -610,19 +682,99 @@ const readNotepadLocalDraft = (storageKey = "") => {
   }
 };
 
+const pruneNotepadLocalDrafts = ({
+  preserveKey = "",
+  maxEntries = NOTEPAD_LOCAL_DRAFT_MAX_ENTRIES,
+  maxAgeMs = NOTEPAD_LOCAL_DRAFT_MAX_AGE_MS,
+} = {}) => {
+  if (typeof window === "undefined" || !window.localStorage) return 0;
+
+  const nowMs = Date.now();
+  const keepKey = String(preserveKey || "").trim();
+  const candidateRows = [];
+  const removals = new Set();
+
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key || !key.startsWith(`${NOTEPAD_LOCAL_DRAFT_STORAGE_PREFIX}:`)) continue;
+    if (keepKey && key === keepKey) continue;
+
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      removals.add(key);
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || Number(parsed?.version) !== NOTEPAD_LOCAL_DRAFT_VERSION) {
+        removals.add(key);
+        continue;
+      }
+
+      const updatedAtMs = Number(parsed?.updatedAtMs) || 0;
+      if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0 || nowMs - updatedAtMs > maxAgeMs) {
+        removals.add(key);
+        continue;
+      }
+
+      candidateRows.push({ key, updatedAtMs });
+    } catch {
+      removals.add(key);
+    }
+  }
+
+  candidateRows.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+  if (Number.isFinite(maxEntries) && maxEntries > 0 && candidateRows.length > maxEntries) {
+    for (const row of candidateRows.slice(maxEntries)) {
+      removals.add(row.key);
+    }
+  }
+
+  let removedCount = 0;
+  for (const key of removals) {
+    try {
+      window.localStorage.removeItem(key);
+      removedCount += 1;
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+
+  return removedCount;
+};
+
 const writeNotepadLocalDraft = (storageKey = "", payload = {}) => {
   if (!storageKey || typeof window === "undefined" || !window.localStorage) return false;
   try {
-    window.localStorage.setItem(
-      storageKey,
-      JSON.stringify({
+    const serialized = JSON.stringify({
+      version: NOTEPAD_LOCAL_DRAFT_VERSION,
+      updatedAtMs: Date.now(),
+      ...payload,
+    });
+    window.localStorage.setItem(storageKey, serialized);
+    pruneNotepadLocalDrafts({ preserveKey: storageKey });
+    return true;
+  } catch {
+    try {
+      pruneNotepadLocalDrafts({
+        preserveKey: storageKey,
+        maxEntries: Math.max(4, Math.floor(NOTEPAD_LOCAL_DRAFT_MAX_ENTRIES / 2)),
+        maxAgeMs: 1000 * 60 * 60 * 24 * 7,
+      });
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
         version: NOTEPAD_LOCAL_DRAFT_VERSION,
         updatedAtMs: Date.now(),
         ...payload,
-      })
-    );
-    return true;
-  } catch {
+        })
+      );
+      pruneNotepadLocalDrafts({ preserveKey: storageKey });
+      return true;
+    } catch {
+      // If the browser is still out of space, we leave the draft unsaved locally.
+    }
     return false;
   }
 };
@@ -1365,6 +1517,12 @@ export default function EmployeeDashboard({
   const [employeeProcessError, setEmployeeProcessError] = useState("");
   const [employeeProcessBusy, setEmployeeProcessBusy] = useState("");
   const [employeeProcessConfirmAction, setEmployeeProcessConfirmAction] = useState(null);
+  const [employeeProcessReadyOverrides, setEmployeeProcessReadyOverrides] = useState(() =>
+    readEmployeeProcessReadyOverrides()
+  );
+  const [employeeProcessActionLogs, setEmployeeProcessActionLogs] = useState([]);
+  const [employeeProcessActionLogsLoading, setEmployeeProcessActionLogsLoading] = useState(false);
+  const [employeeProcessActionLogsError, setEmployeeProcessActionLogsError] = useState("");
   const [notepadPinningNoteId, setNotepadPinningNoteId] = useState("");
   const [notepadTitleDraft, setNotepadTitleDraft] = useState("");
   const [notepadColorDraft, setNotepadColorDraft] = useState(DEFAULT_NOTEPAD_COLOR_KEY);
@@ -1617,6 +1775,9 @@ export default function EmployeeDashboard({
         );
         setEmployeeProcessSettings(nextSettings);
         writeEmployeeProcessLocalSettings(nextSettings);
+        setEmployeeProcessReadyOverrides(
+          normalizeEmployeeProcessReadyOverrides(nextSettings?.readyOverrides || {})
+        );
         setEmployeeProcessError("");
         setEmployeeProcessLoading(false);
       },
@@ -1640,6 +1801,34 @@ export default function EmployeeDashboard({
       ) || null,
     [employees, effectiveSelectedId]
   );
+
+  useEffect(() => {
+    let active = true;
+
+    setEmployeeProcessActionLogsLoading(true);
+    setEmployeeProcessActionLogsError("");
+
+    const unsubscribe = subscribeEmployeeProcessActionLogs(
+      { maxRows: 0 },
+      (rows) => {
+        if (!active) return;
+        setEmployeeProcessActionLogs(Array.isArray(rows) ? rows : []);
+        setEmployeeProcessActionLogsError("");
+        setEmployeeProcessActionLogsLoading(false);
+      },
+      (err) => {
+        if (!active) return;
+        setEmployeeProcessActionLogs([]);
+        setEmployeeProcessActionLogsError(err?.message || "Unable to load inbound and new lead log.");
+        setEmployeeProcessActionLogsLoading(false);
+      }
+    );
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
 
   const getScheduledDayItemForUser = useCallback(
     (userId) => {
@@ -1693,9 +1882,41 @@ export default function EmployeeDashboard({
       const hasClockIn = logs.some((log) => isIn(log));
       if (!hasClockIn) return { available: false, label: "Scheduled", tone: "scheduled" };
 
+      const readySignature = buildEmployeeProcessReadySignature(uid, scheduledItem, logs, endDate);
+      if (employeeProcessReadyOverrides?.[uid] === readySignature) {
+        return {
+          available: true,
+          label: "Available",
+          tone: "available",
+          readySignature,
+          isReadyOverride: true,
+        };
+      }
+
+      const scheduledStartMs = resolveScheduledStartUtcMsForDayKey(scheduledItem, endDate);
+      const currentMs = Number.isFinite(liveNowMs) ? liveNowMs : Date.now();
+      const hasEarlyInStatus = statusTexts.some((status) => status.includes("early in"));
+      if (hasEarlyInStatus || (Number.isFinite(scheduledStartMs) && currentMs < scheduledStartMs)) {
+        return {
+          available: false,
+          label: "Logged in",
+          tone: "loggedin",
+          canReady: true,
+          readySignature,
+        };
+      }
+
       return { available: true, label: "Available", tone: "available" };
     },
-    [activeBreaksByUserId, getScheduledDayItemForUser, logsByUserId]
+    [
+      activeBreaksByUserId,
+      buildEmployeeProcessReadySignature,
+      employeeProcessReadyOverrides,
+      endDate,
+      getScheduledDayItemForUser,
+      liveNowMs,
+      logsByUserId,
+    ]
   );
 
   const employeeProcessRows = useMemo(() => {
@@ -1727,9 +1948,43 @@ export default function EmployeeDashboard({
           statusLabel: status.label,
           statusTone: status.tone,
           isAvailable: !!status.available,
+          canReady: !!status.canReady,
+          readySignature: status.readySignature || "",
+          isReadyOverride: !!status.isReadyOverride,
         };
       });
   }, [employeeProcessSettings?.rotationUserIds, employees, resolveEmployeeProcessStatus]);
+
+  useEffect(() => {
+    setEmployeeProcessReadyOverrides((prev) => {
+      const current = prev && typeof prev === "object" ? prev : {};
+      const validSignaturesByUserId = new Map(
+        employeeProcessRows
+          .map((row) => [
+            String(row.userId || "").trim(),
+            String(row.readySignature || "").trim(),
+          ])
+          .filter(([userId, signature]) => userId && signature)
+      );
+
+      const next = {};
+      for (const [userId, signature] of Object.entries(current)) {
+        if (validSignaturesByUserId.get(userId) === signature) {
+          next[userId] = signature;
+        }
+      }
+
+      const currentKeys = Object.keys(current);
+      const nextKeys = Object.keys(next);
+      const unchanged =
+        currentKeys.length === nextKeys.length &&
+        nextKeys.every((key) => current[key] === next[key]);
+
+      if (unchanged) return prev;
+      writeEmployeeProcessReadyOverrides(next);
+      return next;
+    });
+  }, [employeeProcessRows]);
 
   const employeeProcessRotationUserIds = useMemo(
     () => employeeProcessRows.map((row) => row.userId).filter(Boolean),
@@ -1890,10 +2145,73 @@ export default function EmployeeDashboard({
     [normalizedSelectedUserId, viewerLinkedEmployeeId, viewerRole]
   );
 
+  const requestEmployeeProcessReady = useCallback(
+    async (userId) => {
+      const uid = String(userId || "").trim();
+      if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return false;
+
+      const row = employeeProcessRows.find((item) => item.userId === uid);
+      if (!row?.canReady || !row?.readySignature) return false;
+
+      const previousOverrides =
+        employeeProcessReadyOverrides && typeof employeeProcessReadyOverrides === "object"
+          ? employeeProcessReadyOverrides
+          : {};
+      const nextOverrides = {
+        ...previousOverrides,
+        [uid]: row.readySignature,
+      };
+
+      setEmployeeProcessReadyOverrides(nextOverrides);
+      writeEmployeeProcessReadyOverrides(nextOverrides);
+      setEmployeeProcessError("");
+
+      try {
+        await setEmployeeProcessReadyOverridesInDb({
+          readyOverrides: nextOverrides,
+          updatedByUserId: viewerUserId,
+          updatedByName:
+            pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+        });
+        try {
+          await createEmployeeProcessActionLog({
+            employeeUserId: uid,
+            employeeName: row.name,
+            employeeProfileImageUrl: row.profileImg,
+            actionType: "ready",
+            actionLabel: "Marked Ready",
+            actionScope: "ready",
+            createdByUserId: viewerUserId,
+            createdByName:
+              pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+          });
+        } catch (logErr) {
+          console.error("Unable to save employee process ready log.", logErr);
+        }
+        return true;
+      } catch (err) {
+        setEmployeeProcessReadyOverrides(previousOverrides);
+        writeEmployeeProcessReadyOverrides(previousOverrides);
+        setEmployeeProcessError(err?.message || "Unable to save ready status.");
+        return false;
+      }
+    },
+    [
+      canAdvanceEmployeeProcessForRow,
+      employeeProcessReadyOverrides,
+      employeeProcessRows,
+      pageData?.currentUser?.name,
+      pageData?.user?.name,
+      pageData?.viewer?.name,
+      viewerUserId,
+    ]
+  );
+
   const handleAdvanceEmployeeProcess = useCallback(
     async (type, currentUserId) => {
       const uid = String(currentUserId || "").trim();
       if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return false;
+      const row = employeeProcessRows.find((item) => item.userId === uid);
 
       setEmployeeProcessBusy(type);
       setEmployeeProcessError("");
@@ -1914,6 +2232,24 @@ export default function EmployeeDashboard({
           writeEmployeeProcessLocalSettings(nextSettings);
           return nextSettings;
         });
+        try {
+          await createEmployeeProcessActionLog({
+            employeeUserId: uid,
+            employeeName: row?.name || "",
+            employeeProfileImageUrl: row?.profileImg || "",
+            actionType: String(type || "").toLowerCase() === "nl" ? "finish_nl" : "finish_ib",
+            actionLabel: String(type || "").toLowerCase() === "nl" ? "Finished New Lead" : "Finished Inbound",
+            actionScope: String(type || "").toLowerCase() === "nl" ? "new_lead" : "inbound",
+            relatedUserId: nextUserId,
+            relatedUserName:
+              employeeProcessRows.find((item) => item.userId === nextUserId)?.name || "",
+            createdByUserId: viewerUserId,
+            createdByName:
+              pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+          });
+        } catch (logErr) {
+          console.error("Unable to save employee process action log.", logErr);
+        }
         return true;
       } catch (err) {
         setEmployeeProcessError(err?.message || `Unable to advance ${String(type).toUpperCase()}.`);
@@ -1950,6 +2286,7 @@ export default function EmployeeDashboard({
       if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return false;
       if (targetUserId && targetUserId !== employeeProcessNextPurpleIbUserId) return false;
       if (!targetUserId && uid !== savedPurpleIbUserId) return false;
+      const row = employeeProcessRows.find((item) => item.userId === uid);
 
       setEmployeeProcessBusy(targetUserId ? "purple_ib_mark" : "purple_ib_remove");
       setEmployeeProcessError("");
@@ -1967,6 +2304,24 @@ export default function EmployeeDashboard({
           writeEmployeeProcessLocalSettings(nextSettings);
           return nextSettings;
         });
+        try {
+          await createEmployeeProcessActionLog({
+            employeeUserId: uid,
+            employeeName: row?.name || "",
+            employeeProfileImageUrl: row?.profileImg || "",
+            actionType: targetUserId ? "purple_ib_mark" : "purple_ib_remove",
+            actionLabel: targetUserId ? "Marked Secondary IB" : "Removed Secondary IB",
+            actionScope: "secondary_ib",
+            relatedUserId: targetUserId,
+            relatedUserName:
+              targetUserId ? employeeProcessRows.find((item) => item.userId === targetUserId)?.name || "" : "",
+            createdByUserId: viewerUserId,
+            createdByName:
+              pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+          });
+        } catch (logErr) {
+          console.error("Unable to save employee process action log.", logErr);
+        }
         return true;
       } catch (err) {
         setEmployeeProcessError(
@@ -8013,11 +8368,11 @@ export default function EmployeeDashboard({
                                     canMarkPurpleIb ? "canMarkPurpleIb" : "",
                                   ].filter(Boolean).join(" ")}
                                 >
-                                  {!row.isAvailable ? (
-                                    <td colSpan={3} className={`employeeLeadUnavailableCell tone-${row.statusTone}`}>
-                                      <div className="employeeLeadUnavailableContent">
-                                        <div className="employeeLeadIdentity">
-                                          <div className="employeeLeadAvatar">
+                                {!row.isAvailable ? (
+                                  <td colSpan={3} className={`employeeLeadUnavailableCell tone-${row.statusTone}`}>
+                                    <div className="employeeLeadUnavailableContent">
+                                      <div className="employeeLeadIdentity">
+                                        <div className="employeeLeadAvatar">
                                             {row.profileImg ? (
                                               <img src={row.profileImg} alt={`${row.name} profile`} />
                                             ) : (
@@ -8028,9 +8383,22 @@ export default function EmployeeDashboard({
                                             <div className="employeeLeadName">{row.name}</div>
                                           </div>
                                         </div>
-                                        <div className={`employeeLeadStatus employeeLeadUnavailableStatus tone-${row.statusTone}`}>
-                                          {row.statusLabel}
-                                        </div>
+                                        {row.statusTone === "loggedin" && row.canReady ? (
+                                          <button
+                                            type="button"
+                                            className={`employeeLeadStatus employeeLeadUnavailableStatus employeeLeadReadyStatus tone-${row.statusTone}`}
+                                            onClick={() => requestEmployeeProcessReady(row.userId)}
+                                            aria-label={`Mark ${row.name} as ready for IB and New Lead rotation`}
+                                            title="Click to make available"
+                                          >
+                                            <span className="employeeLeadReadyTextDefault">{row.statusLabel}</span>
+                                            <span className="employeeLeadReadyTextHover">I'm ready</span>
+                                          </button>
+                                        ) : (
+                                          <div className={`employeeLeadStatus employeeLeadUnavailableStatus tone-${row.statusTone}`}>
+                                            {row.statusLabel}
+                                          </div>
+                                        )}
                                       </div>
                                     </td>
                                   ) : (
@@ -8368,6 +8736,52 @@ export default function EmployeeDashboard({
                         </div>
                       ) : null}
                     </div>
+                  </div>
+                  <div className="employeeProcessLogPane" aria-label="Inbound and new lead log">
+                    <div className="employeeProcessLogHead">
+                      <div>
+                        <div className="employeeProcessLogKicker">Activity Log</div>
+                        <h4>Inbound &amp; New Lead Log</h4>
+                      </div>
+                      <div className="employeeProcessLogCount">{employeeProcessActionLogs.length}</div>
+                    </div>
+
+                    {employeeProcessActionLogsError ? (
+                      <div className="employeeProcessLogEmpty error">{employeeProcessActionLogsError}</div>
+                    ) : employeeProcessActionLogsLoading ? (
+                      <div className="employeeProcessLogEmpty">Loading process log...</div>
+                    ) : employeeProcessActionLogs.length === 0 ? (
+                      <div className="employeeProcessLogEmpty">No inbound or new lead actions yet.</div>
+                    ) : (
+                      <div className="employeeProcessLogList">
+                        {employeeProcessActionLogs.map((log, index) => {
+                          const logKey =
+                            String(log?.id || "").trim() ||
+                            `${normalizedSelectedUserId || "employee"}-process-log-${index}`;
+
+                          return (
+                            <div key={logKey} className="employeeProcessLogItem">
+                              <div className="employeeProcessLogAvatar">
+                                {log?.employeeProfileImageUrl ? (
+                                  <img src={log.employeeProfileImageUrl} alt={`${log.employeeName || "Employee"} profile`} />
+                                ) : (
+                                  initialsFromName(log?.employeeName || log?.createdByName || "Employee")
+                                )}
+                              </div>
+                              <div className="employeeProcessLogMain">
+                                <div className="employeeProcessLogName">
+                                  {log?.employeeName || log?.createdByName || "Employee"}
+                                </div>
+                                <div className="employeeProcessLogAction">{log?.actionLabel || "Action"}</div>
+                              </div>
+                              <div className="employeeProcessLogTime">
+                                {formatBreakLogDateTime(log?.createdAtMs || log?.createdAt, businessTimeZone)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

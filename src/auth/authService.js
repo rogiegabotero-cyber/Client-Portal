@@ -12,7 +12,10 @@ import { getDisplayName as getUserName, getUserId } from "../utils/common";
 
 const STORAGE_KEY = "hyacinth_portal_auth";
 const TRANSIENT_STORAGE_KEY_PREFIXES = ["emp_notepad_local_draft:"];
-const TRANSIENT_STORAGE_KEYS = ["hyacinth_employee_process_assignment_v1"];
+const TRANSIENT_STORAGE_KEYS = [
+  "hyacinth_employee_process_assignment_v1",
+  "hyacinth_employee_process_ready_overrides_v1",
+];
 
 function safeJsonParse(value, fallback = null) {
   try {

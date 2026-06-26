@@ -128,7 +128,27 @@
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
   transition: opacity 0.24s ease, transform 0.24s ease;
+}
+
+.portal-main::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+.portal-main::-webkit-scrollbar-track,
+.portal-main::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.portal-main::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.35);
+  background-clip: padding-box;
 }
 
 .portal-main-hidden {

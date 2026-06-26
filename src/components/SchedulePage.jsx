@@ -9,7 +9,11 @@ import {
   pick,
   safeLower,
 } from "../utils/common";
-import { getScheduleTimeZone } from "../utils/scheduleTime";
+import {
+  getScheduleTimeZone,
+  resolveScheduledEndUtcMsForDayKey,
+  resolveScheduledStartUtcMsForDayKey,
+} from "../utils/scheduleTime";
 
 // robust userId detection
 
@@ -21,21 +25,196 @@ const initials = (name = "") => {
 };
 
 const pad2 = (n) => String(n).padStart(2, "0");
+const MINUTES_PER_DAY = 24 * 60;
+const PH_UTC_OFFSET_HOURS = 8;
+const FIXED_TIME_ZONE_OFFSETS = {
+  UTC: 0,
+  GMT: 0,
+  Z: 0,
+  HST: -10,
+  PHT: 8,
+  PHST: 8,
+  "PH TIME": 8,
+  "PHILIPPINE TIME": 8,
+  "PHILIPPINE STANDARD TIME": 8,
+  "ASIA/MANILA": 8,
+  MANILA: 8,
+};
+const DISPLAY_IANA_TIME_ZONES = {
+  "AMERICA/NEW_YORK": "America/New_York",
+  "NEW YORK": "America/New_York",
+  "EASTERN TIME": "America/New_York",
+  "EASTERN STANDARD TIME": "America/New_York",
+  "EASTERN DAYLIGHT TIME": "America/New_York",
+  EST: "America/New_York",
+  EDT: "America/New_York",
+  "AMERICA/CHICAGO": "America/Chicago",
+  CHICAGO: "America/Chicago",
+  "CENTRAL TIME": "America/Chicago",
+  "CENTRAL STANDARD TIME": "America/Chicago",
+  "CENTRAL DAYLIGHT TIME": "America/Chicago",
+  CST: "America/Chicago",
+  CDT: "America/Chicago",
+  "AMERICA/DENVER": "America/Denver",
+  DENVER: "America/Denver",
+  "MOUNTAIN TIME": "America/Denver",
+  "MOUNTAIN STANDARD TIME": "America/Denver",
+  "MOUNTAIN DAYLIGHT TIME": "America/Denver",
+  MST: "America/Denver",
+  MDT: "America/Denver",
+  "AMERICA/LOS_ANGELES": "America/Los_Angeles",
+  "LOS ANGELES": "America/Los_Angeles",
+  "PACIFIC TIME": "America/Los_Angeles",
+  "PACIFIC STANDARD TIME": "America/Los_Angeles",
+  "PACIFIC DAYLIGHT TIME": "America/Los_Angeles",
+  PST: "America/Los_Angeles",
+  PDT: "America/Los_Angeles",
+  "AMERICA/ANCHORAGE": "America/Anchorage",
+  ANCHORAGE: "America/Anchorage",
+  "ALASKA TIME": "America/Anchorage",
+  "ALASKA STANDARD TIME": "America/Anchorage",
+  "ALASKA DAYLIGHT TIME": "America/Anchorage",
+  AKST: "America/Anchorage",
+  AKDT: "America/Anchorage",
+  "PACIFIC/HONOLULU": "Pacific/Honolulu",
+  HONOLULU: "Pacific/Honolulu",
+  "HAWAII TIME": "Pacific/Honolulu",
+  "HAWAII STANDARD TIME": "Pacific/Honolulu",
+  HST: "Pacific/Honolulu",
+};
+
+const parseClockToMinutes = (clockValue) => {
+  const raw = String(clockValue || "").trim();
+  if (!raw || raw === "-") return NaN;
+
+  const match24 = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (match24) {
+    const hour = Number(match24[1]);
+    const minute = Number(match24[2]);
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return hour * 60 + minute;
+    }
+  }
+
+  const match12 = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])$/);
+  if (!match12) return NaN;
+
+  let hour = Number(match12[1]);
+  const minute = Number(match12[2]);
+  const suffix = String(match12[3] || "").toUpperCase();
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return NaN;
+  if (suffix === "AM" && hour === 12) hour = 0;
+  if (suffix === "PM" && hour !== 12) hour += 12;
+  return hour * 60 + minute;
+};
+
+const normalizeMinutesToHHMM = (totalMinutes) => {
+  const n = Number(totalMinutes);
+  if (!Number.isFinite(n)) return "-";
+  const minutes = ((Math.round(n) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  return `${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}`;
+};
+
+const parseOffsetPartsToHours = (sign, hourValue, minuteValue = "0") => {
+  const hours = Number(hourValue);
+  const minutes = Number(minuteValue || 0);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return NaN;
+  const absolute = hours + minutes / 60;
+  return sign === "-" ? -absolute : absolute;
+};
+
+const isValidIanaTimeZone = (timeZone) => {
+  const tz = String(timeZone || "").trim();
+  if (!tz) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const resolveDisplayIanaTimeZone = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const normalized = raw.toUpperCase().replace(/\s+/g, " ");
+  if (Object.prototype.hasOwnProperty.call(DISPLAY_IANA_TIME_ZONES, normalized)) {
+    return DISPLAY_IANA_TIME_ZONES[normalized];
+  }
+
+  if (raw.includes("/") && isValidIanaTimeZone(raw)) return raw;
+
+  const tokenMatch = normalized.match(
+    /\b(AKDT|AKST|PDT|PST|MDT|MST|CDT|CST|EDT|EST|HST)\b/
+  );
+  return tokenMatch ? DISPLAY_IANA_TIME_ZONES[tokenMatch[1]] || "" : "";
+};
+
+const resolveFixedTimeZoneOffsetHours = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return NaN;
+
+  const normalized = raw.toUpperCase().replace(/\s+/g, " ");
+  if (Object.prototype.hasOwnProperty.call(FIXED_TIME_ZONE_OFFSETS, normalized)) {
+    return FIXED_TIME_ZONE_OFFSETS[normalized];
+  }
+
+  const utcOffsetMatch = normalized.match(/\b(?:UTC|GMT)\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?\b/);
+  if (utcOffsetMatch) {
+    return parseOffsetPartsToHours(utcOffsetMatch[1], utcOffsetMatch[2], utcOffsetMatch[3]);
+  }
+
+  const bareOffsetMatch = normalized.match(/^([+-])\s*(\d{1,2})(?::?(\d{2}))?$/);
+  if (bareOffsetMatch) {
+    return parseOffsetPartsToHours(bareOffsetMatch[1], bareOffsetMatch[2], bareOffsetMatch[3]);
+  }
+
+  const tokenMatch = normalized.match(
+    /\b(PHT|PHST|HST|UTC|GMT|Z)\b/
+  );
+  return tokenMatch ? FIXED_TIME_ZONE_OFFSETS[tokenMatch[1]] : NaN;
+};
+
+const convertFixedOffsetClockToPh = (clockValue, sourceOffsetHours, sourceDayOffset = 0) => {
+  const clockMinutes = parseClockToMinutes(clockValue);
+  const sourceOffset = Number(sourceOffsetHours);
+  const dayOffset = Number(sourceDayOffset || 0);
+  if (!Number.isFinite(clockMinutes) || !Number.isFinite(sourceOffset) || !Number.isFinite(dayOffset)) {
+    return null;
+  }
+
+  const phOffsetMinutes = Math.round((PH_UTC_OFFSET_HOURS - sourceOffset) * 60);
+  const totalMinutes = dayOffset * MINUTES_PER_DAY + clockMinutes + phOffsetMinutes;
+  return {
+    time: normalizeMinutesToHHMM(totalMinutes),
+    dayOffset: Math.floor(totalMinutes / MINUTES_PER_DAY),
+  };
+};
+
+const inferScheduleOutDayOffset = (timeIn, timeOut, fallbackDayOffset = 0) => {
+  const explicitOffset = Number(fallbackDayOffset || 0);
+  if (explicitOffset) return explicitOffset;
+
+  const startMinutes = parseClockToMinutes(timeIn);
+  const endMinutes = parseClockToMinutes(timeOut);
+  if (!Number.isFinite(startMinutes) || !Number.isFinite(endMinutes)) return 0;
+  return endMinutes < startMinutes ? 1 : 0;
+};
 
 const addHoursToHHMM = (hhmm, hoursToAdd) => {
-  const [hRaw, mRaw] = String(hhmm || "").split(":").map(Number);
+  const startMin = parseClockToMinutes(hhmm);
   const hrs = Number(hoursToAdd);
 
-  if (!Number.isFinite(hRaw) || !Number.isFinite(mRaw) || !Number.isFinite(hrs)) {
+  if (!Number.isFinite(startMin) || !Number.isFinite(hrs)) {
     return { outHHMM: "-", dayOffset: 0 };
   }
 
-  const startMin = hRaw * 60 + mRaw;
   const addMin = Math.round(hrs * 60);
   const total = startMin + addMin;
 
-  const dayOffset = Math.floor(total / (24 * 60));
-  const mod = ((total % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const dayOffset = Math.floor(total / MINUTES_PER_DAY);
+  const mod = ((total % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
 
   const outH = Math.floor(mod / 60);
   const outM = mod % 60;
@@ -55,6 +234,22 @@ const DAY_ABBR = {
   friday: "Fri",
   saturday: "Sat",
   sunday: "Sun",
+};
+
+const SCHEDULE_TZ_API = "api";
+const SCHEDULE_TZ_PH = "ph";
+const SCHEDULE_TIME_24H = "24h";
+const SCHEDULE_TIME_READABLE = "readable";
+const PH_TIME_ZONE = "Asia/Manila";
+const SCHEDULE_REFERENCE_TIME_ZONE = "America/Chicago";
+const DAY_INDEX_BY_KEY = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
 };
 
 const normalizeDayKey = (v) => {
@@ -130,7 +325,199 @@ const formatUtcIsoToHHMM = (utcIso, timeZone) => {
   }).format(d);
 };
 
-const buildScheduleGroups = (scheduleArr = []) => {
+const formatUtcMsToHHMM = (utcMs, timeZone) => {
+  const ms = Number(utcMs);
+  if (!Number.isFinite(ms)) return "";
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(ms));
+};
+
+const formatHHMMReadable = (hhmm) => {
+  const raw = String(hhmm || "").trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return raw || "-";
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return raw || "-";
+
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${pad2(minute)} ${suffix}`;
+};
+
+const formatScheduleDisplayTime = (timeValue, displayFormat = SCHEDULE_TIME_24H) => {
+  const raw = String(timeValue || "").trim();
+  if (!raw || raw === "-") return "-";
+  return displayFormat === SCHEDULE_TIME_READABLE ? formatHHMMReadable(raw) : raw;
+};
+
+const dayKeyFromUtcMsInZone = (utcMs, timeZone) => {
+  const ms = Number(utcMs);
+  if (!Number.isFinite(ms)) return "";
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: String(timeZone || "").trim() || "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(ms));
+  const map = {};
+  for (const part of parts) {
+    if (part.type !== "literal") map[part.type] = part.value;
+  }
+  return map.year && map.month && map.day ? `${map.year}-${map.month}-${map.day}` : "";
+};
+
+const dayOffsetFromReference = (displayDayKey, referenceDayKey) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(displayDayKey || ""))) return 0;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(referenceDayKey || ""))) return 0;
+
+  const displayMs = new Date(`${displayDayKey}T00:00:00Z`).getTime();
+  const referenceMs = new Date(`${referenceDayKey}T00:00:00Z`).getTime();
+  if (!Number.isFinite(displayMs) || !Number.isFinite(referenceMs)) return 0;
+  return Math.round((displayMs - referenceMs) / 86400000);
+};
+
+const getDatePartsInTimeZone = (date, timeZone) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "long",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const map = {};
+  for (const part of parts) {
+    if (part.type !== "literal") map[part.type] = part.value;
+  }
+  return map;
+};
+
+const formatDateKeyFromUtcMs = (utcMs) => {
+  const d = new Date(utcMs);
+  if (!Number.isFinite(d.getTime())) return "";
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+};
+
+const getCurrentWeekReferenceDayKey = (dayKey) => {
+  const targetDayIndex = DAY_INDEX_BY_KEY[dayKey];
+  if (!Number.isFinite(targetDayIndex)) return "";
+
+  const nowParts = getDatePartsInTimeZone(new Date(), SCHEDULE_REFERENCE_TIME_ZONE);
+  const currentDayIndex = DAY_INDEX_BY_KEY[safeLower(nowParts.weekday)];
+  const year = Number(nowParts.year);
+  const month = Number(nowParts.month);
+  const day = Number(nowParts.day);
+  if (
+    !Number.isFinite(currentDayIndex) ||
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day)
+  ) {
+    return "";
+  }
+
+  const currentDateUtcMs = Date.UTC(year, month - 1, day);
+  const targetDateUtcMs = currentDateUtcMs + (targetDayIndex - currentDayIndex) * 86400000;
+  return formatDateKeyFromUtcMs(targetDateUtcMs);
+};
+
+const buildLocalClockScheduleItem = (item, dayKey, timeIn, timeOut) => ({
+  dayOfWeek: dayKey,
+  timeIn,
+  timeOut,
+  shiftDuration: pick(item || {}, ["shiftDuration", "hours", "durationHours"], null),
+  timeRegion:
+    resolveDisplayIanaTimeZone(getScheduleTimeZoneRaw(item)) ||
+    getScheduleTimeZoneRaw(item) ||
+    getScheduleTimeZone(item),
+});
+
+const buildFixedOffsetPhScheduleDisplay = (item, fallbackDisplay = {}) => {
+  const apiTimeIn = String(fallbackDisplay.timeIn || "").trim();
+  const apiTimeOut = String(fallbackDisplay.timeOut || "").trim();
+  const timeZoneLabel = String(fallbackDisplay.tz || getScheduleTimeZoneRaw(item) || "").trim();
+  if (resolveDisplayIanaTimeZone(timeZoneLabel)) return null;
+
+  const sourceOffsetHours = resolveFixedTimeZoneOffsetHours(timeZoneLabel);
+
+  if (!apiTimeIn || apiTimeIn === "-" || !Number.isFinite(sourceOffsetHours)) {
+    return null;
+  }
+
+  const start = convertFixedOffsetClockToPh(apiTimeIn, sourceOffsetHours);
+  if (!start) return null;
+
+  const outDayOffset = inferScheduleOutDayOffset(apiTimeIn, apiTimeOut, fallbackDisplay.dayOffset);
+  const end =
+    apiTimeOut && apiTimeOut !== "-"
+      ? convertFixedOffsetClockToPh(apiTimeOut, sourceOffsetHours, outDayOffset)
+      : null;
+
+  return {
+    timeIn: start.time,
+    timeOut: end?.time || fallbackDisplay.timeOut || "-",
+    timeInDayOffset: start.dayOffset,
+    dayOffset: end?.dayOffset ?? Number(fallbackDisplay.dayOffset || 0),
+    tz: "PH Time",
+  };
+};
+
+const buildPhScheduleDisplay = (item, dayKey, fallbackDisplay = {}) => {
+  const referenceDayKey = getCurrentWeekReferenceDayKey(dayKey);
+  const apiTimeIn = String(fallbackDisplay.timeIn || "").trim();
+  const apiTimeOut = String(fallbackDisplay.timeOut || "").trim();
+  const hasApiClock = !!apiTimeIn && apiTimeIn !== "-";
+
+  const fixedOffsetDisplay = buildFixedOffsetPhScheduleDisplay(item, fallbackDisplay);
+  if (fixedOffsetDisplay) return fixedOffsetDisplay;
+
+  const sourceItem = hasApiClock
+    ? buildLocalClockScheduleItem(
+        item,
+        dayKey,
+        apiTimeIn,
+        apiTimeOut && apiTimeOut !== "-" ? apiTimeOut : ""
+      )
+    : item;
+  const startMs = resolveScheduledStartUtcMsForDayKey(sourceItem, referenceDayKey);
+  const endMs = resolveScheduledEndUtcMsForDayKey(sourceItem, referenceDayKey);
+
+  if (!Number.isFinite(startMs)) {
+    return {
+      timeIn: fallbackDisplay.timeIn || "-",
+      timeOut: fallbackDisplay.timeOut || "-",
+      timeInDayOffset: 0,
+      dayOffset: Number(fallbackDisplay.dayOffset || 0),
+      tz: "PH Time",
+    };
+  }
+
+  const startDisplayDayKey = dayKeyFromUtcMsInZone(startMs, PH_TIME_ZONE);
+  const endDisplayDayKey = Number.isFinite(endMs) ? dayKeyFromUtcMsInZone(endMs, PH_TIME_ZONE) : "";
+
+  return {
+    timeIn: formatUtcMsToHHMM(startMs, PH_TIME_ZONE) || fallbackDisplay.timeIn || "-",
+    timeOut: Number.isFinite(endMs)
+      ? formatUtcMsToHHMM(endMs, PH_TIME_ZONE) || fallbackDisplay.timeOut || "-"
+      : fallbackDisplay.timeOut || "-",
+    timeInDayOffset: dayOffsetFromReference(startDisplayDayKey, referenceDayKey),
+    dayOffset: dayOffsetFromReference(endDisplayDayKey, referenceDayKey),
+    tz: "PH Time",
+  };
+};
+
+const buildScheduleGroups = (
+  scheduleArr = [],
+  displayTimeZoneMode = SCHEDULE_TZ_API,
+  displayFormat = SCHEDULE_TIME_24H
+) => {
   if (!Array.isArray(scheduleArr) || scheduleArr.length === 0) return [];
 
   const groupsMap = new Map();
@@ -144,8 +531,7 @@ const buildScheduleGroups = (scheduleArr = []) => {
     const apiTimeIn = getScheduleTimeIn(item);
     const apiTimeOut = getScheduleTimeOut(item);
     const apiTimeZone = getScheduleTimeZoneRaw(item);
-    const tzForConversion = getScheduleTimeZone(item);
-    const displayTimeZone = tzForConversion;
+    const displayTimeZone = resolveDisplayIanaTimeZone(apiTimeZone) || getScheduleTimeZone(item);
 
     const convertedIn = utcTimeIn ? formatUtcIsoToHHMM(utcTimeIn, displayTimeZone) : "";
     const timeIn = apiTimeIn !== "-" ? apiTimeIn : convertedIn || "-";
@@ -162,23 +548,36 @@ const buildScheduleGroups = (scheduleArr = []) => {
 
     const tz = apiTimeZone || (convertedIn || convertedOut ? displayTimeZone : "-");
 
+    const displayValues =
+      displayTimeZoneMode === SCHEDULE_TZ_PH
+        ? buildPhScheduleDisplay(item, dayKey, { timeIn, timeOut: outHHMM, dayOffset, tz })
+        : {
+            timeIn,
+            timeOut: outHHMM,
+            timeInDayOffset: 0,
+            dayOffset,
+            tz,
+          };
+
     const groupKey = JSON.stringify({
-      timeIn,
+      timeIn: displayValues.timeIn,
       duration,
-      timeOut: outHHMM,
-      dayOffset,
-      tz,
+      timeOut: displayValues.timeOut,
+      timeInDayOffset: displayValues.timeInDayOffset,
+      dayOffset: displayValues.dayOffset,
+      tz: displayValues.tz,
     });
 
     if (!groupsMap.has(groupKey)) {
       groupsMap.set(groupKey, {
         key: groupKey,
         dayKeys: [],
-        timeIn,
+        timeIn: formatScheduleDisplayTime(displayValues.timeIn, displayFormat),
         duration,
-        timeOut: outHHMM,
-        dayOffset,
-        tz,
+        timeOut: formatScheduleDisplayTime(displayValues.timeOut, displayFormat),
+        timeInDayOffset: displayValues.timeInDayOffset,
+        dayOffset: displayValues.dayOffset,
+        tz: displayValues.tz,
       });
     }
 
@@ -209,11 +608,15 @@ export default function SchedulePage({
   pageData = null,
 }) {
   const [query, setQuery] = useState("");
+  const [scheduleTimeDisplayMode, setScheduleTimeDisplayMode] = useState(SCHEDULE_TZ_API);
+  const [scheduleTimeFormat, setScheduleTimeFormat] = useState(SCHEDULE_TIME_24H);
   const handleReloadClick = () => {
     if (typeof onReload === "function") {
       onReload({ force: true });
     }
   };
+  const scheduleTimeDisplayLabel =
+    scheduleTimeDisplayMode === SCHEDULE_TZ_PH ? "PH Time" : "API Time Zone";
   const profileImagesByUserId =
     pageData?.profileImagesByUserId && typeof pageData.profileImagesByUserId === "object"
       ? pageData.profileImagesByUserId
@@ -233,7 +636,11 @@ export default function SchedulePage({
 
       const scheduleArr = Array.isArray(schedulesByUserId?.[userId]) ? schedulesByUserId[userId] : [];
       const hasSchedule = scheduleArr.length > 0;
-      const scheduleGroups = buildScheduleGroups(scheduleArr);
+      const scheduleGroups = buildScheduleGroups(
+        scheduleArr,
+        scheduleTimeDisplayMode,
+        scheduleTimeFormat
+      );
 
       out.push({
         key: userId,
@@ -256,7 +663,14 @@ export default function SchedulePage({
 
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
-  }, [validEmployees, schedulesByUserId, errorsByUserId, profileImagesByUserId]);
+  }, [
+    validEmployees,
+    schedulesByUserId,
+    errorsByUserId,
+    profileImagesByUserId,
+    scheduleTimeDisplayMode,
+    scheduleTimeFormat,
+  ]);
 
   const filtered = useMemo(() => {
     const q = safeLower(query).trim();
@@ -337,6 +751,44 @@ export default function SchedulePage({
                 <RotateCw size={16} className={loading ? "schxBtnIconSpin" : ""} />
               </button>
 
+              <div className="schxTimezoneToggle" role="group" aria-label="Schedule time display timezone">
+                <button
+                  type="button"
+                  className={`schxTimezoneBtn ${scheduleTimeDisplayMode === SCHEDULE_TZ_API ? "isActive" : ""}`}
+                  onClick={() => setScheduleTimeDisplayMode(SCHEDULE_TZ_API)}
+                  aria-pressed={scheduleTimeDisplayMode === SCHEDULE_TZ_API}
+                >
+                  API TZ
+                </button>
+                <button
+                  type="button"
+                  className={`schxTimezoneBtn ${scheduleTimeDisplayMode === SCHEDULE_TZ_PH ? "isActive" : ""}`}
+                  onClick={() => setScheduleTimeDisplayMode(SCHEDULE_TZ_PH)}
+                  aria-pressed={scheduleTimeDisplayMode === SCHEDULE_TZ_PH}
+                >
+                  PH Time
+                </button>
+              </div>
+
+              <div className="schxTimezoneToggle" role="group" aria-label="Schedule time format">
+                <button
+                  type="button"
+                  className={`schxTimezoneBtn ${scheduleTimeFormat === SCHEDULE_TIME_24H ? "isActive" : ""}`}
+                  onClick={() => setScheduleTimeFormat(SCHEDULE_TIME_24H)}
+                  aria-pressed={scheduleTimeFormat === SCHEDULE_TIME_24H}
+                >
+                  24H
+                </button>
+                <button
+                  type="button"
+                  className={`schxTimezoneBtn ${scheduleTimeFormat === SCHEDULE_TIME_READABLE ? "isActive" : ""}`}
+                  onClick={() => setScheduleTimeFormat(SCHEDULE_TIME_READABLE)}
+                  aria-pressed={scheduleTimeFormat === SCHEDULE_TIME_READABLE}
+                >
+                  AM/PM
+                </button>
+              </div>
+
               <div className="schxPill">
                 Rows: <span className="schxPillValue">{filtered.length}</span>
               </div>
@@ -350,10 +802,10 @@ export default function SchedulePage({
               <tr>
                 <th>User</th>
                 <th>Days</th>
-                <th>Time In (API TZ)</th>
-                <th>Time Out (API TZ)</th>
+                <th>Time In ({scheduleTimeDisplayLabel})</th>
+                <th>Time Out ({scheduleTimeDisplayLabel})</th>
                 <th>Hours</th>
-                <th>Timezone (API)</th>
+                <th>Timezone</th>
               </tr>
             </thead>
 
@@ -416,9 +868,14 @@ export default function SchedulePage({
                       ) : (
                         <div className="schxStack">
                           {r.scheduleGroups.map((g, idx) => (
-                            <span key={`${r.key}-in-${idx}`} className="schxTime">
-                              {g.timeIn}
-                            </span>
+                            <div key={`${r.key}-in-${idx}`} className="schxTimeWrap">
+                              <span className="schxTime">{g.timeIn}</span>
+                              {g.timeInDayOffset ? (
+                                <span className="schxMiniPill">
+                                  {g.timeInDayOffset > 0 ? `+${g.timeInDayOffset}d` : `${g.timeInDayOffset}d`}
+                                </span>
+                              ) : null}
+                            </div>
                           ))}
                         </div>
                       )}
