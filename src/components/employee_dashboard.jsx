@@ -7950,13 +7950,12 @@ export default function EmployeeDashboard({
                             type="button"
                             className="employeeLeadGuideBtn"
                             aria-label={`Inbound and New Lead guide: ${EMPLOYEE_PROCESS_GUIDE_TEXT}`}
-                            data-tooltip={EMPLOYEE_PROCESS_GUIDE_TEXT}
                           >
                             <CircleHelp size={14} aria-hidden="true" />
+                            <span className="employeeLeadGuideTooltip" role="tooltip">
+                              {EMPLOYEE_PROCESS_GUIDE_TEXT}
+                            </span>
                           </button>
-                        </div>
-                        <div className="employeeLeadProcessSub">
-                          IB and NL move top to bottom, skipping unavailable employees.
                         </div>
                       </div>
                       <div className="employeeLeadProcessBadge">
@@ -8027,7 +8026,6 @@ export default function EmployeeDashboard({
                                           </div>
                                           <div>
                                             <div className="employeeLeadName">{row.name}</div>
-                                            <div className="employeeLeadUnavailableMeta">{row.email || row.userId}</div>
                                           </div>
                                         </div>
                                         <div className={`employeeLeadStatus employeeLeadUnavailableStatus tone-${row.statusTone}`}>
@@ -9929,38 +9927,41 @@ export default function EmployeeDashboard({
       )}
       </div>
 
-      {showEmployeeProcessActionModal ? (
-        <div className="employeeLeadFloatingModal" role="region" aria-label="IB and NL advance actions">
-          <div className="employeeLeadFloatingHead">
-            <span>Current turn</span>
-            <strong>{employeeProcessActionEmployee?.name || "Your row"}</strong>
-          </div>
-          <div className="employeeLeadFloatingMarks">
-            {employeeProcessActionUserId === effectiveIbUserId ? (
-              <button
-                type="button"
-                className="employeeLeadFloatingBtn isIb"
-                onClick={() => requestEmployeeProcessFinish("ib", employeeProcessActionUserId)}
-                disabled={employeeProcessBusy === "ib"}
-              >
-                <span>IB</span>
-                {employeeProcessBusy === "ib" ? "Finishing..." : "Finish Inbound"}
-              </button>
-            ) : null}
-            {employeeProcessActionUserId === effectiveNlUserId ? (
-              <button
-                type="button"
-                className="employeeLeadFloatingBtn isNl"
-                onClick={() => requestEmployeeProcessFinish("nl", employeeProcessActionUserId)}
-                disabled={employeeProcessBusy === "nl"}
-              >
-                <span>NL</span>
-                {employeeProcessBusy === "nl" ? "Finishing..." : "Finish new lead"}
-              </button>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
+      {showEmployeeProcessActionModal && portalRoot
+        ? createPortal(
+            <div className="employeeLeadFloatingModal" role="region" aria-label="IB and NL advance actions">
+              <div className="employeeLeadFloatingHead">
+                <span>Current turn</span>
+                <strong>{employeeProcessActionEmployee?.name || "Your row"}</strong>
+              </div>
+              <div className="employeeLeadFloatingMarks">
+                {employeeProcessActionUserId === effectiveIbUserId ? (
+                  <button
+                    type="button"
+                    className="employeeLeadFloatingBtn isIb"
+                    onClick={() => requestEmployeeProcessFinish("ib", employeeProcessActionUserId)}
+                    disabled={employeeProcessBusy === "ib"}
+                  >
+                    <span>IB</span>
+                    {employeeProcessBusy === "ib" ? "Finishing..." : "Finish Inbound"}
+                  </button>
+                ) : null}
+                {employeeProcessActionUserId === effectiveNlUserId ? (
+                  <button
+                    type="button"
+                    className="employeeLeadFloatingBtn isNl"
+                    onClick={() => requestEmployeeProcessFinish("nl", employeeProcessActionUserId)}
+                    disabled={employeeProcessBusy === "nl"}
+                  >
+                    <span>NL</span>
+                    {employeeProcessBusy === "nl" ? "Finishing..." : "Finish new lead"}
+                  </button>
+                ) : null}
+              </div>
+            </div>,
+            portalRoot
+          )
+        : null}
 
       {breakLoading ? (
         <div className="breakSavingOverlay" role="status" aria-live="polite" aria-label="Saving break status">

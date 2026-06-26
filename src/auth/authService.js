@@ -11,6 +11,8 @@ import {
 import { getDisplayName as getUserName, getUserId } from "../utils/common";
 
 const STORAGE_KEY = "hyacinth_portal_auth";
+const TRANSIENT_STORAGE_KEY_PREFIXES = ["emp_notepad_local_draft:"];
+const TRANSIENT_STORAGE_KEYS = ["hyacinth_employee_process_assignment_v1"];
 
 function safeJsonParse(value, fallback = null) {
   try {
@@ -20,17 +22,165 @@ function safeJsonParse(value, fallback = null) {
   }
 }
 
+function getLocalStorage() {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage || null;
+  } catch {
+    return null;
+  }
+}
+
+function getSessionStorage() {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage || null;
+  } catch {
+    return null;
+  }
+}
+
+function isQuotaExceededError(error) {
+  const code = Number(error?.code);
+  const name = String(error?.name || "").toLowerCase();
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    code === 22 ||
+    code === 1014 ||
+    name.includes("quota") ||
+    name.includes("quotaexceeded") ||
+    name.includes("quota_exceeded") ||
+    message.includes("quota") ||
+    message.includes("storage") && message.includes("exceeded")
+  );
+}
+
+function normalizeStoredSessionUser(user = {}) {
+  const allowedPages = Array.isArray(user?.allowedPages)
+    ? Array.from(new Set(user.allowedPages.map((page) => String(page || "").trim()).filter(Boolean)))
+    : [];
+
+  const userId = String(user?.userId || user?.id || user?.uid || user?.firebaseUid || "").trim();
+  const email = String(user?.email || "").trim().toLowerCase();
+  const name = String(user?.name || "").trim();
+  const firstName = String(user?.firstName || "").trim();
+  const lastName = String(user?.lastName || "").trim();
+  const role = String(user?.role || "").trim().toLowerCase();
+  const employeeId = String(user?.employeeId || "").trim();
+  const sessionKey = String(user?.sessionKey || "").trim();
+
+  return {
+    id: userId,
+    userId,
+    uid: userId,
+    email,
+    name,
+    firstName,
+    lastName,
+    role,
+    allowedPages,
+    employeeId,
+    sessionKey,
+  };
+}
+
+function normalizeStoredSession(session = null) {
+  if (!session || typeof session !== "object") return null;
+
+  const user = normalizeStoredSessionUser(session.user || {});
+  return {
+    isAuthenticated: !!session.isAuthenticated,
+    user,
+  };
+}
+
+function removeTransientStorageItem(storage, key) {
+  if (!storage || !key) return;
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Ignore cleanup failures.
+  }
+}
+
+function clearTransientPortalStorage() {
+  const storage = getLocalStorage();
+  if (!storage) return;
+
+  const keysToRemove = new Set(TRANSIENT_STORAGE_KEYS);
+
+  for (let i = 0; i < storage.length; i += 1) {
+    const key = storage.key(i);
+    if (!key) continue;
+    if (TRANSIENT_STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      keysToRemove.add(key);
+    }
+  }
+
+  keysToRemove.forEach((key) => removeTransientStorageItem(storage, key));
+}
+
 export function getStoredSession() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  return safeJsonParse(raw, null);
+  const localStorageArea = getLocalStorage();
+  const sessionStorageArea = getSessionStorage();
+  const raw = localStorageArea?.getItem(STORAGE_KEY) || sessionStorageArea?.getItem(STORAGE_KEY) || "";
+  const parsed = safeJsonParse(raw, null);
+  return normalizeStoredSession(parsed);
 }
 
 export function saveSession(session) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+  const storedSession = normalizeStoredSession(session);
+  if (!storedSession) return false;
+
+  const serialized = JSON.stringify(storedSession);
+  const localStorageArea = getLocalStorage();
+  const sessionStorageArea = getSessionStorage();
+
+  if (localStorageArea) {
+    try {
+      localStorageArea.setItem(STORAGE_KEY, serialized);
+      if (sessionStorageArea) {
+        removeTransientStorageItem(sessionStorageArea, STORAGE_KEY);
+      }
+      return true;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        return false;
+      }
+    }
+
+    clearTransientPortalStorage();
+
+    try {
+      localStorageArea.setItem(STORAGE_KEY, serialized);
+      if (sessionStorageArea) {
+        removeTransientStorageItem(sessionStorageArea, STORAGE_KEY);
+      }
+      return true;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        return false;
+      }
+    }
+  }
+
+  if (sessionStorageArea) {
+    try {
+      sessionStorageArea.setItem(STORAGE_KEY, serialized);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 export function clearSession() {
-  localStorage.removeItem(STORAGE_KEY);
+  clearTransientPortalStorage();
+  removeTransientStorageItem(getLocalStorage(), STORAGE_KEY);
+  removeTransientStorageItem(getSessionStorage(), STORAGE_KEY);
 }
 
 const normalizeSessionUser = (value = {}) => ({

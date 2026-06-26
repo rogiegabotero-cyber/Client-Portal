@@ -1153,6 +1153,7 @@ export default function Dashboard({
   const [selectedPerfUserId, setSelectedPerfUserId] = useState("");
   const [payableGraphWindow, setPayableGraphWindow] = useState("week");
   const [payableGraphUserId, setPayableGraphUserId] = useState("ALL");
+  const [payablePrintIncludedUserIds, setPayablePrintIncludedUserIds] = useState([]);
   const [payableDisplayMode, setPayableDisplayMode] = useState("graph");
   const [payableCustomStartDate, setPayableCustomStartDate] = useState(() =>
     firstDayOfMonthYmd(String(endDate || ""))
@@ -3395,6 +3396,123 @@ export default function Dashboard({
     [payableGraphUserId, validEmployees]
   );
 
+  const payablePrintEligibleEmployees = useMemo(
+    () =>
+      selectedPayableEmployees
+        .map((emp) => {
+          const userId = String(getUserId(emp) || "").trim();
+          if (!userId) return null;
+          return {
+            userId,
+            employee: emp,
+            employeeName: getDisplayName(emp),
+          };
+        })
+        .filter(Boolean),
+    [selectedPayableEmployees]
+  );
+
+  const payablePrintEligibleUserIds = useMemo(
+    () => payablePrintEligibleEmployees.map((item) => item.userId),
+    [payablePrintEligibleEmployees]
+  );
+
+  const payablePrintEligibleUserIdsKey = useMemo(
+    () => payablePrintEligibleUserIds.join("|"),
+    [payablePrintEligibleUserIds]
+  );
+
+  useEffect(() => {
+    setPayablePrintIncludedUserIds((prev) => {
+      const prevIds = Array.isArray(prev) ? prev.map((id) => String(id || "").trim()).filter(Boolean) : [];
+      const nextEligible = payablePrintEligibleUserIds;
+      if (!nextEligible.length) return [];
+
+      const eligibleSet = new Set(nextEligible);
+      const retained = prevIds.filter((id, idx, arr) => eligibleSet.has(id) && arr.indexOf(id) === idx);
+      const next = retained.length ? retained : nextEligible;
+      const unchanged = next.length === prevIds.length && next.every((id, idx) => id === prevIds[idx]);
+      return unchanged ? prev : next;
+    });
+  }, [payablePrintEligibleUserIdsKey]);
+
+  const payablePrintIncludedSet = useMemo(
+    () => new Set(payablePrintIncludedUserIds.map((id) => String(id || "").trim()).filter(Boolean)),
+    [payablePrintIncludedUserIds]
+  );
+
+  const payablePrintIncludedEmployees = useMemo(
+    () => payablePrintEligibleEmployees.filter((item) => payablePrintIncludedSet.has(item.userId)),
+    [payablePrintEligibleEmployees, payablePrintIncludedSet]
+  );
+
+  const payablePrintIncludeSummary = `${payablePrintIncludedEmployees.length} of ${payablePrintEligibleEmployees.length} included`;
+
+  const setAllPayablePrintEmployeesIncluded = () => {
+    setPayablePrintIncludedUserIds(payablePrintEligibleUserIds);
+  };
+
+  const clearPayablePrintEmployeesIncluded = () => {
+    setPayablePrintIncludedUserIds([]);
+  };
+
+  const togglePayablePrintEmployee = (userId) => {
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return;
+
+    setPayablePrintIncludedUserIds((prev) => {
+      const prevIds = Array.isArray(prev) ? prev.map((id) => String(id || "").trim()).filter(Boolean) : [];
+      if (prevIds.includes(normalizedUserId)) {
+        return prevIds.filter((id) => id !== normalizedUserId);
+      }
+      return [...prevIds, normalizedUserId];
+    });
+  };
+
+  const payablePrintableRows = useMemo(() => {
+    const sourceRows = Array.isArray(payableHoursChart.printRows) ? payableHoursChart.printRows : [];
+    if (!sourceRows.length) return [];
+    if (!payablePrintIncludedSet.size) return [];
+    return sourceRows.filter((row) => payablePrintIncludedSet.has(String(row?.userId || "").trim()));
+  }, [payableHoursChart.printRows, payablePrintIncludedSet]);
+
+  const payablePrintableChartRows = useMemo(() => {
+    const sourceRows = payablePrintableRows;
+    if (!sourceRows.length) return [];
+
+    const keys = payableGraphPeriod.isMonthly
+      ? payableGraphPeriod.monthKeys
+      : payableGraphPeriod.dayKeys;
+    const targetKeys = Array.isArray(keys) ? keys.map((key) => String(key || "").trim()).filter(Boolean) : [];
+    const totalsByKey = new Map();
+    const countsByKey = new Map();
+
+    for (const row of sourceRows) {
+      const key = payableGraphPeriod.isMonthly
+        ? String(row?.monthKey || monthKeyFromYmd(row?.dayKey) || "").trim()
+        : String(row?.dayKey || "").trim();
+      if (!key) continue;
+      totalsByKey.set(key, Number(totalsByKey.get(key) || 0) + Number(row?.hours || 0));
+      countsByKey.set(key, Number(countsByKey.get(key) || 0) + 1);
+    }
+
+    const orderedKeys = targetKeys.length
+      ? targetKeys
+      : Array.from(totalsByKey.keys()).sort((a, b) => a.localeCompare(b));
+
+    return orderedKeys
+      .map((key) => ({
+        dayKey: key,
+        monthKey: payableGraphPeriod.isMonthly ? key : monthKeyFromYmd(key),
+        label: payableGraphPeriod.isMonthly ? prettyMonthLabel(key) : prettyDayLabel(key),
+        hours: Number(totalsByKey.get(key) || 0),
+        completedCount: Number(countsByKey.get(key) || 0),
+      }))
+      .filter((row) => Number(row.hours || 0) > 0 || Number(row.completedCount || 0) > 0);
+  }, [payablePrintableRows, payableGraphPeriod.isMonthly, payableGraphPeriod.monthKeys, payableGraphPeriod.dayKeys]);
+
+  const payableChartRowsForOutput = isPrinting ? payablePrintableChartRows : payableHoursChart.rows;
+
   const payableGraphUserLabel = useMemo(() => {
     if (payableGraphUserId === "ALL") return "Whole Team";
     const selected = validEmployees.find(
@@ -3403,14 +3521,27 @@ export default function Dashboard({
     return selected ? getDisplayName(selected) : "Selected Employee";
   }, [payableGraphUserId, validEmployees]);
 
+  const payablePrintIncludedLabel = useMemo(() => {
+    if (!payablePrintIncludedEmployees.length) return "No employees selected";
+    if (
+      payablePrintEligibleEmployees.length > 0 &&
+      payablePrintIncludedEmployees.length === payablePrintEligibleEmployees.length
+    ) {
+      return payableGraphUserLabel;
+    }
+    const names = payablePrintIncludedEmployees.map((item) => item.employeeName).filter(Boolean);
+    if (names.length <= 3) return names.join(", ");
+    return `${names.slice(0, 3).join(", ")} +${names.length - 3} more`;
+  }, [payablePrintEligibleEmployees.length, payablePrintIncludedEmployees, payableGraphUserLabel]);
+
   const payablePrintDepartment = useMemo(() => {
     const departments = Array.from(
       new Set(
-        selectedPayableEmployees
-          .map((emp) =>
+        payablePrintIncludedEmployees
+          .map((item) =>
             sanitizeFileNameSegment(
               extractDepartmentName(
-                pick(emp || {}, ["department", "departmentName"], "")
+                pick(item?.employee || {}, ["department", "departmentName"], "")
               ),
               ""
             )
@@ -3427,7 +3558,7 @@ export default function Dashboard({
       ""
     );
     return envDepartmentId || "Department";
-  }, [selectedPayableEmployees]);
+  }, [payablePrintIncludedEmployees]);
 
   const payablePrintStart = String(payableHoursChart?.start ?? payableGraphPeriod?.start ?? "");
   const payablePrintEnd = String(payableHoursChart?.end ?? payableGraphPeriod?.end ?? "");
@@ -3445,7 +3576,7 @@ export default function Dashboard({
   );
 
   const payablePrintRowsByEmployee = useMemo(() => {
-    const sourceRows = Array.isArray(payableHoursChart.printRows) ? payableHoursChart.printRows : [];
+    const sourceRows = Array.isArray(payablePrintableRows) ? payablePrintableRows : [];
     if (!sourceRows.length) return [];
 
     const byEmployee = new Map();
@@ -3456,8 +3587,8 @@ export default function Dashboard({
       byEmployee.get(userId).push(row);
     }
 
-    const orderedEmployeeIds = selectedPayableEmployees
-      .map((emp) => String(getUserId(emp)))
+    const orderedEmployeeIds = payablePrintIncludedEmployees
+      .map((item) => String(item?.userId || ""))
       .filter((userId, idx, arr) => userId && arr.indexOf(userId) === idx);
 
     const fallbackEmployeeIds = Array.from(byEmployee.keys()).sort((a, b) => a.localeCompare(b));
@@ -3472,7 +3603,7 @@ export default function Dashboard({
 
         const employeeName =
           rows[0]?.employeeName ||
-          getDisplayName(selectedPayableEmployees.find((emp) => String(getUserId(emp)) === userId)) ||
+          payablePrintIncludedEmployees.find((item) => item.userId === userId)?.employeeName ||
           `User ${userId}`;
         const totalHours = rows.reduce((sum, item) => {
           const value = Number(item?.hours || 0);
@@ -3487,15 +3618,15 @@ export default function Dashboard({
         };
       })
       .filter(Boolean);
-  }, [payableHoursChart.printRows, selectedPayableEmployees]);
+  }, [payablePrintableRows, payablePrintIncludedEmployees]);
 
   const payableSelectedPrintTotalHours = useMemo(() => {
-    const rows = Array.isArray(payableHoursChart.printRows) ? payableHoursChart.printRows : [];
+    const rows = Array.isArray(payablePrintableRows) ? payablePrintableRows : [];
     return rows.reduce((sum, item) => {
       const value = Number(item?.hours || 0);
       return Number.isFinite(value) ? sum + value : sum;
     }, 0);
-  }, [payableHoursChart.printRows]);
+  }, [payablePrintableRows]);
 
   const payableTableColumnDayKeys = useMemo(() => {
     const periodDayKeys = (Array.isArray(payableGraphPeriod.dayKeys) ? payableGraphPeriod.dayKeys : [])
@@ -3570,7 +3701,7 @@ export default function Dashboard({
   const PRINT_BAR_SIZE = 14;
   const PRINT_BAR_GAP = 7;
   const printBarChartHeight = (() => {
-    const rowCount = Math.max(1, Number(payableHoursChart?.rows?.length || 0));
+    const rowCount = Math.max(1, Number(payableChartRowsForOutput?.length || 0));
     const rowsHeight = rowCount * (PRINT_BAR_SIZE + PRINT_BAR_GAP);
     const contentHeight = rowsHeight + 54;
     const measuredHeight = Number(printChartSize?.height || 0);
@@ -4546,6 +4677,49 @@ export default function Dashboard({
                       </select>
                     </label>
                   </div>
+                  <div className="payablePrintIncludePanel noPrint">
+                    <div className="payablePrintIncludeHead">
+                      <div>
+                        <div className="payablePrintIncludeLabel">Printable Employees</div>
+                        <div className="payablePrintIncludeSub">{payablePrintIncludeSummary}</div>
+                      </div>
+                      <div className="payablePrintIncludeActions">
+                        <button
+                          type="button"
+                          className="payablePrintIncludeAction"
+                          onClick={setAllPayablePrintEmployeesIncluded}
+                        >
+                          All
+                        </button>
+                        <button
+                          type="button"
+                          className="payablePrintIncludeAction"
+                          onClick={clearPayablePrintEmployeesIncluded}
+                        >
+                          None
+                        </button>
+                      </div>
+                    </div>
+                    <div className="payablePrintIncludeList" aria-label="Employees included in printed payable report">
+                      {payablePrintEligibleEmployees.length === 0 ? (
+                        <div className="payablePrintIncludeEmpty">No employees available for this report.</div>
+                      ) : (
+                        payablePrintEligibleEmployees.map((item) => (
+                          <label
+                            key={`payable-print-include-${item.userId}`}
+                            className="payablePrintIncludeOption"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={payablePrintIncludedSet.has(item.userId)}
+                              onChange={() => togglePayablePrintEmployee(item.userId)}
+                            />
+                            <span>{item.employeeName}</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  </div>
                   {payableGraphWindow === "15" ? (
                     <div className="payableSummaryMeta">
                       Cutoff: {cutoffLabelForYmd(endDate)}
@@ -4564,7 +4738,7 @@ export default function Dashboard({
               <div className="payablePrintHeader printOnly">
                 <div className="payablePrintTitle">Employee Rendered Hours</div>
                 <div className="payablePrintSub">
-                  Employee: {payableGraphUserLabel} | Range: {payableHoursChart.start} -&gt;{" "}
+                  Employees: {payablePrintIncludedLabel} | Range: {payableHoursChart.start} -&gt;{" "}
                   {payableHoursChart.end}
                 </div>
               </div>
@@ -4645,7 +4819,7 @@ export default function Dashboard({
                       <BarChart
                         width={printChartSize.width}
                         height={printBarChartHeight}
-                        data={payableHoursChart.rows}
+                        data={payableChartRowsForOutput}
                         layout="vertical"
                         margin={{ top: 10, right: 56, left: 20, bottom: 10 }}
                         barCategoryGap={PRINT_BAR_GAP}
@@ -4745,7 +4919,7 @@ export default function Dashboard({
 
               <div className="payablePrintTableWrap printOnly">
                 <div className="payablePrintMetaLine">
-                  Selected Employee: <strong>{payableGraphUserLabel}</strong>
+                  Included Employees: <strong>{payablePrintIncludedLabel}</strong>
                 </div>
                 {payableGraphUserId === "ALL" ? (
                   <div className="payablePrintDayGroups">
@@ -4817,14 +4991,14 @@ export default function Dashboard({
                       </tr>
                     </thead>
                     <tbody>
-                      {payableHoursChart.printRows.length === 0 ? (
+                      {payablePrintableRows.length === 0 ? (
                         <tr>
                           <td className="payEmpty" colSpan={5}>
                             No completed payable hours in this range.
                           </td>
                         </tr>
                       ) : (
-                        payableHoursChart.printRows.map((row) => (
+                        payablePrintableRows.map((row) => (
                           <tr key={`payable-print-${row.dayKey}-${row.userId}`}>
                             <td className="payTdName">{row.dayKey}</td>
                             <td className="payTdName">
@@ -4836,7 +5010,7 @@ export default function Dashboard({
                           </tr>
                         ))
                       )}
-                      {payableHoursChart.printRows.length > 0 ? (
+                      {payablePrintableRows.length > 0 ? (
                         <tr className="payablePrintTotalRow">
                           <td className="payTdName" colSpan={3}>
                             Total Hours

@@ -1619,6 +1619,99 @@
   color: #0f172a;
 }
 
+#updateBox1 .payablePrintIncludePanel {
+  margin-top: 8px;
+  border: 1px solid rgba(226, 232, 240, 0.3);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.28);
+  padding: 8px;
+}
+
+#updateBox1 .payablePrintIncludeHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+#updateBox1 .payablePrintIncludeLabel {
+  color: rgba(248, 250, 252, 0.96);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#updateBox1 .payablePrintIncludeSub {
+  margin-top: 2px;
+  color: rgba(203, 213, 225, 0.88);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#updateBox1 .payablePrintIncludeActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+#updateBox1 .payablePrintIncludeAction {
+  border: 1px solid rgba(226, 232, 240, 0.38);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.95);
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+#updateBox1 .payablePrintIncludeList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+  max-height: 118px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+#updateBox1 .payablePrintIncludeOption {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(226, 232, 240, 0.26);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.94);
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 6px 8px;
+}
+
+#updateBox1 .payablePrintIncludeOption input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  accent-color: #16a34a;
+}
+
+#updateBox1 .payablePrintIncludeOption span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#updateBox1 .payablePrintIncludeEmpty {
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 #updateBox1 .payableSummaryMeta {
   margin-top: 5px;
   font-size: 10px;
