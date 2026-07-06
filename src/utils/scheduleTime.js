@@ -269,22 +269,16 @@ export const getScheduleTimeZone = (scheduleItem, fallback = DEFAULT_SCHEDULE_TI
   return getSafeTimeZone(raw, fallback);
 };
 
+// Local timeIn+timeRegion is checked FIRST and re-derives the UTC instant for
+// the ACTUAL target day (DST-aware, via clockInZoneToUtcMs's Intl-based zone
+// math). The stored absolute UTC fields (utcTimeIn etc.) are a frozen
+// snapshot from whenever the schedule was last saved - reapplying their raw
+// UTC clock time to a different day ignores any DST shift between then and
+// now, silently drifting duty-start by up to an hour across a DST boundary.
+// They're now only a fallback for schedule items with no local time/timezone
+// at all.
 export const resolveScheduledStartUtcMsForDayKey = (scheduleItem, dayKey) => {
   if (!scheduleItem || !isValidDayKey(dayKey)) return NaN;
-
-  let hadUtcStartSource = false;
-  for (const key of START_UTC_KEYS) {
-    const raw = scheduleItem?.[key];
-    if (raw === undefined || raw === null || String(raw).trim() === "") continue;
-    hadUtcStartSource = true;
-
-    const rebasedUtc = rebaseUtcIsoToDay(raw, dayKey);
-    if (Number.isFinite(rebasedUtc)) return rebasedUtc;
-  }
-
-  if (hadUtcStartSource) {
-    return NaN;
-  }
 
   const localClock = pick(scheduleItem, START_LOCAL_KEYS, "");
   if (localClock) {
@@ -293,6 +287,14 @@ export const resolveScheduledStartUtcMsForDayKey = (scheduleItem, dayKey) => {
     const tz = getScheduleTimeZone(scheduleItem, DEFAULT_SCHEDULE_TIME_ZONE);
     const convertedUtc = clockInZoneToUtcMs(dayKey, localClock, tz);
     if (Number.isFinite(convertedUtc)) return convertedUtc;
+  }
+
+  for (const key of START_UTC_KEYS) {
+    const raw = scheduleItem?.[key];
+    if (raw === undefined || raw === null || String(raw).trim() === "") continue;
+
+    const rebasedUtc = rebaseUtcIsoToDay(raw, dayKey);
+    if (Number.isFinite(rebasedUtc)) return rebasedUtc;
   }
 
   return NaN;
@@ -313,20 +315,8 @@ export const resolveScheduledEndUtcMsForDayKey = (
   const startMs = resolveScheduledStartUtcMsForDayKey(scheduleItem, dayKey);
   if (!Number.isFinite(startMs)) return NaN;
 
-  let hadUtcEndSource = false;
-  for (const key of END_UTC_KEYS) {
-    const raw = scheduleItem?.[key];
-    if (raw === undefined || raw === null || String(raw).trim() === "") continue;
-    hadUtcEndSource = true;
-
-    const rebasedUtc = rebaseUtcIsoToDay(raw, dayKey);
-    if (Number.isFinite(rebasedUtc)) {
-      return rebasedUtc >= startMs ? rebasedUtc : rebasedUtc + 24 * 60 * 60 * 1000;
-    }
-  }
-
-  if (hadUtcEndSource) return NaN;
-
+  // Same DST-safety reordering as resolveScheduledStartUtcMsForDayKey: local
+  // timeOut+timeRegion first, stale absolute UTC fields only as a fallback.
   const localClock = pick(scheduleItem, END_LOCAL_KEYS, "");
   if (localClock) {
     const tz = getScheduleTimeZone(scheduleItem, DEFAULT_SCHEDULE_TIME_ZONE);
@@ -336,6 +326,65 @@ export const resolveScheduledEndUtcMsForDayKey = (
     }
   }
 
+  for (const key of END_UTC_KEYS) {
+    const raw = scheduleItem?.[key];
+    if (raw === undefined || raw === null || String(raw).trim() === "") continue;
+
+    const rebasedUtc = rebaseUtcIsoToDay(raw, dayKey);
+    if (Number.isFinite(rebasedUtc)) {
+      return rebasedUtc >= startMs ? rebasedUtc : rebasedUtc + 24 * 60 * 60 * 1000;
+    }
+  }
+
   const durationMinutes = resolveScheduledDurationMinutes(scheduleItem, 600);
   return startMs + durationMinutes * 60_000;
+};
+
+const getZonedDateKeyAndWeekday = (nowMs, timeZone) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: getSafeTimeZone(timeZone),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+  }).formatToParts(new Date(nowMs));
+
+  const map = {};
+  for (const part of parts) {
+    if (part.type !== "literal") map[part.type] = part.value;
+  }
+
+  return {
+    dayKey: `${map.year}-${map.month}-${map.day}`,
+    weekday: String(map.weekday || "").toLowerCase(),
+  };
+};
+
+// Finds which schedule row applies "right now" by checking each row's own declared
+// timezone independently, rather than relying on a single device/company day key.
+// This keeps status correct when the viewer's device timezone differs from the
+// timezone a given schedule row was authored in.
+export const resolveScheduleItemForInstant = (scheduleList, nowMs = Date.now()) => {
+  const list = Array.isArray(scheduleList) ? scheduleList : [];
+  if (!list.length || !Number.isFinite(nowMs)) return null;
+
+  const findMatch = (referenceMs) => {
+    for (const item of list) {
+      const tz = getScheduleTimeZone(item);
+      const { dayKey, weekday } = getZonedDateKeyAndWeekday(referenceMs, tz);
+      const itemWeekday = String(pick(item, ["dayOfWeek", "day", "weekday"], "")).toLowerCase();
+      if (!itemWeekday || itemWeekday !== weekday) continue;
+
+      const startMs = resolveScheduledStartUtcMsForDayKey(item, dayKey);
+      const endMs = resolveScheduledEndUtcMsForDayKey(item, dayKey);
+      return { scheduleItem: item, dayKey, startMs, endMs };
+    }
+    return null;
+  };
+
+  // Prefer yesterday's row (in that row's own zone) if it's an overnight shift still running now.
+  const yesterday = findMatch(nowMs - 24 * 60 * 60 * 1000);
+  if (yesterday && Number.isFinite(yesterday.endMs) && nowMs <= yesterday.endMs) return yesterday;
+
+  return findMatch(nowMs);
 };

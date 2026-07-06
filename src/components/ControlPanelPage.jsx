@@ -22,6 +22,7 @@ import {
   saveEmployeeProcessRotation,
   subscribeEmployeeProcessSettings,
 } from "../services/employeeProcessService";
+import { resetEmployeeProcessActionLogs } from "../services/employeeProcessLogService";
 import { getDeviceTimeZone } from "../utils/common";
 import { auth, db } from "../firebase";
 import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
@@ -61,7 +62,7 @@ import "./controlPanelPage.css";
 
 const PAGE_LABELS = {
   dashboard: "Dashboard",
-  employee_dashboard: "My Dashboard",
+  employee_dashboard: "My Workspace",
   attendance: "Attendance",
   assignment: "Assignment",
   schedule: "Schedule",
@@ -592,6 +593,7 @@ export default function ControlPanelPage({
   const [employeeProcessDraftIds, setEmployeeProcessDraftIds] = useState([]);
   const [employeeProcessLoading, setEmployeeProcessLoading] = useState(false);
   const [employeeProcessSaving, setEmployeeProcessSaving] = useState(false);
+  const [employeeProcessResettingLog, setEmployeeProcessResettingLog] = useState(false);
   const [employeeProcessMessage, setEmployeeProcessMessage] = useState("");
   const [employeeProcessError, setEmployeeProcessError] = useState("");
   const [draggingEmployeeProcessId, setDraggingEmployeeProcessId] = useState("");
@@ -731,6 +733,49 @@ export default function ControlPanelPage({
       setEmployeeProcessError(err?.message || "Failed to save IB/NL employee order.");
     } finally {
       setEmployeeProcessSaving(false);
+    }
+  };
+
+  const handleResetEmployeeProcessActiveLog = async () => {
+    if (employeeProcessResettingLog) return;
+
+    const confirmed =
+      typeof window === "undefined"
+        ? true
+        : window.confirm(
+            "Reset the Inbound & New Lead active log? This clears the visible log history and keeps the saved employee order."
+          );
+    if (!confirmed) return;
+
+    setEmployeeProcessResettingLog(true);
+    setEmployeeProcessError("");
+    setEmployeeProcessMessage("");
+
+    try {
+      const deletedCount = await resetEmployeeProcessActionLogs();
+      setEmployeeProcessMessage(
+        deletedCount > 0
+          ? `Reset active IB/NL log and cleared ${deletedCount} log item(s).`
+          : "Active IB/NL log is already empty."
+      );
+      onToast?.({
+        type: deletedCount > 0 ? "success" : "info",
+        title: deletedCount > 0 ? "Active Log Reset" : "No Active Logs",
+        message:
+          deletedCount > 0
+            ? `${deletedCount} inbound/new lead log item(s) cleared.`
+            : "There are no inbound/new lead log items to clear.",
+      });
+    } catch (err) {
+      const message = err?.message || "Failed to reset active IB/NL log.";
+      setEmployeeProcessError(message);
+      onToast?.({
+        type: "error",
+        title: "Reset Failed",
+        message,
+      });
+    } finally {
+      setEmployeeProcessResettingLog(false);
     }
   };
 
@@ -3078,15 +3123,23 @@ export default function ControlPanelPage({
                         type="button"
                         className="control-panel-btn secondary"
                         onClick={() => resetEmployeeProcessDraft()}
-                        disabled={employeeProcessSaving}
+                        disabled={employeeProcessSaving || employeeProcessResettingLog}
                       >
                         Reset Draft
                       </button>
                       <button
                         type="button"
+                        className="control-panel-btn danger"
+                        onClick={handleResetEmployeeProcessActiveLog}
+                        disabled={employeeProcessSaving || employeeProcessResettingLog}
+                      >
+                        {employeeProcessResettingLog ? "Resetting..." : "Reset Active Log"}
+                      </button>
+                      <button
+                        type="button"
                         className="control-panel-btn primary"
                         onClick={saveEmployeeProcessDraft}
-                        disabled={employeeProcessSaving}
+                        disabled={employeeProcessSaving || employeeProcessResettingLog}
                       >
                         {employeeProcessSaving ? "Saving..." : "Save Order"}
                       </button>

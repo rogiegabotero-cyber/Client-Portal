@@ -37,6 +37,7 @@ export default function Sidebar({
 }) {
   const SIDEBAR_GROUP_SESSION_KEY = "portal_sidebar_group_open_state_v1";
   const SIDEBAR_COLLAPSE_SESSION_KEY = "portal_sidebar_collapsed_state_v1";
+  const SIDEBAR_AUTO_RETRACT_RATIO = 0.5;
 
   const LIVE_PANEL_DEFAULT_HEIGHT = 175;
   const LIVE_PANEL_MIN_HEIGHT = 120;
@@ -52,6 +53,9 @@ export default function Sidebar({
   const sidebarRef = useRef(null);
   const liveCardRef = useRef(null);
   const liveListRef = useRef(null);
+  const autoCollapsedSidebarRef = useRef(false);
+  const manuallyCollapsedSidebarRef = useRef(false);
+  const sidebarAutoRetractPausedRef = useRef(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const getLivePanelMaxAllowedHeight = useCallback(() => {
@@ -143,7 +147,7 @@ export default function Sidebar({
       sectionIcon: <Users size={14} />,
       items: [
         { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={20} /> },
-        { key: "employee_dashboard", label: "My Dashboard", icon: <LayoutDashboard size={20} /> },
+        { key: "employee_dashboard", label: "My Workspace", icon: <LayoutDashboard size={20} /> },
         { key: "attendance", label: "Attendance", icon: <CalendarCheck size={20} /> },
         { key: "schedule", label: "Schedule", icon: <CalendarDays size={20} /> },
         { key: "assignment", label: "Assignment", icon: <ClipboardList size={20} /> },
@@ -209,6 +213,49 @@ export default function Sidebar({
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    try {
+      manuallyCollapsedSidebarRef.current =
+        window.sessionStorage.getItem(SIDEBAR_COLLAPSE_SESSION_KEY) === "1";
+    } catch {
+      manuallyCollapsedSidebarRef.current = false;
+    }
+
+    const getAutoRetractThreshold = () => {
+      const availableWidth = Number(window.screen?.availWidth || 0);
+      const fallbackWidth = Number(document.documentElement?.clientWidth || window.innerWidth || 0);
+      return Math.max(0, (availableWidth || fallbackWidth) * SIDEBAR_AUTO_RETRACT_RATIO);
+    };
+
+    const syncSidebarToViewport = () => {
+      const threshold = getAutoRetractThreshold();
+      const viewportWidth = Number(window.innerWidth || document.documentElement?.clientWidth || 0);
+      if (!threshold || !viewportWidth) return;
+
+      if (viewportWidth <= threshold) {
+        if (manuallyCollapsedSidebarRef.current || sidebarAutoRetractPausedRef.current) return;
+        setIsSidebarCollapsed((prev) => {
+          if (prev) return prev;
+          autoCollapsedSidebarRef.current = true;
+          return true;
+        });
+        return;
+      }
+
+      sidebarAutoRetractPausedRef.current = false;
+      if (autoCollapsedSidebarRef.current) {
+        autoCollapsedSidebarRef.current = false;
+        setIsSidebarCollapsed(false);
+      }
+    };
+
+    syncSidebarToViewport();
+    window.addEventListener("resize", syncSidebarToViewport);
+    return () => window.removeEventListener("resize", syncSidebarToViewport);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       window.sessionStorage.setItem(
@@ -226,6 +273,7 @@ export default function Sidebar({
     try {
       const raw = window.sessionStorage.getItem(SIDEBAR_COLLAPSE_SESSION_KEY);
       if (raw === null) return;
+      manuallyCollapsedSidebarRef.current = raw === "1";
       setIsSidebarCollapsed(raw === "1");
     } catch {
       // Ignore storage read failures.
@@ -234,6 +282,7 @@ export default function Sidebar({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (autoCollapsedSidebarRef.current) return;
     try {
       window.sessionStorage.setItem(
         SIDEBAR_COLLAPSE_SESSION_KEY,
@@ -244,6 +293,19 @@ export default function Sidebar({
     }
   }, [isSidebarCollapsed]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+
+    document.documentElement.style.setProperty(
+      "--portal-sidebar-width",
+      isSidebarCollapsed ? "60px" : "260px"
+    );
+
+    return () => {
+      document.documentElement.style.removeProperty("--portal-sidebar-width");
+    };
+  }, [isSidebarCollapsed]);
+
   const toggleGroupOpen = (section) => {
     const key = String(section || "");
     if (!key) return;
@@ -251,6 +313,16 @@ export default function Sidebar({
       ...(prev && typeof prev === "object" ? prev : {}),
       [key]: !prev?.[key],
     }));
+  };
+
+  const toggleSidebarCollapsed = () => {
+    autoCollapsedSidebarRef.current = false;
+    sidebarAutoRetractPausedRef.current = true;
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      manuallyCollapsedSidebarRef.current = next;
+      return next;
+    });
   };
 
   const navBtn = (key, label, iconEl) => (
@@ -449,7 +521,7 @@ export default function Sidebar({
         <button
           type="button"
           className="sb-collapse-toggle"
-          onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+          onClick={toggleSidebarCollapsed}
           aria-label={isSidebarCollapsed ? "Expand sidebar" : "Minimize sidebar"}
           title={isSidebarCollapsed ? "Expand sidebar" : "Minimize sidebar"}
         >

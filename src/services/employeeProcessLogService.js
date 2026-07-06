@@ -1,12 +1,16 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
+  doc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -48,6 +52,28 @@ export async function createEmployeeProcessActionLog(payload = {}) {
   return addDoc(collection(db, COLLECTION_NAME), docPayload);
 }
 
+export async function resetEmployeeProcessActionLogs() {
+  const snapshot = await getDocs(collection(db, COLLECTION_NAME));
+  const docs = snapshot.docs || [];
+  let deletedCount = 0;
+
+  for (let index = 0; index < docs.length; index += 400) {
+    const batch = writeBatch(db);
+    const chunk = docs.slice(index, index + 400);
+    chunk.forEach((docSnap) => batch.delete(docSnap.ref));
+    await batch.commit();
+    deletedCount += chunk.length;
+  }
+
+  return deletedCount;
+}
+
+export async function deleteEmployeeProcessActionLog(logId) {
+  const id = toText(logId);
+  if (!id) throw new Error("Missing log id.");
+  return deleteDoc(doc(db, COLLECTION_NAME, id));
+}
+
 export function subscribeEmployeeProcessActionLogs(
   { employeeUserId = "", maxRows = 0 } = {},
   onChange,
@@ -57,10 +83,8 @@ export function subscribeEmployeeProcessActionLogs(
   const clauses = [];
   const uid = toText(employeeUserId);
   if (uid) clauses.push(where("employeeUserId", "==", uid));
-  if (!uid) {
-    clauses.push(orderBy("createdAtMs", "desc"));
-    if (safeLimit > 0) clauses.push(limit(safeLimit));
-  }
+  clauses.push(orderBy("createdAtMs", "desc"));
+  if (safeLimit > 0) clauses.push(limit(safeLimit));
 
   return onSnapshot(
     query(collection(db, COLLECTION_NAME), ...clauses),
@@ -69,7 +93,7 @@ export function subscribeEmployeeProcessActionLogs(
         .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
         .sort((a, b) => toMs(b.createdAtMs || b.createdAt) - toMs(a.createdAtMs || a.createdAt))
         .slice(0, safeLimit > 0 ? safeLimit : undefined);
-      onChange?.(rows);
+      onChange?.(rows, snapshot);
     },
     onError
   );

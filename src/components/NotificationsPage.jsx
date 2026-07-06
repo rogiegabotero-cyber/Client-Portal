@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { MoreVertical, RotateCcw, Trash2 } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, MoreVertical, RotateCcw, Trash2 } from "lucide-react";
 import "./NotificationsPage.css";
 import { toMillis } from "../utils/common";
 import ConfirmModal from "./ConfirmModal";
@@ -12,11 +12,48 @@ const formatDateTime = (value, timeZone = "America/Chicago") => {
   });
 };
 
+const getDayKeyInTimeZone = (value, timeZone = "America/Chicago") => {
+  const ms = toMillis(value);
+  if (!Number.isFinite(ms)) return "";
+  const tz = String(timeZone || "").trim() || "America/Chicago";
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(new Date(ms));
+  const values = {};
+  for (const part of parts) {
+    if (part.type !== "literal") values[part.type] = part.value;
+  }
+  return `${values.year || "0000"}-${values.month || "00"}-${values.day || "00"}`;
+};
+
+const shiftDayKey = (dayKey = "", deltaDays = 0) => {
+  const parts = String(dayKey || "").split("-").map((part) => Number(part));
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return "";
+  const [year, month, day] = parts;
+  const shifted = new Date(Date.UTC(year, month - 1, day));
+  shifted.setUTCDate(shifted.getUTCDate() + Number(deltaDays || 0));
+  return shifted.toISOString().slice(0, 10);
+};
+
+const formatDayKeyLabel = (dayKey = "") => {
+  const parts = String(dayKey || "").split("-").map((part) => Number(part));
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return "";
+  const [year, month, day] = parts;
+  return `${month}/${day}/${year}`;
+};
+
 export default function NotificationsPage({
   notifications = [],
   archivedNotifications = [],
   overBreakNotes = [],
   archivedOverBreakNotes = [],
+  employeeProcessActionLogs = [],
+  employeeProcessActionLogsLoading = false,
+  employeeProcessActionLogsError = "",
   viewerRole = "",
   onMarkNotificationRead,
   onMarkAllRead,
@@ -46,6 +83,7 @@ export default function NotificationsPage({
   });
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [markAllReadBusy, setMarkAllReadBusy] = useState(false);
+  const [activityLogDayOffset, setActivityLogDayOffset] = useState(0);
   const actionMenuRef = useRef(null);
 
   const unreadIds = useMemo(
@@ -90,6 +128,47 @@ export default function NotificationsPage({
   const canArchiveActions = canAccessNotificationArchive && !isArchiveView;
   const canArchivedItemActions = canAccessNotificationArchive && isArchiveView;
   const canPermanentDeleteActions = canManageNotificationArchive && isArchiveView;
+  const currentActivityDayKey = getDayKeyInTimeZone(Date.now(), businessTimeZone);
+  const selectedActivityDayKey = useMemo(
+    () => shiftDayKey(currentActivityDayKey, -Math.max(0, Number(activityLogDayOffset) || 0)),
+    [activityLogDayOffset, currentActivityDayKey]
+  );
+  const selectedActivityDayLabel = useMemo(() => {
+    if (!activityLogDayOffset) return "Today";
+    if (activityLogDayOffset === 1) return "Yesterday";
+    const label = formatDayKeyLabel(selectedActivityDayKey);
+    return label || "Today";
+  }, [activityLogDayOffset, selectedActivityDayKey]);
+  const filteredActivityLogs = useMemo(
+    () =>
+      (Array.isArray(employeeProcessActionLogs) ? employeeProcessActionLogs : []).filter((log) => {
+        const logDayKey = getDayKeyInTimeZone(log?.createdAtMs ?? log?.createdAt, businessTimeZone);
+        return !!selectedActivityDayKey && logDayKey === selectedActivityDayKey;
+      }),
+    [businessTimeZone, employeeProcessActionLogs, selectedActivityDayKey]
+  );
+
+  const formatActivityScopeLabel = (value = "") => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "ib") return "Inbound";
+    if (normalized === "nl") return "New Lead";
+    if (normalized === "ready") return "Ready";
+    if (normalized === "purple_ib_mark") return "Purple IB";
+    if (normalized === "purple_ib_remove") return "Purple IB Removed";
+    return normalized ? normalized.replace(/_/g, " ") : "-";
+  };
+
+  const goToPreviousActivityDay = () => {
+    setActivityLogDayOffset((prev) => Number(prev || 0) + 1);
+  };
+
+  const goToNextActivityDay = () => {
+    setActivityLogDayOffset((prev) => Math.max(0, Number(prev || 0) - 1));
+  };
+
+  const goToTodayActivityDay = () => {
+    setActivityLogDayOffset(0);
+  };
 
   useEffect(() => {
     if (!actionMenuOpen) return undefined;
@@ -559,6 +638,87 @@ export default function NotificationsPage({
           </div>
         ) : null}
       </div>
+
+      {!isVisitorViewer ? (
+        <div className="notif-page-card notif-page-log-card">
+          <div className="notif-page-card-head">
+            <span className="notif-page-card-head-left">
+              <Activity size={14} aria-hidden="true" />
+              <span>Activity Log</span>
+            </span>
+            <span className="notif-page-card-head-sub">Inbound &amp; New Lead Log</span>
+          </div>
+
+          <div className="notif-page-log-toolbar">
+            <div className="notif-page-log-nav">
+              <button
+                type="button"
+                className="notif-page-log-nav-btn"
+                onClick={goToPreviousActivityDay}
+                aria-label="Show the previous day"
+                title="Previous day"
+              >
+                <ChevronLeft size={16} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className={`notif-page-log-day-btn ${activityLogDayOffset === 0 ? "active" : ""}`}
+                onClick={goToTodayActivityDay}
+                aria-pressed={activityLogDayOffset === 0}
+                title="Show today"
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                className="notif-page-log-nav-btn"
+                onClick={goToNextActivityDay}
+                disabled={activityLogDayOffset === 0}
+                aria-label="Show the next day"
+                title="Next day"
+              >
+                <ChevronRight size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="notif-page-log-day-label">{selectedActivityDayLabel}</div>
+          </div>
+
+          <div className="notif-page-log-list">
+            {employeeProcessActionLogsError ? (
+              <div className="notif-page-empty notif-page-empty-error">
+                {employeeProcessActionLogsError}
+              </div>
+            ) : employeeProcessActionLogsLoading ? (
+              <div className="notif-page-empty">Loading activity log...</div>
+            ) : filteredActivityLogs.length === 0 ? (
+              <div className="notif-page-empty">No activity log entries yet.</div>
+            ) : (
+              filteredActivityLogs.map((log) => (
+                <div key={log.id} className="notif-page-log-item">
+                  <div className="notif-page-item-top">
+                    <div className="notif-page-item-title">
+                      {log?.employeeName || log?.createdByName || log?.employeeEmail || "Employee"}
+                    </div>
+                    <div className="notif-page-item-date">
+                      {formatDateTime(log?.createdAt || log?.createdAtMs, businessTimeZone)}
+                    </div>
+                  </div>
+
+                  <div className="notif-page-item-message">
+                    {log?.actionLabel || log?.actionType || "Activity updated"}
+                  </div>
+
+                  <div className="notif-page-item-meta">
+                    <span>Scope: {formatActivityScopeLabel(log?.actionScope)}</span>
+                    <span>By: {log?.createdByName || log?.createdByUserId || "-"}</span>
+                    {log?.relatedUserName ? <span>Related: {log.relatedUserName}</span> : null}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <ConfirmModal
         open={confirmState.open}

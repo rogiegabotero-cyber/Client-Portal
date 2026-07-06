@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./employee_dashboard.css";
+import inboundNotificationSound from "../assets/sounds/Inbound.mp3";
+import newLeadNotificationSound from "../assets/sounds/new-lead.mp3";
 import {
   startBreak,
   endBreak,
@@ -8,7 +10,6 @@ import {
   calculateBreakUsageMinutes,
   getBreakLogsByUserIdsInRange,
 } from "../services/breakService";
-import { isClockedOutLog, isIn } from "../utils/attendanceLog";
 import {
   AlignCenter,
   AlignLeft,
@@ -65,11 +66,18 @@ import {
 } from "firebase/firestore";
 import {
   getScheduleTimeZone,
+  resolveScheduleItemForInstant,
   resolveScheduledDurationMinutes,
-  resolveScheduledEndUtcMsForDayKey,
-  resolveScheduledStartUtcMsForDayKey,
 } from "../utils/scheduleTime";
-import { getDisplayName, getProfileImageUrl, getUserId, pick, toMillis, toText } from "../utils/common";
+import {
+  getDeviceTimeZone,
+  getDisplayName,
+  getProfileImageUrl,
+  getUserId,
+  pick,
+  toMillis,
+  toText,
+} from "../utils/common";
 import {
   CALL_ACTIVITY_TYPES,
   calculateDurationMinutes,
@@ -79,15 +87,17 @@ import {
   subscribeCallActivityLogs,
 } from "../services/callActivityService";
 import {
-  advanceEmployeeProcessAssignment,
+  finishEmployeeProcessTurn,
   getDefaultEmployeeProcessSettings,
   getNextEmployeeProcessUserId,
+  markEmployeeProcessReady,
   setEmployeeProcessAssignments,
-  setEmployeeProcessReadyOverrides as setEmployeeProcessReadyOverridesInDb,
   subscribeEmployeeProcessSettings,
+  subscribeEmployeeProcessStatuses,
 } from "../services/employeeProcessService";
 import {
   createEmployeeProcessActionLog,
+  deleteEmployeeProcessActionLog,
   subscribeEmployeeProcessActionLogs,
 } from "../services/employeeProcessLogService";
 
@@ -100,9 +110,20 @@ const buildFallbackHeadline = (text) => {
 
 const normalize = (value = "") => String(value || "").trim().toLowerCase();
 const EMPLOYEE_PROCESS_LOCAL_STORAGE_KEY = "hyacinth_employee_process_assignment_v1";
-const EMPLOYEE_PROCESS_READY_STORAGE_KEY = "hyacinth_employee_process_ready_overrides_v1";
 const EMPLOYEE_PROCESS_GUIDE_TEXT =
-  "IB and NL start on the first available employee, move separately when finished, and skip break, day off, completed, or unavailable rows. Purple IB is one optional secondary IB for the next available employee and clears if they become unavailable.";
+  "IB and NL start on the first available employee, move separately when finished, and skip break, day off, completed, or unavailable rows. Purple IB is one optional secondary IB for the next available employee. Each Purple IB mark adds one pending Blue IB skip, even if the Purple IB mark is removed.";
+
+const getEmployeeProcessLogTone = (log = {}) => {
+  const scope = normalize(log?.actionScope);
+  const type = normalize(log?.actionType);
+  const label = normalize(log?.actionLabel);
+  const text = `${scope} ${type} ${label}`;
+  if (text.includes("new_lead") || text.includes("new lead") || text.includes("nl")) return "nl";
+  if (text.includes("secondary_ib") || text.includes("purple")) return "secondaryIb";
+  if (text.includes("ready")) return "ready";
+  if (text.includes("inbound") || text.includes("ib")) return "ib";
+  return "neutral";
+};
 
 const normalizeEmployeeProcessLocalSettings = (settings = {}) => ({
   ...getDefaultEmployeeProcessSettings(),
@@ -117,9 +138,9 @@ const normalizeEmployeeProcessLocalSettings = (settings = {}) => ({
   ibUserId: String(settings?.ibUserId || settings?.ibCurrentUserId || "").trim(),
   nlUserId: String(settings?.nlUserId || settings?.nlCurrentUserId || "").trim(),
   purpleIbUserId: String(settings?.purpleIbUserId || settings?.secondaryIbUserId || "").trim(),
-  readyOverrides: normalizeEmployeeProcessReadyOverrides(
-    settings?.readyOverrides || settings?.readyStateOverrides || {}
-  ),
+  purpleIbSkipUserIds: (Array.isArray(settings?.purpleIbSkipUserIds) ? settings.purpleIbSkipUserIds : [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean),
 });
 
 const readEmployeeProcessLocalSettings = () => {
@@ -151,67 +172,6 @@ const writeEmployeeProcessLocalSettings = (settings = {}) => {
   } catch {
     return false;
   }
-};
-
-const normalizeEmployeeProcessReadyOverrides = (value = {}) => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-
-  return Object.fromEntries(
-    Object.entries(value)
-      .map(([userId, signature]) => [
-        String(userId || "").trim(),
-        String(signature || "").trim(),
-      ])
-      .filter(([userId, signature]) => userId && signature)
-  );
-};
-
-const readEmployeeProcessReadyOverrides = () => {
-  if (typeof window === "undefined" || !window.localStorage) return {};
-
-  try {
-    const raw = window.localStorage.getItem(EMPLOYEE_PROCESS_READY_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return normalizeEmployeeProcessReadyOverrides(parsed);
-  } catch {
-    return {};
-  }
-};
-
-const writeEmployeeProcessReadyOverrides = (overrides = {}) => {
-  if (typeof window === "undefined" || !window.localStorage) return false;
-
-  try {
-    const cleanOverrides = normalizeEmployeeProcessReadyOverrides(overrides);
-    window.localStorage.setItem(EMPLOYEE_PROCESS_READY_STORAGE_KEY, JSON.stringify(cleanOverrides));
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const buildEmployeeProcessReadySignature = (userId, scheduledItem, logs = [], endDate = "") => {
-  const uid = String(userId || "").trim();
-  const startMs = resolveScheduledStartUtcMsForDayKey(scheduledItem, endDate);
-  const logSignature = (Array.isArray(logs) ? logs : [])
-    .map((log) => {
-      const inMs = toMillis(
-        pick(log || {}, ["timeIn", "clockIn", "startedAt", "createdAt", "inAt"], null)
-      );
-      const outMs = toMillis(
-        pick(log || {}, ["timeOut", "clockOut", "endedAt", "completedAt", "updatedAt", "outAt"], null)
-      );
-      return [
-        normalize(getAttendanceStatusText(log)),
-        isIn(log) ? "in" : "",
-        isClockedOutLog(log) ? "out" : "",
-        Number.isFinite(inMs) ? inMs : "",
-        Number.isFinite(outMs) ? outMs : "",
-      ].join(":");
-    })
-    .join("|");
-
-  return `${uid}|${endDate}|${Number.isFinite(startMs) ? startMs : "no-start"}|${logSignature}`;
 };
 
 const formatLabelList = (labels = []) => {
@@ -441,6 +401,30 @@ const formatUtcIsoToHHMM = (utcIso, timeZone) => {
   }).format(d);
 };
 
+const formatDutyClockTime = (ms, timeZone) => {
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString(undefined, {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+};
+
+// Duty start/end are already correct absolute instants (resolved from the
+// schedule's own timezone). For display, always render them in the viewing
+// device's timezone so the label matches what the viewer expects to see -
+// when the schedule's own timezone happens to match the device's, this is a
+// no-op; when it differs (e.g. schedule authored in Chicago, device in New
+// York), the times shown here are the converted, device-local equivalent.
+const formatDutyTimeRangeLabel = (startMs, endMs) => {
+  const timeZone = getDeviceTimeZone();
+  const start = formatDutyClockTime(startMs, timeZone);
+  const end = formatDutyClockTime(endMs, timeZone);
+  if (start && end) return `${start} - ${end}`;
+  if (start) return `Starts ${start}`;
+  return "";
+};
+
 const dayKeyFromMsInZone = (ms, timeZone) => {
   const parts = getPartsInTimeZone(ms, timeZone);
   if (!parts) return "";
@@ -457,6 +441,18 @@ const dayKeyFromUtcMs = (ms) => {
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return "";
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+};
+
+const shiftDayKeyByDays = (dayKey, deltaDays = 0) => {
+  const baseMs = dayKeyToUtcMs(dayKey);
+  if (!Number.isFinite(baseMs)) return "";
+  return dayKeyFromUtcMs(baseMs + Number(deltaDays || 0) * 86400000);
+};
+
+const formatDayKeyLabel = (dayKey) => {
+  const [year, month, day] = String(dayKey || "").split("-").map(Number);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return "";
+  return `${month}/${day}/${year}`;
 };
 
 const getWeekRangeDayKeysInZone = (baseMs, timeZone) => {
@@ -635,6 +631,16 @@ const NOTEPAD_LOCAL_DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 14;
 const EMP_SIDE_COLUMN_MIN_WIDTH_PX = 220;
 const EMP_SIDE_COLUMN_MAX_WIDTH_RATIO = 0.6;
 const EMP_SIDE_COLUMN_WIDTH_STORAGE_PREFIX = "emp_dash_side_col_width";
+const EMP_DASH_STACK_LAYOUT_RATIO = 0.7;
+
+const isEmployeeDashboardStackedViewport = () => {
+  if (typeof window === "undefined") return false;
+  const viewportWidth = Number(window.innerWidth || document.documentElement?.clientWidth || 0);
+  const availableWidth = Number(window.screen?.availWidth || 0);
+  const baselineWidth = availableWidth || viewportWidth;
+  if (!viewportWidth || !baselineWidth) return false;
+  return viewportWidth <= baselineWidth * EMP_DASH_STACK_LAYOUT_RATIO;
+};
 
 const sanitizeNotepadMemberUserIds = (value = []) =>
   Array.from(
@@ -1513,16 +1519,18 @@ export default function EmployeeDashboard({
   const [employeeProcessSettings, setEmployeeProcessSettings] = useState(() =>
     readEmployeeProcessLocalSettings()
   );
+  const [employeeProcessStatusByUserId, setEmployeeProcessStatusByUserId] = useState({});
   const [employeeProcessLoading, setEmployeeProcessLoading] = useState(false);
+  const [employeeProcessSettingsLoaded, setEmployeeProcessSettingsLoaded] = useState(false);
   const [employeeProcessError, setEmployeeProcessError] = useState("");
   const [employeeProcessBusy, setEmployeeProcessBusy] = useState("");
   const [employeeProcessConfirmAction, setEmployeeProcessConfirmAction] = useState(null);
-  const [employeeProcessReadyOverrides, setEmployeeProcessReadyOverrides] = useState(() =>
-    readEmployeeProcessReadyOverrides()
-  );
   const [employeeProcessActionLogs, setEmployeeProcessActionLogs] = useState([]);
   const [employeeProcessActionLogsLoading, setEmployeeProcessActionLogsLoading] = useState(false);
   const [employeeProcessActionLogsError, setEmployeeProcessActionLogsError] = useState("");
+  const [employeeProcessLogDayOffset, setEmployeeProcessLogDayOffset] = useState(0);
+  const [employeeProcessDeleteLogTarget, setEmployeeProcessDeleteLogTarget] = useState(null);
+  const [employeeProcessDeleteLogBusy, setEmployeeProcessDeleteLogBusy] = useState(false);
   const [notepadPinningNoteId, setNotepadPinningNoteId] = useState("");
   const [notepadTitleDraft, setNotepadTitleDraft] = useState("");
   const [notepadColorDraft, setNotepadColorDraft] = useState(DEFAULT_NOTEPAD_COLOR_KEY);
@@ -1585,6 +1593,7 @@ export default function EmployeeDashboard({
     DEFAULT_NOTEPAD_COLOR_KEY
   );
   const [empSideColumnWidthPx, setEmpSideColumnWidthPx] = useState(null);
+  const [isDashboardStackedLayout, setIsDashboardStackedLayout] = useState(false);
   const empSideColumnWidthPxRef = useRef(null);
   const empGridRef = useRef(null);
   const empSideColumnRef = useRef(null);
@@ -1613,8 +1622,37 @@ export default function EmployeeDashboard({
   const notepadNotificationEventCacheRef = useRef(NOTEPAD_NOTIFICATION_EVENT_CACHE);
   const notepadRefreshSignalSeenRef = useRef("");
   const notepadRefreshSignalCheckBusyRef = useRef(false);
-  const employeeProcessAutoSyncRef = useRef("");
+  const employeeProcessAudioSnapshotRef = useRef({
+    initialized: false,
+    targetUserId: "",
+    ibUserId: "",
+    nlUserId: "",
+  });
+  const employeeProcessAudioRefs = useRef({});
+  const employeeProcessNotificationLogSeenRef = useRef({
+    initialized: false,
+    ids: new Set(),
+  });
   const portalRoot = typeof document !== "undefined" ? document.body : null;
+
+  // Rendered via portal into document.body so the tooltip is never clipped by an
+  // ancestor with overflow:hidden (e.g. .scheduleCard) and always sits above every
+  // other element on the page, regardless of local stacking contexts.
+  const employeeLeadGuideBtnRef = useRef(null);
+  const [isEmployeeLeadGuideOpen, setIsEmployeeLeadGuideOpen] = useState(false);
+  const [employeeLeadGuidePosition, setEmployeeLeadGuidePosition] = useState({ top: 0, left: 0 });
+
+  const openEmployeeLeadGuideTooltip = useCallback(() => {
+    const rect = employeeLeadGuideBtnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setEmployeeLeadGuidePosition({ top: rect.bottom + 10, left: rect.left + rect.width / 2 });
+    setIsEmployeeLeadGuideOpen(true);
+  }, []);
+
+  const closeEmployeeLeadGuideTooltip = useCallback(() => {
+    setIsEmployeeLeadGuideOpen(false);
+  }, []);
+
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [saveAsHtml, setSaveAsHtml] = useState("");
   
@@ -1622,6 +1660,11 @@ export default function EmployeeDashboard({
   const viewerRole = normalize(
     pageData?.viewer?.role || pageData?.currentUser?.role || pageData?.user?.role || ""
   );
+  const canManageEmployeeProcessActionLogs =
+    viewerRole === "admin" ||
+    viewerRole === "super_admin" ||
+    viewerRole === "super-admin" ||
+    viewerRole === "super admin";
 
   const viewerUserId = String(
     pageData?.viewer?.userId ||
@@ -1680,6 +1723,34 @@ export default function EmployeeDashboard({
   }, [viewerRole, viewerLinkedEmployeeId]);
 
   const canSwitchEmployee = viewerRole !== "employee" && employeeIds.length > 1;
+
+  const playEmployeeProcessNotificationSound = useCallback((type) => {
+    if (typeof Audio === "undefined") return;
+
+    const key = String(type || "").toLowerCase() === "nl" ? "nl" : "ib";
+    const src = key === "nl" ? newLeadNotificationSound : inboundNotificationSound;
+    if (!src) return;
+
+    let audio = employeeProcessAudioRefs.current[key];
+    if (!audio) {
+      audio = new Audio(src);
+      audio.preload = "auto";
+      employeeProcessAudioRefs.current[key] = audio;
+    }
+
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise.catch((err) => {
+          console.warn("Employee process notification sound was blocked by the browser.", err);
+        });
+      }
+    } catch (err) {
+      console.warn("Unable to play employee process notification sound.", err);
+    }
+  }, []);
 
   const attendanceScoreEmployees = useMemo(() => {
     return Array.isArray(employees) ? employees : [];
@@ -1765,6 +1836,7 @@ export default function EmployeeDashboard({
   useEffect(() => {
     let active = true;
     setEmployeeProcessLoading(true);
+    setEmployeeProcessSettingsLoaded(false);
     setEmployeeProcessError("");
 
     const unsubscribe = subscribeEmployeeProcessSettings(
@@ -1775,16 +1847,40 @@ export default function EmployeeDashboard({
         );
         setEmployeeProcessSettings(nextSettings);
         writeEmployeeProcessLocalSettings(nextSettings);
-        setEmployeeProcessReadyOverrides(
-          normalizeEmployeeProcessReadyOverrides(nextSettings?.readyOverrides || {})
-        );
         setEmployeeProcessError("");
         setEmployeeProcessLoading(false);
+        setEmployeeProcessSettingsLoaded(true);
       },
       (err) => {
         if (!active) return;
         setEmployeeProcessError(err?.message || "Unable to load IB/NL process settings.");
         setEmployeeProcessLoading(false);
+        setEmployeeProcessSettingsLoaded(false);
+      }
+    );
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, []);
+
+  // Computed status (Available/Logged in/Scheduled/Day Off/Completed/On break)
+  // lives in its own per-employee collection now, separate from rotation
+  // config - see functions/index.js EMPLOYEE_PROCESS_STATUS_COLLECTION. This
+  // subscription hands back the full { [userId]: statusDoc } map on every
+  // change, same as the old employeeProcessSettings.statusByUserId field did.
+  useEffect(() => {
+    let active = true;
+
+    const unsubscribe = subscribeEmployeeProcessStatuses(
+      (statusByUserId) => {
+        if (!active) return;
+        setEmployeeProcessStatusByUserId(statusByUserId || {});
+      },
+      () => {
+        if (!active) return;
+        setEmployeeProcessStatusByUserId({});
       }
     );
 
@@ -1830,93 +1926,35 @@ export default function EmployeeDashboard({
     };
   }, []);
 
-  const getScheduledDayItemForUser = useCallback(
-    (userId) => {
-      const sched = schedulesByUserId?.[String(userId || "").trim()];
-      if (!Array.isArray(sched) || sched.length === 0) return null;
-
-      const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-      const d = new Date(`${endDate}T12:00:00Z`);
-      if (Number.isNaN(d.getTime())) return null;
-      const targetWeekday = weekdays[d.getUTCDay()];
-
-      return (
-        sched.find(
-          (item) => String(pick(item, ["dayOfWeek", "day", "weekday"], "")).toLowerCase() === targetWeekday
-        ) || null
-      );
-    },
-    [schedulesByUserId, endDate]
-  );
-
+  // Status (Available/Logged in/Scheduled/Day Off/Completed/On break) is now
+  // computed server-side (functions/index.js computeEmployeeProcessStatus) from
+  // canonical schedule/attendance/break data, and pushed here via the live
+  // employee_process_status collection subscription - every session sees the
+  // same answer at the same time, instead of each tab computing its own from a
+  // mix of live and locally-polled data. This is now just a lookup plus local
+  // formatting of the duty-time label in the viewer's own device timezone.
   const resolveEmployeeProcessStatus = useCallback(
     (userId) => {
       const uid = String(userId || "").trim();
       if (!uid) return { available: false, label: "Unavailable", tone: "unavailable" };
-      if (activeBreaksByUserId?.[uid]) return { available: false, label: "On break", tone: "break" };
 
-      const logs = Array.isArray(logsByUserId?.[uid]) ? logsByUserId[uid] : [];
-      const statusTexts = logs.map((log) => normalize(getAttendanceStatusText(log))).filter(Boolean);
-      const hasDayOffStatus = statusTexts.some(
-        (status) =>
-          status.includes("day off") ||
-          status.includes("rest day") ||
-          status.includes("holiday") ||
-          status.includes("pto") ||
-          status.includes("leave") ||
-          status.includes("vacation") ||
-          status.includes("no schedule")
-      );
-      if (hasDayOffStatus) return { available: false, label: "Day Off", tone: "dayoff" };
-
-      const hasCompletedStatus = statusTexts.some(
-        (status) => status.includes("completed") || status.includes("complete")
-      );
-      if (hasCompletedStatus || logs.some((log) => isClockedOutLog(log))) {
-        return { available: false, label: "Completed", tone: "completed" };
+      const status = employeeProcessStatusByUserId?.[uid];
+      if (!status) {
+        return { available: false, label: "Loading", tone: "unavailable" };
       }
 
-      const scheduledItem = getScheduledDayItemForUser(uid);
-      if (!scheduledItem) return { available: false, label: "Day Off", tone: "dayoff" };
-
-      const hasClockIn = logs.some((log) => isIn(log));
-      if (!hasClockIn) return { available: false, label: "Scheduled", tone: "scheduled" };
-
-      const readySignature = buildEmployeeProcessReadySignature(uid, scheduledItem, logs, endDate);
-      if (employeeProcessReadyOverrides?.[uid] === readySignature) {
-        return {
-          available: true,
-          label: "Available",
-          tone: "available",
-          readySignature,
-          isReadyOverride: true,
-        };
-      }
-
-      const scheduledStartMs = resolveScheduledStartUtcMsForDayKey(scheduledItem, endDate);
-      const currentMs = Number.isFinite(liveNowMs) ? liveNowMs : Date.now();
-      const hasEarlyInStatus = statusTexts.some((status) => status.includes("early in"));
-      if (hasEarlyInStatus || (Number.isFinite(scheduledStartMs) && currentMs < scheduledStartMs)) {
-        return {
-          available: false,
-          label: "Logged in",
-          tone: "loggedin",
-          canReady: true,
-          readySignature,
-        };
-      }
-
-      return { available: true, label: "Available", tone: "available" };
+      return {
+        available: !!status.available,
+        label: status.label || "Unavailable",
+        tone: status.tone || "unavailable",
+        canReady: !!status.canReady,
+        autoAdvanceUnavailable: !!status.autoAdvanceUnavailable,
+        readySignature: status.readySignature || "",
+        isReadyOverride: !!status.isReadyOverride,
+        scheduleTimeLabel: formatDutyTimeRangeLabel(status.startMs, status.endMs),
+      };
     },
-    [
-      activeBreaksByUserId,
-      buildEmployeeProcessReadySignature,
-      employeeProcessReadyOverrides,
-      endDate,
-      getScheduledDayItemForUser,
-      liveNowMs,
-      logsByUserId,
-    ]
+    [employeeProcessStatusByUserId]
   );
 
   const employeeProcessRows = useMemo(() => {
@@ -1948,43 +1986,14 @@ export default function EmployeeDashboard({
           statusLabel: status.label,
           statusTone: status.tone,
           isAvailable: !!status.available,
+          canAutoAdvanceProcess: !!status.autoAdvanceUnavailable,
           canReady: !!status.canReady,
           readySignature: status.readySignature || "",
           isReadyOverride: !!status.isReadyOverride,
+          scheduleTimeLabel: status.scheduleTimeLabel || "",
         };
       });
   }, [employeeProcessSettings?.rotationUserIds, employees, resolveEmployeeProcessStatus]);
-
-  useEffect(() => {
-    setEmployeeProcessReadyOverrides((prev) => {
-      const current = prev && typeof prev === "object" ? prev : {};
-      const validSignaturesByUserId = new Map(
-        employeeProcessRows
-          .map((row) => [
-            String(row.userId || "").trim(),
-            String(row.readySignature || "").trim(),
-          ])
-          .filter(([userId, signature]) => userId && signature)
-      );
-
-      const next = {};
-      for (const [userId, signature] of Object.entries(current)) {
-        if (validSignaturesByUserId.get(userId) === signature) {
-          next[userId] = signature;
-        }
-      }
-
-      const currentKeys = Object.keys(current);
-      const nextKeys = Object.keys(next);
-      const unchanged =
-        currentKeys.length === nextKeys.length &&
-        nextKeys.every((key) => current[key] === next[key]);
-
-      if (unchanged) return prev;
-      writeEmployeeProcessReadyOverrides(next);
-      return next;
-    });
-  }, [employeeProcessRows]);
 
   const employeeProcessRotationUserIds = useMemo(
     () => employeeProcessRows.map((row) => row.userId).filter(Boolean),
@@ -2002,18 +2011,23 @@ export default function EmployeeDashboard({
   const savedIbUserId = String(employeeProcessSettings?.ibUserId || "").trim();
   const savedNlUserId = String(employeeProcessSettings?.nlUserId || "").trim();
   const savedPurpleIbUserId = String(employeeProcessSettings?.purpleIbUserId || "").trim();
-  const hasSavedIbUser = employeeProcessRows.some((row) => row.userId === savedIbUserId);
-  const hasSavedNlUser = employeeProcessRows.some((row) => row.userId === savedNlUserId);
-  const hasSavedPurpleIbUser = employeeProcessRows.some((row) => row.userId === savedPurpleIbUserId);
-  const isSavedIbUserAvailable = employeeProcessRows.some(
-    (row) => row.userId === savedIbUserId && row.isAvailable
+  const savedPurpleIbSkipUserIds = useMemo(
+    () =>
+      (Array.isArray(employeeProcessSettings?.purpleIbSkipUserIds)
+        ? employeeProcessSettings.purpleIbSkipUserIds
+        : []
+      )
+        .map((userId) => String(userId || "").trim())
+        .filter(Boolean),
+    [employeeProcessSettings?.purpleIbSkipUserIds]
   );
-  const isSavedNlUserAvailable = employeeProcessRows.some(
-    (row) => row.userId === savedNlUserId && row.isAvailable
-  );
-  const isSavedPurpleIbUserAvailable = employeeProcessRows.some(
-    (row) => row.userId === savedPurpleIbUserId && row.isAvailable
-  );
+  // Whether there IS a saved assignment at all. Auto-advancing away from an
+  // unavailable holder (and the initial bootstrap assignment) now happens
+  // server-side in functions/index.js's refreshEmployeeProcessStatus, using the
+  // same canonical statusByUserId this component reads - this is just used for
+  // display fallback (effectiveIbUserId/effectiveNlUserId) while that catches up.
+  const hasSavedIbUser = !!savedIbUserId;
+  const hasSavedNlUser = !!savedNlUserId;
   const effectiveIbUserId = hasSavedIbUser
     ? savedIbUserId
     : firstAvailableProcessUserId;
@@ -2045,92 +2059,137 @@ export default function EmployeeDashboard({
     savedPurpleIbUserId,
   ]);
 
-  useEffect(() => {
-    if (employeeProcessLoading || employeeProcessError) return;
-    if (!employeeProcessRotationUserIds.length) return;
+  const employeeProcessNotificationUserId = useMemo(
+    () => {
+      const canHearSelectedEmployee =
+        viewerRole === "admin" ||
+        viewerRole === "super_admin" ||
+        viewerRole === "super-admin" ||
+        viewerRole === "super admin";
+      return String(
+        (canHearSelectedEmployee ? normalizedSelectedUserId : viewerLinkedEmployeeId) || ""
+      ).trim();
+    },
+    [normalizedSelectedUserId, viewerLinkedEmployeeId, viewerRole]
+  );
 
-    const nextAssignments = {};
-    if ((!hasSavedIbUser || !isSavedIbUserAvailable) && firstAvailableProcessUserId) {
-      nextAssignments.ibUserId = getNextEmployeeProcessUserId({
-        rotationUserIds: employeeProcessRotationUserIds,
-        currentUserId: savedIbUserId,
-        unavailableUserIds: employeeProcessUnavailableUserIds,
-      });
+  useEffect(() => {
+    const targetUserId = String(employeeProcessNotificationUserId || "").trim();
+    const nextSnapshot = {
+      initialized: true,
+      targetUserId,
+      ibUserId: String(effectiveIbUserId || "").trim(),
+      nlUserId: String(effectiveNlUserId || "").trim(),
+    };
+
+    if (
+      !employeeProcessSettingsLoaded ||
+      employeeProcessLoading ||
+      employeeProcessError ||
+      !targetUserId
+    ) {
+      employeeProcessAudioSnapshotRef.current = {
+        ...nextSnapshot,
+        initialized: false,
+      };
+      return undefined;
     }
-    if ((!hasSavedNlUser || !isSavedNlUserAvailable) && firstAvailableProcessUserId) {
-      nextAssignments.nlUserId = getNextEmployeeProcessUserId({
-        rotationUserIds: employeeProcessRotationUserIds,
-        currentUserId: savedNlUserId,
-        unavailableUserIds: employeeProcessUnavailableUserIds,
-      });
+
+    const previousSnapshot = employeeProcessAudioSnapshotRef.current || {};
+    employeeProcessAudioSnapshotRef.current = nextSnapshot;
+
+    if (!previousSnapshot.initialized || previousSnapshot.targetUserId !== targetUserId) {
+      return undefined;
+    }
+
+    const notificationTypes = [];
+    if (
+      previousSnapshot.ibUserId !== nextSnapshot.ibUserId &&
+      nextSnapshot.ibUserId === targetUserId
+    ) {
+      notificationTypes.push("ib");
     }
     if (
-      savedPurpleIbUserId &&
-      (
-        !hasSavedPurpleIbUser ||
-        !isSavedPurpleIbUserAvailable ||
-        savedPurpleIbUserId === effectiveIbUserId
-      )
+      previousSnapshot.nlUserId !== nextSnapshot.nlUserId &&
+      nextSnapshot.nlUserId === targetUserId
     ) {
-      nextAssignments.purpleIbUserId = "";
+      notificationTypes.push("nl");
     }
-    if (nextAssignments.ibUserId === savedIbUserId) delete nextAssignments.ibUserId;
-    if (nextAssignments.nlUserId === savedNlUserId) delete nextAssignments.nlUserId;
-    if (nextAssignments.purpleIbUserId === savedPurpleIbUserId) {
-      delete nextAssignments.purpleIbUserId;
-    }
-    if (!Object.keys(nextAssignments).length) return;
 
-    const signature = [
-      savedIbUserId,
-      savedNlUserId,
-      savedPurpleIbUserId,
-      nextAssignments.ibUserId || "",
-      nextAssignments.nlUserId || "",
-      typeof nextAssignments.purpleIbUserId === "undefined" ? "" : nextAssignments.purpleIbUserId,
-    ].join("|");
-    if (employeeProcessAutoSyncRef.current === signature) return;
-    employeeProcessAutoSyncRef.current = signature;
+    if (!notificationTypes.length) return undefined;
 
-    setEmployeeProcessAssignments({
-      ...nextAssignments,
-      updatedByUserId: viewerUserId,
-      updatedByName: pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
-    })
-      .then(() => {
-        setEmployeeProcessSettings((prev) => {
-          const nextSettings = normalizeEmployeeProcessLocalSettings({
-            ...prev,
-            ...nextAssignments,
-          });
-          writeEmployeeProcessLocalSettings(nextSettings);
-          return nextSettings;
-        });
-      })
-      .catch((err) => {
-        employeeProcessAutoSyncRef.current = "";
-        setEmployeeProcessError(err?.message || "Unable to sync IB/NL assignment.");
-      });
+    const timers = notificationTypes.map((type, index) =>
+      window.setTimeout(() => playEmployeeProcessNotificationSound(type), index * 650)
+    );
+
+    return () => {
+      timers.forEach((timerId) => window.clearTimeout(timerId));
+    };
   }, [
+    effectiveIbUserId,
+    effectiveNlUserId,
     employeeProcessError,
     employeeProcessLoading,
-    employeeProcessRotationUserIds,
-    employeeProcessUnavailableUserIds,
-    employeeProcessRotationUserIds.length,
-    effectiveIbUserId,
-    firstAvailableProcessUserId,
-    hasSavedIbUser,
-    hasSavedNlUser,
-    hasSavedPurpleIbUser,
-    isSavedIbUserAvailable,
-    isSavedNlUserAvailable,
-    isSavedPurpleIbUserAvailable,
-    pageData,
-    savedIbUserId,
-    savedNlUserId,
-    savedPurpleIbUserId,
-    viewerUserId,
+    employeeProcessNotificationUserId,
+    employeeProcessSettingsLoaded,
+    playEmployeeProcessNotificationSound,
   ]);
+
+  useEffect(() => {
+    const targetUserId = String(employeeProcessNotificationUserId || "").trim();
+    const rows = Array.isArray(employeeProcessActionLogs) ? employeeProcessActionLogs : [];
+    const seenState = employeeProcessNotificationLogSeenRef.current;
+
+    if (!seenState.initialized || !targetUserId) {
+      seenState.initialized = true;
+      seenState.ids = new Set(rows.map((log) => String(log?.id || "").trim()).filter(Boolean));
+      return undefined;
+    }
+
+    const newRows = rows.filter((log) => {
+      const id = String(log?.id || "").trim();
+      return id && !seenState.ids.has(id);
+    });
+    rows.forEach((log) => {
+      const id = String(log?.id || "").trim();
+      if (id) seenState.ids.add(id);
+    });
+
+    const notificationTypes = [];
+    for (const log of newRows) {
+      const actionType = normalize(log?.actionType || log?.actionScope || log?.actionLabel);
+      const relatedUserId = String(log?.relatedUserId || "").trim();
+      const actionUserId = String(log?.employeeUserId || "").trim();
+      if (!relatedUserId || relatedUserId !== targetUserId || actionUserId !== targetUserId) continue;
+
+      if (actionType.includes("finish_nl") || actionType.includes("new_lead") || actionType.includes("new lead")) {
+        notificationTypes.push("nl");
+      } else if (actionType.includes("finish_ib") || actionType.includes("inbound")) {
+        notificationTypes.push("ib");
+      }
+    }
+
+    if (!notificationTypes.length) return undefined;
+
+    const timers = notificationTypes.map((type, index) =>
+      window.setTimeout(() => playEmployeeProcessNotificationSound(type), index * 650)
+    );
+
+    return () => {
+      timers.forEach((timerId) => window.clearTimeout(timerId));
+    };
+  }, [
+    employeeProcessActionLogs,
+    employeeProcessNotificationUserId,
+    playEmployeeProcessNotificationSound,
+  ]);
+
+  // The IB/NL auto-reassignment decision (what used to live in a client-side
+  // effect here) now happens entirely server-side: functions/index.js's
+  // refreshEmployeeProcessStatus runs on a schedule and advances the rotation
+  // transactionally the moment it detects the current holder went unavailable,
+  // using the same canonical status this component just reads. This removes
+  // the multi-tab race the old client-side write had no protection against.
 
   const canAdvanceEmployeeProcessForRow = useCallback(
     (userId) => {
@@ -2145,68 +2204,53 @@ export default function EmployeeDashboard({
     [normalizedSelectedUserId, viewerLinkedEmployeeId, viewerRole]
   );
 
+  // Delegates to the markEmployeeProcessReady Cloud Function, which
+  // re-verifies eligibility (canReady + a freshly-recomputed readySignature)
+  // server-side rather than trusting this client's local state, and writes
+  // both the override and the resulting action log itself.
   const requestEmployeeProcessReady = useCallback(
     async (userId) => {
       const uid = String(userId || "").trim();
       if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return false;
 
       const row = employeeProcessRows.find((item) => item.userId === uid);
-      if (!row?.canReady || !row?.readySignature) return false;
+      if (!row?.canReady) return false;
 
-      const previousOverrides =
-        employeeProcessReadyOverrides && typeof employeeProcessReadyOverrides === "object"
-          ? employeeProcessReadyOverrides
-          : {};
-      const nextOverrides = {
-        ...previousOverrides,
-        [uid]: row.readySignature,
-      };
-
-      setEmployeeProcessReadyOverrides(nextOverrides);
-      writeEmployeeProcessReadyOverrides(nextOverrides);
       setEmployeeProcessError("");
+      setEmployeeProcessBusy("ready");
 
       try {
-        await setEmployeeProcessReadyOverridesInDb({
-          readyOverrides: nextOverrides,
-          updatedByUserId: viewerUserId,
-          updatedByName:
+        const result = await markEmployeeProcessReady({
+          userId: uid,
+          employeeName: row?.name || "",
+          employeeProfileImageUrl: row?.profileImg || "",
+          actingAsName:
             pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
         });
-        try {
-          await createEmployeeProcessActionLog({
-            employeeUserId: uid,
-            employeeName: row.name,
-            employeeProfileImageUrl: row.profileImg,
-            actionType: "ready",
-            actionLabel: "Marked Ready",
-            actionScope: "ready",
-            createdByUserId: viewerUserId,
-            createdByName:
-              pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
-          });
-        } catch (logErr) {
-          console.error("Unable to save employee process ready log.", logErr);
-        }
-        return true;
+        return !!result?.success;
       } catch (err) {
-        setEmployeeProcessReadyOverrides(previousOverrides);
-        writeEmployeeProcessReadyOverrides(previousOverrides);
         setEmployeeProcessError(err?.message || "Unable to save ready status.");
         return false;
+      } finally {
+        setEmployeeProcessBusy("");
       }
     },
     [
       canAdvanceEmployeeProcessForRow,
-      employeeProcessReadyOverrides,
       employeeProcessRows,
       pageData?.currentUser?.name,
       pageData?.user?.name,
       pageData?.viewer?.name,
-      viewerUserId,
     ]
   );
 
+  // Delegates to the finishEmployeeProcessTurn Cloud Function, which
+  // recomputes fresh status for the whole rotation and picks/writes the next
+  // assignee inside a Firestore transaction - closing the multi-tab race and
+  // stale-data issues the old direct client write had no protection against.
+  // The live employee_process_settings subscription (see the effect above)
+  // picks up the resulting change automatically, so no local optimistic write
+  // is needed here.
   const handleAdvanceEmployeeProcess = useCallback(
     async (type, currentUserId) => {
       const uid = String(currentUserId || "").trim();
@@ -2216,40 +2260,14 @@ export default function EmployeeDashboard({
       setEmployeeProcessBusy(type);
       setEmployeeProcessError("");
       try {
-        const nextUserId = await advanceEmployeeProcessAssignment({
-          type,
-          unavailableUserIds: employeeProcessUnavailableUserIds,
-          fallbackRotationUserIds: employeeProcessRotationUserIds,
-          updatedByUserId: viewerUserId,
-          updatedByName: pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+        await finishEmployeeProcessTurn({
+          type: String(type || "").toLowerCase() === "nl" ? "nl" : "ib",
+          userId: uid,
+          employeeName: row?.name || "",
+          employeeProfileImageUrl: row?.profileImg || "",
+          actingAsName:
+            pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
         });
-        const settingKey = String(type || "").toLowerCase() === "nl" ? "nlUserId" : "ibUserId";
-        setEmployeeProcessSettings((prev) => {
-          const nextSettings = normalizeEmployeeProcessLocalSettings({
-            ...prev,
-            [settingKey]: nextUserId,
-          });
-          writeEmployeeProcessLocalSettings(nextSettings);
-          return nextSettings;
-        });
-        try {
-          await createEmployeeProcessActionLog({
-            employeeUserId: uid,
-            employeeName: row?.name || "",
-            employeeProfileImageUrl: row?.profileImg || "",
-            actionType: String(type || "").toLowerCase() === "nl" ? "finish_nl" : "finish_ib",
-            actionLabel: String(type || "").toLowerCase() === "nl" ? "Finished New Lead" : "Finished Inbound",
-            actionScope: String(type || "").toLowerCase() === "nl" ? "new_lead" : "inbound",
-            relatedUserId: nextUserId,
-            relatedUserName:
-              employeeProcessRows.find((item) => item.userId === nextUserId)?.name || "",
-            createdByUserId: viewerUserId,
-            createdByName:
-              pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
-          });
-        } catch (logErr) {
-          console.error("Unable to save employee process action log.", logErr);
-        }
         return true;
       } catch (err) {
         setEmployeeProcessError(err?.message || `Unable to advance ${String(type).toUpperCase()}.`);
@@ -2260,10 +2278,10 @@ export default function EmployeeDashboard({
     },
     [
       canAdvanceEmployeeProcessForRow,
-      employeeProcessRotationUserIds,
-      employeeProcessUnavailableUserIds,
-      pageData,
-      viewerUserId,
+      employeeProcessRows,
+      pageData?.currentUser?.name,
+      pageData?.user?.name,
+      pageData?.viewer?.name,
     ]
   );
 
@@ -2287,12 +2305,16 @@ export default function EmployeeDashboard({
       if (targetUserId && targetUserId !== employeeProcessNextPurpleIbUserId) return false;
       if (!targetUserId && uid !== savedPurpleIbUserId) return false;
       const row = employeeProcessRows.find((item) => item.userId === uid);
+      const nextPurpleIbSkipUserIds = targetUserId
+        ? [...savedPurpleIbSkipUserIds, targetUserId]
+        : savedPurpleIbSkipUserIds;
 
       setEmployeeProcessBusy(targetUserId ? "purple_ib_mark" : "purple_ib_remove");
       setEmployeeProcessError("");
       try {
         await setEmployeeProcessAssignments({
           purpleIbUserId: targetUserId,
+          ...(targetUserId ? { purpleIbSkipUserIds: nextPurpleIbSkipUserIds } : {}),
           updatedByUserId: viewerUserId,
           updatedByName: pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
         });
@@ -2300,6 +2322,7 @@ export default function EmployeeDashboard({
           const nextSettings = normalizeEmployeeProcessLocalSettings({
             ...prev,
             purpleIbUserId: targetUserId,
+            ...(targetUserId ? { purpleIbSkipUserIds: nextPurpleIbSkipUserIds } : {}),
           });
           writeEmployeeProcessLocalSettings(nextSettings);
           return nextSettings;
@@ -2337,6 +2360,7 @@ export default function EmployeeDashboard({
       employeeProcessNextPurpleIbUserId,
       pageData,
       savedPurpleIbUserId,
+      savedPurpleIbSkipUserIds,
       viewerUserId,
     ]
   );
@@ -2369,6 +2393,11 @@ export default function EmployeeDashboard({
   const confirmEmployeeProcessFinish = useCallback(async () => {
     const action = employeeProcessConfirmAction;
     if (!action?.type || !action?.userId) return;
+    if (action.type === "ready") {
+      const didMarkReady = await requestEmployeeProcessReady(action.userId);
+      if (didMarkReady) setEmployeeProcessConfirmAction(null);
+      return;
+    }
     if (action.type === "purple_ib") {
       const didUpdate = await handleSetEmployeeProcessPurpleIb(
         action.mode === "remove" ? "" : action.userId,
@@ -2379,7 +2408,12 @@ export default function EmployeeDashboard({
     }
     const didFinish = await handleAdvanceEmployeeProcess(action.type, action.userId);
     if (didFinish) setEmployeeProcessConfirmAction(null);
-  }, [employeeProcessConfirmAction, handleAdvanceEmployeeProcess, handleSetEmployeeProcessPurpleIb]);
+  }, [
+    employeeProcessConfirmAction,
+    handleAdvanceEmployeeProcess,
+    handleSetEmployeeProcessPurpleIb,
+    requestEmployeeProcessReady,
+  ]);
 
   const employeeProcessConfirmEmployee = useMemo(
     () =>
@@ -2388,32 +2422,81 @@ export default function EmployeeDashboard({
       ) || null,
     [employeeProcessConfirmAction?.userId, employeeProcessRows]
   );
+  const employeeProcessConfirmIsReady = employeeProcessConfirmAction?.type === "ready";
   const employeeProcessConfirmIsPurpleIb = employeeProcessConfirmAction?.type === "purple_ib";
   const employeeProcessConfirmIsPurpleRemove =
     employeeProcessConfirmIsPurpleIb && employeeProcessConfirmAction?.mode === "remove";
   const employeeProcessConfirmIsNl = employeeProcessConfirmAction?.type === "nl";
   const employeeProcessConfirmLabel = employeeProcessConfirmIsNl ? "new lead" : "inbound";
-  const employeeProcessConfirmTitle = employeeProcessConfirmIsPurpleIb
-    ? employeeProcessConfirmIsPurpleRemove
-      ? "Remove Secondary IB?"
-      : "Mark Secondary IB?"
-    : employeeProcessConfirmIsNl
-      ? "Finish New Lead?"
-      : "Finish Inbound?";
-  const employeeProcessConfirmMessage = employeeProcessConfirmIsPurpleIb
-    ? employeeProcessConfirmIsPurpleRemove
-      ? `Remove the secondary IB mark from ${employeeProcessConfirmEmployee?.name || "this employee"}?`
-      : `Mark ${employeeProcessConfirmEmployee?.name || "this employee"} as the secondary IB?`
-    : `Finish ${employeeProcessConfirmLabel} for ${
+  const employeeProcessConfirmTitle = employeeProcessConfirmIsReady
+    ? "Mark as Ready?"
+    : employeeProcessConfirmIsPurpleIb
+      ? employeeProcessConfirmIsPurpleRemove
+        ? "Remove Secondary IB?"
+        : "Mark Secondary IB?"
+      : employeeProcessConfirmIsNl
+        ? "Finish New Lead?"
+        : "Finish Inbound?";
+  const employeeProcessConfirmMessage = employeeProcessConfirmIsReady
+    ? `Confirm that ${
         employeeProcessConfirmEmployee?.name || "this employee"
-      } and move the mark to the next available employee?`;
-  const employeeProcessConfirmButtonText = employeeProcessConfirmIsPurpleIb
-    ? employeeProcessConfirmIsPurpleRemove
-      ? "Remove IB Mark"
-      : "Mark IB"
-    : employeeProcessConfirmIsNl
-      ? "Finish new lead"
-      : "Finish Inbound";
+      } is ready to take calls now? They'll be marked Available for the IB and New Lead rotation.`
+    : employeeProcessConfirmIsPurpleIb
+      ? employeeProcessConfirmIsPurpleRemove
+        ? `Remove the secondary IB mark from ${employeeProcessConfirmEmployee?.name || "this employee"}?`
+        : `Mark ${employeeProcessConfirmEmployee?.name || "this employee"} as the secondary IB?`
+      : `Finish ${employeeProcessConfirmLabel} for ${
+          employeeProcessConfirmEmployee?.name || "this employee"
+        } and move the mark to the next available employee?`;
+  const employeeProcessConfirmButtonText = employeeProcessConfirmIsReady
+    ? "I'm Ready"
+    : employeeProcessConfirmIsPurpleIb
+      ? employeeProcessConfirmIsPurpleRemove
+        ? "Remove IB Mark"
+        : "Mark IB"
+      : employeeProcessConfirmIsNl
+        ? "Finish new lead"
+        : "Finish Inbound";
+
+  const openEmployeeProcessDeleteLogConfirm = useCallback(
+    (event, log) => {
+      event?.stopPropagation?.();
+      if (!canManageEmployeeProcessActionLogs || employeeProcessDeleteLogBusy) return;
+      const logId = String(log?.id || "").trim();
+      if (!logId) return;
+      setEmployeeProcessDeleteLogTarget(log);
+    },
+    [canManageEmployeeProcessActionLogs, employeeProcessDeleteLogBusy]
+  );
+
+  const closeEmployeeProcessDeleteLogConfirm = useCallback(() => {
+    if (employeeProcessDeleteLogBusy) return;
+    setEmployeeProcessDeleteLogTarget(null);
+  }, [employeeProcessDeleteLogBusy]);
+
+  const confirmEmployeeProcessDeleteLog = useCallback(async () => {
+    if (!canManageEmployeeProcessActionLogs || employeeProcessDeleteLogBusy) return;
+    const logId = String(employeeProcessDeleteLogTarget?.id || "").trim();
+    if (!logId) {
+      setEmployeeProcessDeleteLogTarget(null);
+      return;
+    }
+
+    setEmployeeProcessDeleteLogBusy(true);
+    try {
+      await deleteEmployeeProcessActionLog(logId);
+      setEmployeeProcessActionLogsError("");
+      setEmployeeProcessDeleteLogTarget(null);
+    } catch (err) {
+      setEmployeeProcessActionLogsError(err?.message || "Unable to delete inbound and new lead log entry.");
+    } finally {
+      setEmployeeProcessDeleteLogBusy(false);
+    }
+  }, [
+    canManageEmployeeProcessActionLogs,
+    employeeProcessDeleteLogBusy,
+    employeeProcessDeleteLogTarget,
+  ]);
 
   const employeeProcessActionUserId =
     viewerRole === "employee"
@@ -2915,24 +2998,11 @@ export default function EmployeeDashboard({
     const sched = schedulesByUserId?.[String(effectiveSelectedId)];
     if (!Array.isArray(sched) || sched.length === 0) return null;
 
-    const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-
-    const weekdayNameFromYmd = (yyyyMmDd) => {
-      const d = new Date(`${yyyyMmDd}T12:00:00Z`);
-      if (Number.isNaN(d.getTime())) return null;
-      return WEEKDAYS[d.getUTCDay()];
-    };
-
-    const targetWeekday = weekdayNameFromYmd(endDate);
-    if (!targetWeekday) return null;
-
-    const todayItem =
-      sched.find(
-        (s) =>
-          String(pick(s, ["dayOfWeek", "day", "weekday"], "")).toLowerCase() === targetWeekday
-      ) || null;
-
+    const scheduleMatch = resolveScheduleItemForInstant(sched, nowMs);
+    const todayItem = scheduleMatch?.scheduleItem || null;
     if (!todayItem) return null;
+
+    const dayKey = scheduleMatch.dayKey;
 
     const utcTimeIn = pick(todayItem, ["utcTimeIn", "utcStart", "startUtc", "utcTimeStart"], "");
     const utcTimeOut = pick(todayItem, ["utcTimeOut", "utcEnd", "endUtc", "utcTimeEnd"], "");
@@ -2957,8 +3027,8 @@ export default function EmployeeDashboard({
           ? addHoursToHHMM(timeIn, durationHours)
           : { outHHMM: "-", dayOffset: 0 };
 
-    const startMs = resolveScheduledStartUtcMsForDayKey(todayItem, endDate);
-    const endMs = resolveScheduledEndUtcMsForDayKey(todayItem, endDate);
+    const startMs = scheduleMatch.startMs;
+    const endMs = scheduleMatch.endMs;
     const durationMinutes =
       Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs
         ? Math.round((endMs - startMs) / 60000)
@@ -2968,7 +3038,7 @@ export default function EmployeeDashboard({
       raw: todayItem,
       dayLabel:
         pick(todayItem, ["dayOfWeek", "day", "weekday"], "") ||
-        new Date(`${endDate}T12:00:00Z`).toLocaleDateString(undefined, {
+        new Date(`${dayKey}T12:00:00Z`).toLocaleDateString(undefined, {
           weekday: "long",
           timeZone: scheduleTimeZone,
         }),
@@ -2981,7 +3051,7 @@ export default function EmployeeDashboard({
       isActive: true,
       timeZone: apiTimeZone || (convertedIn || convertedOut ? displayTimeZone : ""),
     };
-  }, [schedulesByUserId, effectiveSelectedId, endDate]);
+  }, [schedulesByUserId, effectiveSelectedId, nowMs]);
 
   const logsToday = useMemo(
     () => logsByUserId?.[String(effectiveSelectedId)] || [],
@@ -5926,6 +5996,46 @@ export default function EmployeeDashboard({
       .sort(compareActivityDateDesc);
   }, [callActivityLeaderboardRows, effectiveSelectedId, employee]);
 
+  const currentEmployeeProcessLogDayKey = dayKeyFromMsInZone(
+    Number.isFinite(liveNowMs) ? liveNowMs : Date.now(),
+    businessTimeZone
+  );
+  const selectedEmployeeProcessLogDayKey = useMemo(
+    () =>
+      shiftDayKeyByDays(
+        currentEmployeeProcessLogDayKey,
+        -Math.max(0, Number(employeeProcessLogDayOffset) || 0)
+      ),
+    [currentEmployeeProcessLogDayKey, employeeProcessLogDayOffset]
+  );
+  const filteredEmployeeProcessActionLogs = useMemo(() => {
+    const targetDayKey = selectedEmployeeProcessLogDayKey;
+    return (Array.isArray(employeeProcessActionLogs) ? employeeProcessActionLogs : []).filter((log) => {
+      const logDayKey = dayKeyFromMsInZone(toMillis(log?.createdAtMs ?? log?.createdAt), businessTimeZone);
+      return !!targetDayKey && logDayKey === targetDayKey;
+    });
+  }, [businessTimeZone, employeeProcessActionLogs, selectedEmployeeProcessLogDayKey]);
+  const employeeProcessLogAvailableDayKeys = useMemo(() => {
+    const keys = new Set();
+    for (const log of Array.isArray(employeeProcessActionLogs) ? employeeProcessActionLogs : []) {
+      const key = dayKeyFromMsInZone(toMillis(log?.createdAtMs ?? log?.createdAt), businessTimeZone);
+      if (key) keys.add(key);
+    }
+    return Array.from(keys).sort();
+  }, [businessTimeZone, employeeProcessActionLogs]);
+  const earliestEmployeeProcessLogDayKey = employeeProcessLogAvailableDayKeys[0] || "";
+  const canGoToPreviousEmployeeProcessLogDay =
+    !!earliestEmployeeProcessLogDayKey &&
+    selectedEmployeeProcessLogDayKey > earliestEmployeeProcessLogDayKey;
+  const canGoToNextEmployeeProcessLogDay =
+    !!selectedEmployeeProcessLogDayKey &&
+    selectedEmployeeProcessLogDayKey < currentEmployeeProcessLogDayKey;
+  const selectedEmployeeProcessLogDayLabel = useMemo(() => {
+    if (!employeeProcessLogDayOffset) return "Today";
+    if (employeeProcessLogDayOffset === 1) return "Yesterday";
+    return formatDayKeyLabel(selectedEmployeeProcessLogDayKey) || "Today";
+  }, [employeeProcessLogDayOffset, selectedEmployeeProcessLogDayKey]);
+
   const callActivityRecentPageCount = Math.max(
     1,
     Math.ceil(selectedEmployeeActivityRows.length / EMPLOYEE_ACTIVITY_RECENT_PAGE_SIZE)
@@ -5945,6 +6055,10 @@ export default function EmployeeDashboard({
   useEffect(() => {
     setCallActivityRecentPage(0);
   }, [effectiveSelectedId, selectedEmployeeActivityRows.length]);
+
+  useEffect(() => {
+    setEmployeeProcessLogDayOffset(0);
+  }, [effectiveSelectedId]);
 
   const now = new Date(Number.isFinite(liveNowMs) ? liveNowMs : nowMs);
 
@@ -7664,6 +7778,22 @@ export default function EmployeeDashboard({
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
 
+    const syncDashboardStackedLayout = () => {
+      const shouldStack = isEmployeeDashboardStackedViewport();
+      setIsDashboardStackedLayout(shouldStack);
+      if (shouldStack) {
+        setEmpSideColumnWidthPx(null);
+      }
+    };
+
+    syncDashboardStackedLayout();
+    window.addEventListener("resize", syncDashboardStackedLayout);
+    return () => window.removeEventListener("resize", syncDashboardStackedLayout);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
     const clearResizeState = () => {
       if (!empSideColumnResizeStateRef.current) return;
       empSideColumnResizeStateRef.current = null;
@@ -7688,7 +7818,7 @@ export default function EmployeeDashboard({
     };
 
     const handleWindowResize = () => {
-      if (window.innerWidth <= 1000) {
+      if (window.innerWidth <= 1000 || isEmployeeDashboardStackedViewport()) {
         setEmpSideColumnWidthPx(null);
         clearResizeState();
         return;
@@ -7999,7 +8129,7 @@ export default function EmployeeDashboard({
       <div
         className={`empDashShell ${breakLoading ? "isBreakSaving" : ""} ${
           viewMode === "call_activity" ? "isCallActivityView" : "isDashboardView"
-        }`}
+        } ${isDashboardStackedLayout ? "isStackedLayout" : ""}`}
         aria-busy={breakLoading}
       >
         {!employee ? (
@@ -8077,9 +8207,11 @@ export default function EmployeeDashboard({
                   type="button"
                   className="empBreakLogsBtn"
                   onClick={openBreakLogsPanel}
+                  title="Break Logs"
+                  aria-label="Open break logs"
                 >
                   <Coffee size={14} aria-hidden="true" />
-                  Break Logs
+                  <span className="empBreakLogsBtnLabel">Break Logs</span>
                 </button>
                 <button
                   type="button"
@@ -8303,14 +8435,32 @@ export default function EmployeeDashboard({
                           <div className="agentAttendancePanelHead">Inbound and New Lead</div>
                           <button
                             type="button"
+                            ref={employeeLeadGuideBtnRef}
                             className="employeeLeadGuideBtn"
                             aria-label={`Inbound and New Lead guide: ${EMPLOYEE_PROCESS_GUIDE_TEXT}`}
+                            onMouseEnter={openEmployeeLeadGuideTooltip}
+                            onMouseLeave={closeEmployeeLeadGuideTooltip}
+                            onFocus={openEmployeeLeadGuideTooltip}
+                            onBlur={closeEmployeeLeadGuideTooltip}
                           >
                             <CircleHelp size={14} aria-hidden="true" />
-                            <span className="employeeLeadGuideTooltip" role="tooltip">
-                              {EMPLOYEE_PROCESS_GUIDE_TEXT}
-                            </span>
                           </button>
+                          {portalRoot && isEmployeeLeadGuideOpen
+                            ? createPortal(
+                                <div
+                                  className="employeeLeadGuideTooltip employeeLeadGuideTooltipPortal"
+                                  role="tooltip"
+                                  style={{
+                                    top: employeeLeadGuidePosition.top,
+                                    left: employeeLeadGuidePosition.left,
+                                  }}
+                                >
+                                  <span className="employeeLeadGuideTooltipArrow" aria-hidden="true" />
+                                  {EMPLOYEE_PROCESS_GUIDE_TEXT}
+                                </div>,
+                                portalRoot
+                              )
+                            : null}
                         </div>
                       </div>
                       <div className="employeeLeadProcessBadge">
@@ -8334,8 +8484,14 @@ export default function EmployeeDashboard({
                           </thead>
                           <tbody>
                             {employeeProcessRows.map((row) => {
-                              const isIb = row.userId === effectiveIbUserId;
-                              const isNl = row.userId === effectiveNlUserId;
+                              // effectiveIbUserId/effectiveNlUserId reflect the Firestore-
+                              // recorded assignment, which can briefly lag reality while an
+                              // automatic reassignment is pending (e.g. verifying fresh
+                              // attendance before committing). Require row.isAvailable too,
+                              // matching the isPurpleIb pattern below, so the badge never
+                              // shows on a row we already know is unavailable.
+                              const isIb = row.userId === effectiveIbUserId && row.isAvailable;
+                              const isNl = row.userId === effectiveNlUserId && row.isAvailable;
                               const isPurpleIb =
                                 row.userId === savedPurpleIbUserId &&
                                 row.isAvailable &&
@@ -8355,6 +8511,8 @@ export default function EmployeeDashboard({
                                 row.userId === employeeProcessNextPurpleIbUserId &&
                                 canFinishMark;
                               const canRemovePurpleIb = isPurpleIb && canFinishMark;
+                              const canReadyForRow =
+                                row.canReady && canAdvanceEmployeeProcessForRow(row.userId);
 
                               return (
                                 <tr
@@ -8381,13 +8539,23 @@ export default function EmployeeDashboard({
                                           </div>
                                           <div>
                                             <div className="employeeLeadName">{row.name}</div>
+                                            {row.scheduleTimeLabel ? (
+                                              <div className="employeeLeadScheduleTime">
+                                                {row.scheduleTimeLabel}
+                                              </div>
+                                            ) : null}
                                           </div>
                                         </div>
-                                        {row.statusTone === "loggedin" && row.canReady ? (
+                                        {row.statusTone === "loggedin" && canReadyForRow ? (
                                           <button
                                             type="button"
                                             className={`employeeLeadStatus employeeLeadUnavailableStatus employeeLeadReadyStatus tone-${row.statusTone}`}
-                                            onClick={() => requestEmployeeProcessReady(row.userId)}
+                                            onClick={() =>
+                                              setEmployeeProcessConfirmAction({
+                                                type: "ready",
+                                                userId: row.userId,
+                                              })
+                                            }
                                             aria-label={`Mark ${row.name} as ready for IB and New Lead rotation`}
                                             title="Click to make available"
                                           >
@@ -8414,6 +8582,11 @@ export default function EmployeeDashboard({
                                           </div>
                                           <div>
                                             <div className="employeeLeadName">{row.name}</div>
+                                            {row.scheduleTimeLabel ? (
+                                              <div className="employeeLeadScheduleTime">
+                                                {row.scheduleTimeLabel}
+                                              </div>
+                                            ) : null}
                                             <div className={`employeeLeadStatus tone-${row.statusTone}`}>
                                               {row.statusLabel}
                                             </div>
@@ -8739,40 +8912,104 @@ export default function EmployeeDashboard({
                   </div>
                   <div className="employeeProcessLogPane" aria-label="Inbound and new lead log">
                     <div className="employeeProcessLogHead">
-                      <div>
+                      <div className="employeeProcessLogHeadTitle">
                         <div className="employeeProcessLogKicker">Activity Log</div>
                         <h4>Inbound &amp; New Lead Log</h4>
                       </div>
-                      <div className="employeeProcessLogCount">{employeeProcessActionLogs.length}</div>
+                      <div className="employeeProcessLogHeadActions">
+                        <div className="employeeProcessLogNav" aria-label="Activity log date navigation">
+                          <button
+                            type="button"
+                            className="employeeProcessLogNavBtn"
+                            onClick={() =>
+                              setEmployeeProcessLogDayOffset((prev) => Math.max(0, Number(prev || 0) - 1))
+                            }
+                            disabled={!canGoToNextEmployeeProcessLogDay}
+                            aria-label="Show the next day"
+                            title="Next day"
+                          >
+                            <ChevronLeft size={14} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className={`employeeProcessLogTodayBtn ${
+                              employeeProcessLogDayOffset === 0 ? "isActive" : ""
+                            }`}
+                            
+                            onClick={() => setEmployeeProcessLogDayOffset(0)}
+                            aria-pressed={employeeProcessLogDayOffset === 0}
+                            title="{filteredEmployeeProcessActionLogs.length}"
+                          >
+                            {selectedEmployeeProcessLogDayLabel}
+                          </button>
+                          <button
+                            type="button"
+                            className="employeeProcessLogNavBtn"
+                            onClick={() => setEmployeeProcessLogDayOffset((prev) => Number(prev || 0) + 1)}
+                            disabled={!canGoToPreviousEmployeeProcessLogDay}
+                            aria-label="Show the previous day"
+                            title="Previous day"
+
+                            
+                          >
+                            <ChevronRight size={14} aria-hidden="true" />
+                          </button>
+                        </div>
+                        <div className="employeeProcessLogCount">
+                          {filteredEmployeeProcessActionLogs.length}
+                        </div>
+                      </div>
                     </div>
 
                     {employeeProcessActionLogsError ? (
                       <div className="employeeProcessLogEmpty error">{employeeProcessActionLogsError}</div>
                     ) : employeeProcessActionLogsLoading ? (
                       <div className="employeeProcessLogEmpty">Loading process log...</div>
-                    ) : employeeProcessActionLogs.length === 0 ? (
-                      <div className="employeeProcessLogEmpty">No inbound or new lead actions yet.</div>
+                    ) : filteredEmployeeProcessActionLogs.length === 0 ? (
+                      <div className="employeeProcessLogEmpty">
+                        No inbound or new lead actions for {selectedEmployeeProcessLogDayLabel} yet.
+                      </div>
                     ) : (
                       <div className="employeeProcessLogList">
-                        {employeeProcessActionLogs.map((log, index) => {
+                        {filteredEmployeeProcessActionLogs.map((log, index) => {
                           const logKey =
                             String(log?.id || "").trim() ||
                             `${normalizedSelectedUserId || "employee"}-process-log-${index}`;
+                          const logEmployeeName = log?.employeeName || log?.createdByName || "Employee";
+                          const logActionLabel = log?.actionLabel || "Action";
+                          const logTone = getEmployeeProcessLogTone(log);
 
                           return (
-                            <div key={logKey} className="employeeProcessLogItem">
+                            <div
+                              key={logKey}
+                              className={`employeeProcessLogItem tone-${logTone} ${
+                                canManageEmployeeProcessActionLogs ? "canDelete" : ""
+                              }`}
+                            >
+                              {canManageEmployeeProcessActionLogs ? (
+                                <button
+                                  type="button"
+                                  className="employeeProcessLogDeleteBtn"
+                                  onClick={(event) => openEmployeeProcessDeleteLogConfirm(event, log)}
+                                  disabled={employeeProcessDeleteLogBusy}
+                                  aria-label={`Delete ${logActionLabel} log for ${logEmployeeName}`}
+                                  title="Delete log entry"
+                                >
+                                  <Trash2 size={13} aria-hidden="true" />
+                                </button>
+                              ) : null}
                               <div className="employeeProcessLogAvatar">
                                 {log?.employeeProfileImageUrl ? (
-                                  <img src={log.employeeProfileImageUrl} alt={`${log.employeeName || "Employee"} profile`} />
+                                  <img src={log.employeeProfileImageUrl} alt={`${logEmployeeName} profile`} />
                                 ) : (
-                                  initialsFromName(log?.employeeName || log?.createdByName || "Employee")
+                                  initialsFromName(logEmployeeName)
                                 )}
                               </div>
                               <div className="employeeProcessLogMain">
                                 <div className="employeeProcessLogName">
-                                  {log?.employeeName || log?.createdByName || "Employee"}
+                                  {logEmployeeName}
                                 </div>
-                                <div className="employeeProcessLogAction">{log?.actionLabel || "Action"}</div>
+                                <div className="employeeProcessLogAction">{logActionLabel}</div>
                               </div>
                               <div className="employeeProcessLogTime">
                                 {formatBreakLogDateTime(log?.createdAtMs || log?.createdAt, businessTimeZone)}
@@ -9262,6 +9499,8 @@ export default function EmployeeDashboard({
                     className={`empNotepadNewBtn empNotepadNewBtnFull ${isNotepadPersonalNewMode ? "active" : ""}`}
                     onClick={startNewNotepadNote}
                     aria-pressed={isNotepadPersonalNewMode}
+                    title="New note"
+                    aria-label="Create new note"
                     disabled={
                       savingNotepadNote ||
                       creatingGroupNotepadNote ||
@@ -10307,6 +10546,24 @@ export default function EmployeeDashboard({
             busy={notepadConfirmBusy}
             onCancel={closeNotepadConfirm}
             onConfirm={confirmNotepadAction}
+          />
+
+          <ConfirmModal
+            open={!!employeeProcessDeleteLogTarget}
+            title="Delete Log Entry?"
+            message={`Delete "${
+              employeeProcessDeleteLogTarget?.actionLabel || "this action"
+            }" for ${
+              employeeProcessDeleteLogTarget?.employeeName ||
+              employeeProcessDeleteLogTarget?.createdByName ||
+              "this employee"
+            }? This cannot be undone.`}
+            confirmText="Delete"
+            cancelText="Cancel"
+            tone="danger"
+            busy={employeeProcessDeleteLogBusy}
+            onCancel={closeEmployeeProcessDeleteLogConfirm}
+            onConfirm={confirmEmployeeProcessDeleteLog}
           />
 
           <ConfirmModal

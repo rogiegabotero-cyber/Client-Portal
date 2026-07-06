@@ -59,6 +59,12 @@
   min-width: 0;
 }
 
+@media(max-width:1300px){
+  .portal-topbar{
+    display: none;
+  }
+}
+
 .portal-topbar-title {
   font-size: 20px;
   font-weight: 700;

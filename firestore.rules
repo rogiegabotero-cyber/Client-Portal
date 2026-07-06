@@ -77,6 +77,27 @@ service cloud.firestore {
       allow read, update, delete: if isSignedIn();
     }
 
+    // rotationUserIds/ibUserId/nlUserId/purpleIbUserId/purpleIbSkipUserIds still
+    // have legitimate direct client writers (rotation configuration in
+    // ControlPanelPage, and the Purple IB mark/remove actions), so those stay
+    // client-writable - only finishing a turn and marking ready were migrated
+    // to server-validated callables.
+    match /employee_process_settings/{docId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+
+    // Computed per-employee status (Available/Logged in/Scheduled/Day Off/
+    // Completed/On break, plus the persisted "I'm Ready" override signature)
+    // lives here, one doc per userId, written exclusively by Cloud Functions
+    // (functions/index.js computeEmployeeProcessStatus / markEmployeeProcessReady)
+    // using the Admin SDK, which is not subject to these rules. No client writes.
+    match /employee_process_status/{userId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if isSignedIn();
     }

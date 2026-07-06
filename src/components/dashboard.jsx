@@ -14,6 +14,7 @@ import {
   tsMs,
 } from "../utils/attendanceLog";
 import {
+  resolveScheduleItemForInstant,
   resolveScheduledDurationMinutes,
   resolveScheduledEndUtcMsForDayKey,
   resolveScheduledStartUtcMsForDayKey,
@@ -649,16 +650,25 @@ const resolveDailyStatus = ({
   const hasAnySchedule = Array.isArray(schedArr) && schedArr.length > 0;
   if (!hasAnySchedule) return "No Schedule";
 
-  const schedItem = getScheduleItemForDay(schedulesByUserId, userId, dayKey);
+  const todayKey = String(endDate || "");
+  const isLiveToday = dayKey === todayKey;
+
+  // Live "today" must be resolved per-schedule-row timezone against the actual current
+  // instant, since the viewing device's own timezone may differ from the row's.
+  const liveMatch = isLiveToday ? resolveScheduleItemForInstant(schedArr, nowMs) : null;
+  const schedItem = isLiveToday
+    ? liveMatch?.scheduleItem || null
+    : getScheduleItemForDay(schedulesByUserId, userId, dayKey);
   if (!schedItem) return "Day Off";
 
-  const startMs = getScheduledStartUtcMsForDayKey(schedItem, dayKey, businessTimeZone);
+  const startMs = isLiveToday
+    ? liveMatch.startMs
+    : getScheduledStartUtcMsForDayKey(schedItem, dayKey, businessTimeZone);
   const GRACE_MS = 2 * 60 * 60 * 1000;
   if (!Number.isFinite(startMs)) return "Scheduled";
 
-  const todayKey = String(endDate || "");
   const endOfDayMs = new Date(`${dayKey}T23:59:59.999Z`).getTime();
-  const referenceNow = dayKey === todayKey ? nowMs : endOfDayMs;
+  const referenceNow = isLiveToday ? nowMs : endOfDayMs;
 
   return referenceNow >= startMs + GRACE_MS ? "No Show" : "Scheduled";
 };
@@ -2440,21 +2450,20 @@ export default function Dashboard({
       const userId = String(getUserId(emp) || "").trim();
       if (!userId) continue;
 
-      const scheduleItem = getScheduleItemForDay(schedulesByUserId, userId, dayKey);
+      // Resolved against the actual current instant using each row's own declared
+      // timezone, since the viewing device's timezone may differ from the row's.
+      const match = resolveScheduleItemForInstant(schedulesByUserId?.[userId], nowMs);
+      const scheduleItem = match?.scheduleItem || null;
       if (!scheduleItem) continue;
 
       const employeeName = getDisplayName(emp);
       const profile = employeeProfilesByUserId?.[userId] || null;
       const scheduleLabel = formatScheduleRangeLabelForDay(
         scheduleItem,
-        dayKey,
+        match.dayKey,
         businessTimeZone
       );
-      const scheduledStartMs = getScheduledStartUtcMsForDayKey(
-        scheduleItem,
-        dayKey,
-        businessTimeZone
-      );
+      const scheduledStartMs = match.startMs;
 
       rows.push({
         userId,
@@ -2481,6 +2490,7 @@ export default function Dashboard({
     return rows;
   }, [
     endDate,
+    nowMs,
     data.validEmployees,
     schedulesByUserId,
     employeeProfilesByUserId,

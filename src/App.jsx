@@ -72,11 +72,15 @@ import {
   updateBreakLogEntry,
 } from "./services/breakService";
 import {
+  subscribeEmployeeProcessActionLogs,
+} from "./services/employeeProcessLogService";
+import {
   getBusinessDayKey,
   getStoredAttendanceResetTime,
   setStoredAttendanceResetTime,
 } from "./utils/attendanceDate";
 import {
+  getScheduleTimeZone,
   resolveScheduledEndUtcMsForDayKey,
   resolveScheduledStartUtcMsForDayKey,
 } from "./utils/scheduleTime";
@@ -773,6 +777,69 @@ const getScheduleGroupSignature = (scheduleRow = {}) => {
   });
 };
 
+const normalizeScheduleClockValue = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "-") return "";
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return raw;
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return raw;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+};
+
+const addHoursToScheduleClock = (hhmm = "", hoursToAdd = 0) => {
+  const match = String(hhmm || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  const hours = Number(hoursToAdd);
+  if (!match || !Number.isFinite(hours)) return "";
+
+  const startMinutes = Number(match[1]) * 60 + Number(match[2]);
+  if (!Number.isFinite(startMinutes)) return "";
+
+  const totalMinutes = startMinutes + Math.round(hours * 60);
+  const normalizedMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+  const outHour = Math.floor(normalizedMinutes / 60);
+  const outMinute = normalizedMinutes % 60;
+  return `${String(outHour).padStart(2, "0")}:${String(outMinute).padStart(2, "0")}`;
+};
+
+const formatUtcScheduleValueToClock = (value, timeZone) => {
+  const ms = new Date(value).getTime();
+  if (!Number.isFinite(ms)) return "";
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: String(timeZone || "").trim() || "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(ms));
+};
+
+const getScheduleDisplayRangeLabel = (scheduleItem = {}) => {
+  if (!scheduleItem || typeof scheduleItem !== "object") return "";
+
+  const scheduleTimeZone = getScheduleTimeZone(scheduleItem);
+  const rawTimeIn = normalizeScheduleClockValue(
+    pick(scheduleItem, ["timeIn", "time_in", "startTime", "shiftStart", "start"], "")
+  );
+  const rawTimeOut = normalizeScheduleClockValue(
+    pick(scheduleItem, ["timeOut", "time_out", "endTime", "shiftEnd", "end"], "")
+  );
+  const utcTimeIn = pick(scheduleItem, ["utcTimeIn", "utcStart", "startUtc", "utcTimeStart"], "");
+  const utcTimeOut = pick(scheduleItem, ["utcTimeOut", "utcEnd", "endUtc", "utcTimeEnd"], "");
+
+  const startClock = rawTimeIn || formatUtcScheduleValueToClock(utcTimeIn, scheduleTimeZone);
+  const durationHours = Number(pick(scheduleItem, ["shiftDuration", "hours", "durationHours"], NaN));
+  const endClock =
+    rawTimeOut ||
+    formatUtcScheduleValueToClock(utcTimeOut, scheduleTimeZone) ||
+    (startClock && Number.isFinite(durationHours) ? addHoursToScheduleClock(startClock, durationHours) : "");
+
+  if (!startClock || !endClock) return "";
+  return `${startClock} - ${endClock}`;
+};
+
 const getEmployeePositionLabel = (employee = {}, profile = {}) =>
   pick(employee, ["position", "role", "jobTitle"], "") ||
   pick(profile, ["position", "role", "jobTitle"], "") ||
@@ -911,7 +978,7 @@ const HISTORY_START_DATE = "2000-01-01";
 
 const PAGE_HEADER_TITLES = {
   dashboard: "Dashboard",
-  employee_dashboard: "My Dashboard",
+  employee_dashboard: "My Workspace",
   profile: "Profile",
   attendance: "Attendance",
   schedule: "Schedule",
@@ -1039,6 +1106,10 @@ export default function App() {
       String(endDate || "") === String(todayBusinessKey || "")
     );
   }, [rangeDays, startDate, endDate, attendanceResetTime, businessTimeZone]);
+  const currentBusinessDayKey = useMemo(
+    () => getTodayAttendanceKey(attendanceResetTime, businessTimeZone),
+    [attendanceResetTime, businessTimeZone]
+  );
 
   const [usersError, setUsersError] = useState("");
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -1175,12 +1246,17 @@ export default function App() {
   const [archivedNotifications, setArchivedNotifications] = useState([]);
   const [overBreakNotes, setOverBreakNotes] = useState([]);
   const [archivedOverBreakNotes, setArchivedOverBreakNotes] = useState([]);
+  const [employeeProcessActionLogs, setEmployeeProcessActionLogs] = useState([]);
+  const [employeeProcessActionLogsLoading, setEmployeeProcessActionLogsLoading] = useState(false);
+  const [employeeProcessActionLogsError, setEmployeeProcessActionLogsError] = useState("");
   const [profileImagesByUserId, setProfileImagesByUserId] = useState({});
   const [toastQueue, setToastQueue] = useState([]);
   const seenToastIdsRef = useRef(new Set());
   const notificationToastSessionStartMsRef = useRef(0);
+  const seenEmployeeProcessActionLogToastIdsRef = useRef(new Set());
   const notificationsRef = useRef([]);
   const archivedNotificationsRef = useRef([]);
+  const employeeProcessActionLogsRef = useRef([]);
   const profileImagesByUserIdRef = useRef({});
   const profileImagesInitializedRef = useRef(false);
   const announcementsRef = useRef([]);
@@ -1351,6 +1427,11 @@ export default function App() {
     if (!isAuthenticated || !user) {
       notificationToastSessionStartMsRef.current = 0;
       seenToastIdsRef.current = new Set();
+      seenEmployeeProcessActionLogToastIdsRef.current = new Set();
+      employeeProcessActionLogsRef.current = [];
+      setEmployeeProcessActionLogs((prev) => (prev.length ? [] : prev));
+      setEmployeeProcessActionLogsLoading(false);
+      setEmployeeProcessActionLogsError("");
       setToastQueue((prev) => (prev.length ? [] : prev));
       return;
     }
@@ -1358,6 +1439,11 @@ export default function App() {
     if (lastAuthSessionKeyRef.current !== nextSessionKey) {
       notificationToastSessionStartMsRef.current = Date.now();
       seenToastIdsRef.current = new Set();
+      seenEmployeeProcessActionLogToastIdsRef.current = new Set();
+      employeeProcessActionLogsRef.current = [];
+      setEmployeeProcessActionLogs((prev) => (prev.length ? [] : prev));
+      setEmployeeProcessActionLogsLoading(false);
+      setEmployeeProcessActionLogsError("");
       setToastQueue((prev) => (prev.length ? [] : prev));
     }
   }, [isAuthenticated, user, authSessionKey]);
@@ -1826,7 +1912,7 @@ export default function App() {
         return WEEKDAYS[d.getUTCDay()];
       };
 
-      const targetWeekday = weekdayNameFromYmd(endDate);
+      const targetWeekday = weekdayNameFromYmd(currentBusinessDayKey);
       if (!targetWeekday) return NaN;
 
       const todayItem =
@@ -1835,9 +1921,9 @@ export default function App() {
         ) || null;
 
       if (!todayItem) return NaN;
-      return resolveScheduledStartUtcMsForDayKey(todayItem, endDate, businessTimeZone);
+      return resolveScheduledStartUtcMsForDayKey(todayItem, currentBusinessDayKey, businessTimeZone);
     },
-    [schedulesByUserId, endDate, businessTimeZone]
+    [schedulesByUserId, currentBusinessDayKey, businessTimeZone]
   );
 
   const getTodayScheduleEndUtcMs = useCallback(
@@ -1853,7 +1939,7 @@ export default function App() {
         return WEEKDAYS[d.getUTCDay()];
       };
 
-      const targetWeekday = weekdayNameFromYmd(endDate);
+      const targetWeekday = weekdayNameFromYmd(currentBusinessDayKey);
       if (!targetWeekday) return NaN;
 
       const todayItem =
@@ -1862,9 +1948,9 @@ export default function App() {
         ) || null;
 
       if (!todayItem) return NaN;
-      return resolveScheduledEndUtcMsForDayKey(todayItem, endDate, businessTimeZone);
+      return resolveScheduledEndUtcMsForDayKey(todayItem, currentBusinessDayKey, businessTimeZone);
     },
-    [schedulesByUserId, endDate, businessTimeZone]
+    [schedulesByUserId, currentBusinessDayKey, businessTimeZone]
   );
 
   const isUserOnBreak = useCallback(
@@ -2832,6 +2918,78 @@ export default function App() {
     applyRealtimeNotificationChanges,
     reloadNotifications,
   ]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) return undefined;
+
+    let active = true;
+    let isInitial = true;
+    setEmployeeProcessActionLogsLoading(true);
+    setEmployeeProcessActionLogsError("");
+
+    const unsubscribe = subscribeEmployeeProcessActionLogs(
+      { maxRows: 0 },
+      (rows, snapshot) => {
+        if (!active) return;
+
+        const nextRows = Array.isArray(rows) ? rows : [];
+        employeeProcessActionLogsRef.current = nextRows;
+        setEmployeeProcessActionLogs(nextRows);
+        setEmployeeProcessActionLogsError("");
+        setEmployeeProcessActionLogsLoading(false);
+
+        const changes = Array.isArray(snapshot?.docChanges?.()) ? snapshot.docChanges() : [];
+        if (isInitial) {
+          isInitial = false;
+          return;
+        }
+
+        const sessionStartMs = Number(notificationToastSessionStartMsRef.current || 0);
+        const freshAddedRows = changes
+          .filter((change) => String(change?.type || "").trim().toLowerCase() === "added")
+          .map((change) => ({
+            id: String(change?.doc?.id || "").trim(),
+            ...change?.doc?.data?.(),
+          }))
+          .filter((row) => {
+            const id = String(row?.id || "").trim();
+            if (!id || seenEmployeeProcessActionLogToastIdsRef.current.has(id)) return false;
+            const createdAtMs = toMillis(row?.createdAtMs ?? row?.createdAt);
+            if (!Number.isFinite(createdAtMs) || !Number.isFinite(sessionStartMs) || sessionStartMs <= 0) {
+              return false;
+            }
+            return createdAtMs >= sessionStartMs;
+          });
+
+        if (freshAddedRows.length > 0) {
+          setToastQueue((prev) => [
+            ...prev,
+            ...freshAddedRows.map((row) => ({
+              id: `process-log-${row.id}`,
+              type: "info",
+              title: "Activity Log",
+              message: `${row.employeeName || row.createdByName || "Employee"}: ${row.actionLabel || "Activity updated"}`,
+            })),
+          ]);
+
+          freshAddedRows.forEach((row) => {
+            seenEmployeeProcessActionLogToastIdsRef.current.add(String(row.id || "").trim());
+          });
+        }
+      },
+      (err) => {
+        if (!active) return;
+        setEmployeeProcessActionLogs([]);
+        setEmployeeProcessActionLogsError(err?.message || "Unable to load activity log.");
+        setEmployeeProcessActionLogsLoading(false);
+      }
+    );
+
+    return () => {
+      active = false;
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
+  }, [isAuthenticated, user]);
 
   useEffect(() => {
     if (!isAuthenticated || !user) return undefined;
@@ -4682,7 +4840,7 @@ export default function App() {
     async ({ force = false, silent = false, refreshUserIds = [] } = {}) => {
       if (!api) {
         // Keep previous data while API/session wiring is not ready.
-        return;
+        return null;
       }
 
       if (validEmployees.length === 0) {
@@ -4692,7 +4850,7 @@ export default function App() {
         }
         todayLogIdentityByUserRef.current = {};
         todayLogIdentityPrimedRef.current = false;
-        return;
+        return {};
       }
 
       todayAbortRef.current?.abort?.();
@@ -4726,6 +4884,7 @@ export default function App() {
             );
 
         if (!missingItems.length) {
+          let mergedResult = null;
           setTodayLogsByUserId((prev) => {
             const merged = {};
             for (const userId of items) {
@@ -4733,9 +4892,10 @@ export default function App() {
                 ? dayCache[userId]
                 : prev?.[userId] || [];
             }
+            mergedResult = merged;
             return merged;
           });
-          return;
+          return mergedResult;
         }
 
         const next = {};
@@ -4926,10 +5086,13 @@ export default function App() {
         if (detectedNewTimeIn) {
           setNowMs(Date.now());
         }
+
+        return resolvedTodayLogsByUserId;
       } catch (err) {
         if (err?.name !== "AbortError") {
           console.error("Failed to load business-day logs:", err);
         }
+        return null;
       } finally {
         if (!silent) {
           setLoadingTodayLogs(false);
@@ -5190,7 +5353,7 @@ export default function App() {
       if (Number.isNaN(d.getTime())) return "";
       return WEEKDAYS[d.getUTCDay()];
     };
-    const targetWeekday = weekdayNameFromYmd(endDate);
+    const targetWeekday = weekdayNameFromYmd(currentBusinessDayKey);
     const todayScheduleItem = targetWeekday
       ? scheduleRows.find(
           (row) => String(pick(row, ["dayOfWeek", "day", "weekday"], "")).trim().toLowerCase() === targetWeekday
@@ -5217,6 +5380,11 @@ export default function App() {
         ? `${scheduleDurationHours}h ${String(scheduleDurationRemainder).padStart(2, "0")}m`
         : `${scheduleDurationRemainder}m`
       : "";
+    const scheduleDisplayRangeLabel =
+      getScheduleDisplayRangeLabel(todayScheduleItem) ||
+      (hasScheduleToday
+        ? `${formatTimeForDisplay(scheduleStartUtcMs, businessTimeZone)} - ${formatTimeForDisplay(scheduleEndUtcMs, businessTimeZone)}`
+        : "");
     const scheduleTagLabel = hasScheduleToday
       ? `Schedule: ${formatTimeForDisplay(scheduleStartUtcMs, businessTimeZone)} - ${formatTimeForDisplay(scheduleEndUtcMs, businessTimeZone)} (${scheduleDurationLabel}) • Days: ${scheduleDaysLabel || "-"}`
       : `Schedule: No Schedule Today • Days: ${scheduleDaysLabel || "-"}`;
@@ -5343,7 +5511,9 @@ export default function App() {
         : Number.isFinite(joinedFallbackMs)
           ? formatTsForDisplay(joinedFallbackMs, businessTimeZone)
           : "-",
-      scheduleTagLabel,
+      scheduleTagLabel: hasScheduleToday
+        ? `Schedule: ${scheduleDisplayRangeLabel} (${scheduleDurationLabel}) | Days: ${scheduleDaysLabel || "-"}`
+        : scheduleTagLabel,
       profileImg,
       breakdownCounts,
       breakdownTotal,
@@ -5373,6 +5543,7 @@ export default function App() {
     profileImagesByUserId,
     getTodayScheduleStartUtcMs,
     getTodayScheduleEndUtcMs,
+    currentBusinessDayKey,
     schedulesByUserId,
     logsByUserId,
     historyByUserId,
@@ -5744,7 +5915,7 @@ export default function App() {
         <div className="portal-topbar">
           <div className="portal-topbar-left">
             {activePage === "employee_dashboard" && canViewEmployeeCallActivityLog ? (
-              <div className="portal-topbar-switch" role="tablist" aria-label="My dashboard views">
+              <div className="portal-topbar-switch" role="tablist" aria-label="My Workspace views">
                 <button
                   type="button"
                   className={`portal-topbar-switch-btn ${employeeDashboardView === "dashboard" ? "active" : ""}`}
@@ -5752,7 +5923,7 @@ export default function App() {
                   role="tab"
                   aria-selected={employeeDashboardView === "dashboard"}
                 >
-                  My Dashboard
+                  My Workspace
                 </button>
                 <button
                   type="button"
@@ -5906,6 +6077,9 @@ export default function App() {
                     archivedNotifications={archivedNotifications}
                     overBreakNotes={overBreakNotes}
                     archivedOverBreakNotes={archivedOverBreakNotes}
+                    employeeProcessActionLogs={employeeProcessActionLogs}
+                    employeeProcessActionLogsLoading={employeeProcessActionLogsLoading}
+                    employeeProcessActionLogsError={employeeProcessActionLogsError}
                     viewerRole={user?.role || ""}
                     onMarkNotificationRead={handleNotificationClick}
                     onMarkAllRead={handleMarkAllNotificationsRead}

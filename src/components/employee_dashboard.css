@@ -2542,33 +2542,27 @@
 /* ---------- Break Logs Drawer ---------- */
 
 .empAnnouncementBackdrop{
-  --portal-header-offset:100px;
   position:fixed;
-  top:var(--portal-header-offset);
-  right:0;
-  bottom:0;
-  left:0;
-  height:calc(100dvh - var(--portal-header-offset));
+  inset:0;
   background:rgba(15,23,42,.28);
   backdrop-filter:blur(3px);
-  z-index:90;
+  z-index:1140;
 }
 
 .empAnnouncementDrawer{
-  --portal-header-offset:100px;
   position:fixed;
-  top:var(--portal-header-offset);
+  top:0;
   right:0;
   bottom:0;
-  width:min(460px, 100vw);
-  height:calc(100dvh - var(--portal-header-offset));
-  max-height:calc(100dvh - var(--portal-header-offset));
+  width:min(500px, 96vw);
+  height:100%;
+  max-height:100%;
   background:#ffffff;
   border-left:1px solid var(--border);
   box-shadow:-14px 0 34px rgba(15,23,42,.16);
   transform:translateX(100%);
   transition:transform .24s ease;
-  z-index:95;
+  z-index:1145;
   display:flex;
   flex-direction:column;
   overflow:hidden;
@@ -2583,7 +2577,7 @@
   align-items:flex-start;
   justify-content:space-between;
   gap:12px;
-  padding:12px 14px;
+  padding:14px 16px;
   border-bottom:1px solid var(--borderSoft);
   background:#f8fafc;
 }
@@ -2593,14 +2587,14 @@
 }
 
 .empAnnouncementDrawerTitle{
-  font-size:14px;
+  font-size:15px;
   font-weight:800;
   color:var(--text);
 }
 
 .empAnnouncementDrawerSub{
   margin-top:2px;
-  font-size:11px;
+  font-size:12px;
   color:var(--muted);
   font-weight:600;
   white-space:nowrap;
@@ -2621,39 +2615,37 @@
 }
 
 .empAnnouncementDrawerBody{
+  padding:14px 16px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
   flex:1;
   min-height:0;
   overflow:auto;
 }
 
 .empTaskListBackdrop{
-  --portal-header-offset:84px;
   position:fixed;
-  top:var(--portal-header-offset);
-  right:0;
-  bottom:0;
-  left:0;
-  height:calc(100dvh - var(--portal-header-offset));
+  inset:0;
   background:rgba(15,23,42,.28);
   backdrop-filter:blur(3px);
-  z-index:90;
+  z-index:1140;
 }
 
 .empTaskListDrawer{
-  --portal-header-offset:100px;
   position:fixed;
-  top:var(--portal-header-offset);
+  top:0;
   right:0;
   bottom:0;
-  width:min(460px, 100vw);
-  height:calc(100dvh - var(--portal-header-offset));
-  max-height:calc(100dvh - var(--portal-header-offset));
+  width:min(500px, 96vw);
+  height:100%;
+  max-height:100%;
   background:#ffffff;
   border-left:1px solid var(--border);
   box-shadow:-14px 0 34px rgba(15,23,42,.16);
   transform:translateX(100%);
   transition:transform .24s ease;
-  z-index:95;
+  z-index:1145;
   display:flex;
   flex-direction:column;
   overflow:hidden;
@@ -2668,7 +2660,7 @@
   align-items:flex-start;
   justify-content:space-between;
   gap:12px;
-  padding:12px 14px;
+  padding:14px 16px;
   border-bottom:1px solid var(--borderSoft);
   background:#f8fafc;
 }
@@ -2678,14 +2670,14 @@
 }
 
 .empTaskListDrawerTitle{
-  font-size:14px;
+  font-size:15px;
   font-weight:800;
   color:var(--text);
 }
 
 .empTaskListDrawerSub{
   margin-top:2px;
-  font-size:11px;
+  font-size:12px;
   color:var(--muted);
   font-weight:600;
   white-space:nowrap;
@@ -2706,6 +2698,10 @@
 }
 
 .empTaskListDrawerBody{
+  padding:14px 16px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
   flex:1;
   min-height:0;
   overflow:auto;
@@ -2909,32 +2905,27 @@
 
 /* ---------- Notepad Drawer ---------- */
 .empNotepadBackdrop{
-  --portal-header-offset:84px;
   position:fixed;
-  top:var(--portal-header-offset);
-  right:0;
-  bottom:0;
-  left:0;
-  height:calc(100dvh - var(--portal-header-offset));
+  inset:0;
   background:rgba(15,23,42,.28);
   backdrop-filter:blur(3px);
-  z-index:90;
+  z-index:1140;
 }
 
 .empNotepadDrawer{
-  --portal-header-offset:102px;
   position:fixed;
-  top:var(--portal-header-offset);
+  top:0;
   right:0;
   bottom:0;
-  width:min(980px, 100vw);
-  height:calc(100dvh - var(--portal-header-offset));
-  max-height:calc(100dvh - var(--portal-header-offset));
+  left:var(--portal-sidebar-width, 260px);
+  width:auto;
+  height:100%;
+  max-height:100%;
   background:#ffffff;
   border-left:1px solid var(--border);
   transform:translateX(100%);
   transition:transform .24s ease;
-  z-index:95;
+  z-index:1145;
   display:flex;
   flex-direction:column;
   overflow:hidden;
@@ -2949,7 +2940,7 @@
   align-items:flex-start;
   justify-content:space-between;
   gap:12px;
-  padding:12px 14px;
+  padding:14px 16px;
   border-bottom:1px solid var(--borderSoft);
   background:#f8fafc;
 }
@@ -2959,14 +2950,14 @@
 }
 
 .empNotepadDrawerTitle{
-  font-size:14px;
+  font-size:15px;
   font-weight:800;
   color:var(--text);
 }
 
 .empNotepadDrawerSub{
   margin-top:2px;
-  font-size:11px;
+  font-size:12px;
   color:var(--muted);
   font-weight:600;
   white-space:nowrap;
@@ -2987,6 +2978,7 @@
 }
 
 .empNotepadDrawerBody{
+  padding:14px 16px;
   flex:1;
   min-height:0;
   display:grid;
@@ -3173,6 +3165,8 @@
   justify-content:center;
   position:relative;
   overflow:visible;
+  gap:4px;
+  padding:0 10px;
 }
 
 .empNotepadViewBtn.active{
@@ -3198,6 +3192,8 @@
   cursor:pointer;
   position:relative;
   overflow:visible;
+  gap:4px;
+  padding:0 10px;
 }
 
 .empNotepadViewBtnBadge{
@@ -5206,19 +5202,20 @@
   }
 
   .empBreakLogsDrawer{
-    width:min(460px, 100vw);
+    width:min(500px, 96vw);
   }
 
   .empAnnouncementDrawer{
-    width:min(460px, 100vw);
+    width:min(500px, 96vw);
   }
 
   .empTaskListDrawer{
-    width:min(460px, 100vw);
+    width:min(500px, 96vw);
   }
 
   .empNotepadDrawer{
-    width:min(820px, 100vw);
+    left:var(--portal-sidebar-width, 260px);
+    width:auto;
   }
 
   .empNotepadDrawerBody{
@@ -5327,42 +5324,101 @@
   }
 
   .empNotepadDrawer{
+    left:0;
     width:100vw;
   }
 
   .empNotepadDrawerBody{
-    grid-template-columns:1fr;
+    display:grid;
+    grid-template-columns:clamp(150px, 34vw, 190px) minmax(0, 1fr);
+    min-height:0;
   }
 
   .empNotepadListPane{
-    border-right:none;
-    border-bottom:1px solid var(--borderSoft);
-    max-height:34vh;
+    border-right:1px solid var(--borderSoft);
+    border-bottom:none;
+    flex:0 0 auto;
+    max-height:none;
+    min-height:0;
+  }
+
+  .empNotepadListPaneTop{
+    flex-direction:column;
+    align-items:stretch;
+  }
+
+  .empNotepadListTopRow{
+    width:100%;
+    align-items:stretch;
+  }
+
+  .empNotepadViewControls{
+    width:100%;
+    justify-content:flex-start;
+  }
+
+  .empNotepadViewBtn,
+  .empNotepadBinToggleBtn{
+    flex:1 1 0;
+    min-width:0;
+    width:auto;
   }
 
   .empNotepadNewBtnRow{
-    flex-wrap:wrap;
+    flex-wrap:nowrap;
   }
 
   .empNotepadNewBtnFull{
-    flex:1 1 calc(50% - 3px);
+    width:32px;
+    min-width:32px;
+    flex:0 0 auto;
+    padding:0;
   }
 
   .empNotepadNewBtnGroup{
     flex:0 0 auto;
+    width:32px;
+  }
+
+  .empNotepadList{
+    max-height:inherit;
+  }
+
+  .empNotepadEditorPane{
+    flex:1 1 auto;
+    min-height:0;
+    overflow:hidden;
   }
 
   .empNotepadEditorTop{
-    flex-wrap:wrap;
+    display:grid;
+    grid-template-columns:1fr;
     align-items:flex-start;
+    gap:7px;
+  }
+
+  .empNotepadTitleInput{
+    width:100%;
   }
 
   .empNotepadDeadlineControl{
     width:100%;
-    justify-content:space-between;
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr) auto;
+    align-items:center;
   }
 
   .empNotepadDeadlineInput{
+    width:100%;
+    min-width:0;
+  }
+
+  .empNotepadColorControl{
+    width:100%;
+    justify-content:space-between;
+  }
+
+  .empNotepadColorSelect{
     flex:1;
     min-width:0;
   }
@@ -5374,10 +5430,135 @@
   }
 
   .empNotepadSaveState{
-    right:12px;
-    bottom:12px;
-    max-width:min(86vw, 300px);
+    position:static;
+    flex:1 1 auto;
+    max-width:none;
+    min-width:0;
+    padding:6px 8px;
+    box-shadow:none;
+    backdrop-filter:none;
+    -webkit-backdrop-filter:none;
   }
+
+  .empNotepadSaveBtn{
+    flex:0 0 auto;
+  }
+
+  .empNotepadToolbar{
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    overflow-y:hidden;
+    padding-bottom:7px;
+    scrollbar-width:thin;
+    -webkit-overflow-scrolling:touch;
+  }
+
+  .empNotepadToolBtn,
+  .empNotepadToolSelect,
+  .empNotepadToolColorInput,
+  .empNotepadTablePickerHost{
+    flex:0 0 auto;
+  }
+
+  .empNotepadTablePickerMenu{
+    position:fixed;
+    left:10px;
+    right:10px;
+    top:auto;
+    bottom:18px;
+    width:auto;
+    max-width:calc(100vw - 20px);
+  }
+
+  .empNotepadTablePickerGrid{
+    justify-content:center;
+  }
+
+  .empNotepadEditorWrap{
+    min-height:0;
+  }
+
+  .empNotepadEditor{
+    min-height:clamp(220px, 42dvh, 420px);
+    font-size:13px;
+    -webkit-overflow-scrolling:touch;
+  }
+}
+
+@media(max-width:420px){
+  .empNotepadDrawerHead{
+    align-items:center;
+    padding:9px 10px;
+  }
+
+  .empNotepadDrawerTitle{
+    font-size:13px;
+  }
+
+  .empNotepadDrawerSub{
+    white-space:normal;
+    line-height:1.25;
+  }
+
+  .empNotepadListPane{
+    max-height:clamp(150px, 30dvh, 220px);
+  }
+
+  .empNotepadViewControls{
+    gap:4px;
+  }
+
+  .empNotepadViewBtn,
+  .empNotepadBinToggleBtn{
+    flex:0 0 auto;
+    width:28px;
+    min-width:28px;
+    padding:0;
+  }
+
+  .empNotepadNewBtnFull{
+    flex:1 1 100%;
+  }
+
+  .empNotepadGroupCreateActions{
+    align-items:stretch;
+    flex-direction:column;
+  }
+
+  .empNotepadGroupCreateBtn{
+    width:100%;
+  }
+
+  .empNotepadDeadlineControl{
+    grid-template-columns:1fr auto;
+  }
+
+  .empNotepadDeadlineControl label{
+    grid-column:1 / -1;
+  }
+
+  .empNotepadEditorActions{
+    align-items:stretch;
+    flex-direction:column;
+  }
+
+  .empNotepadSaveBtn{
+    width:100%;
+  }
+
+  .empNotepadEditor{
+    min-height:clamp(240px, 48dvh, 460px);
+  }
+}
+
+@media(max-width:1000px){
+  .empPanelHead{
+    display: flex;
+    flex-direction: column;
+    align-items: start;
+    gap:10px;
+  }
+
 }
 
 /* Compact spacing pass for employee dashboard */
@@ -5579,6 +5760,27 @@
   min-height: 180px;
   padding: 10px;
   overflow: auto;
+}
+
+@media(max-width:640px){
+  .empNotepadEditor{
+    min-height:clamp(220px, 42dvh, 420px);
+  }
+}
+
+@media(max-width:420px){
+  .empNotepadBackdrop,
+  .empNotepadDrawer{
+    --portal-header-offset:72px;
+  }
+
+  .empNotepadDrawerHead{
+    padding:9px 10px;
+  }
+
+  .empNotepadEditor{
+    min-height:clamp(240px, 48dvh, 460px);
+  }
 }
 
 .announcementModalOverlay {
@@ -6799,9 +7001,6 @@
 }
 
 .employeeLeadGuideTooltip {
-  position: absolute;
-  left: 50%;
-  top: calc(100% + 10px);
   z-index: 2147483646;
   width: min(320px, calc(100vw - 42px));
   padding: 12px 13px;
@@ -6810,40 +7009,45 @@
   background: #ffffff;
   color: #0f172a;
   box-shadow: 0 18px 42px rgba(15, 23, 42, .26);
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 10px;
+  font-weight: 400;
   line-height: 1.5;
   letter-spacing: normal;
   text-align: left;
   text-transform: none;
   white-space: normal;
-  opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, -4px);
-  transition: opacity .16s ease, transform .16s ease;
 }
 
-.employeeLeadGuideBtn::before {
-  content: "";
+/* Rendered via portal into document.body (see employee_dashboard.jsx), so it is
+   positioned with fixed viewport coordinates computed from the button's rect and
+   can never be clipped by an ancestor's overflow:hidden or buried by a sibling's
+   local stacking context. */
+.employeeLeadGuideTooltipPortal {
+  position: fixed;
+  transform: translateX(-50%);
+  animation: employeeLeadGuideTooltipFadeIn .16s ease both;
+}
+
+.employeeLeadGuideTooltipArrow {
   position: absolute;
+  top: -6px;
   left: 50%;
-  top: calc(100% + 5px);
-  z-index: 2147483647;
+  transform: translateX(-50%);
   border: 6px solid transparent;
   border-bottom-color: #ffffff;
   filter: drop-shadow(0 -1px 0 rgba(15, 23, 42, .16));
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, -4px);
-  transition: opacity .16s ease, transform .16s ease;
 }
 
-.employeeLeadGuideBtn:hover .employeeLeadGuideTooltip,
-.employeeLeadGuideBtn:focus-visible .employeeLeadGuideTooltip,
-.employeeLeadGuideBtn:hover::before,
-.employeeLeadGuideBtn:focus-visible::before {
-  opacity: 1;
-  transform: translate(-50%, 0);
+@keyframes employeeLeadGuideTooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .employeeLeadProcessSub {
@@ -6935,6 +7139,14 @@
   color: #0f172a;
   font-size: 13px;
   font-weight: 900;
+}
+
+.employeeLeadScheduleTime {
+  margin-top: 1px;
+  color: #64748b;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .01em;
 }
 
 .employeeLeadStatus {
@@ -7191,9 +7403,82 @@
 
 .employeeProcessLogHead{
   display:flex;
-  align-items:flex-start;
+  align-items:center;
   justify-content:space-between;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.employeeProcessLogHeadTitle{
+  min-width:0;
+}
+
+.employeeProcessLogHeadActions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
   gap:6px;
+  flex-wrap:wrap;
+  min-width:0;
+}
+
+.employeeProcessLogNav{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+  min-width:0;
+}
+
+.employeeProcessLogNavBtn,
+.employeeProcessLogTodayBtn{
+  border:1px solid rgba(148,163,184,.28);
+  background:#fff;
+  color:#0f172a;
+  height:24px;
+  border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  min-width:0;
+}
+
+.employeeProcessLogNavBtn{
+  width:24px;
+  padding:0;
+  flex:0 0 auto;
+}
+
+.employeeProcessLogTodayBtn{
+  padding:0 8px;
+  font-size:10px;
+  line-height:1;
+  font-weight:900;
+  white-space:nowrap;
+}
+
+.employeeProcessLogTodayBtn.isActive{
+  background:#5b0008;
+  border-color:#5b0008;
+  color:#fff;
+}
+
+.employeeProcessLogNavBtn:hover,
+.employeeProcessLogTodayBtn:hover{
+  background:#f8fafc;
+}
+
+.employeeProcessLogNavBtn:disabled{
+  opacity:.35;
+  cursor:not-allowed;
+}
+
+.employeeProcessLogDateLabel{
+  color:#64748b;
+  font-size:10px;
+  font-weight:800;
+  white-space:nowrap;
 }
 
 .employeeProcessLogKicker{
@@ -7287,10 +7572,79 @@
   transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease;
 }
 
+.employeeProcessLogItem.canDelete{
+  grid-template-columns:24px auto minmax(0,1fr) auto;
+}
+
 .employeeProcessLogItem:hover{
   transform:translateY(-1px);
   border-color:rgba(91,0,8,.18);
   box-shadow:0 8px 18px rgba(15,23,42,.06);
+}
+
+.employeeProcessLogItem.tone-ib{
+  border-color:rgba(29,78,216,.16);
+  border-left:3px solid rgba(29,78,216,.34);
+  background:linear-gradient(90deg, rgba(59,130,246,.11) 0%, rgba(59,130,246,.045) 58%, #ffffff 100%);
+}
+
+.employeeProcessLogItem.tone-nl{
+  border-color:rgba(217,119,6,.16);
+  border-left:3px solid rgba(217,119,6,.34);
+  background:linear-gradient(90deg, rgba(245,158,11,.12) 0%, rgba(245,158,11,.045) 58%, #ffffff 100%);
+}
+
+.employeeProcessLogItem.tone-ready{
+  border-color:rgba(4,120,87,.16);
+  border-left:3px solid rgba(4,120,87,.32);
+  background:linear-gradient(90deg, rgba(16,185,129,.1) 0%, rgba(16,185,129,.04) 58%, #ffffff 100%);
+}
+
+.employeeProcessLogItem.tone-secondaryIb{
+  border-color:rgba(124,58,237,.16);
+  border-left:3px solid rgba(124,58,237,.32);
+  background:linear-gradient(90deg, rgba(124,58,237,.1) 0%, rgba(124,58,237,.04) 58%, #ffffff 100%);
+}
+
+.employeeProcessLogItem.tone-neutral{
+  border-color:rgba(100,116,139,.16);
+  border-left:3px solid rgba(100,116,139,.24);
+  background:linear-gradient(90deg, rgba(100,116,139,.08) 0%, rgba(100,116,139,.035) 58%, #ffffff 100%);
+}
+
+.employeeProcessLogDeleteBtn{
+  width:24px;
+  height:24px;
+  border:0;
+  border-radius:6px;
+  display:grid;
+  place-items:center;
+  background:rgba(239,68,68,.1);
+  color:#b91c1c;
+  cursor:pointer;
+  opacity:0;
+  pointer-events:none;
+  transform:scale(.92);
+  transition:opacity .16s ease, transform .16s ease, background .16s ease, color .16s ease;
+}
+
+.employeeProcessLogItem.canDelete:hover .employeeProcessLogDeleteBtn,
+.employeeProcessLogItem.canDelete:focus-within .employeeProcessLogDeleteBtn{
+  opacity:1;
+  pointer-events:auto;
+  transform:scale(1);
+}
+
+.employeeProcessLogDeleteBtn:hover,
+.employeeProcessLogDeleteBtn:focus-visible{
+  background:#dc2626;
+  color:#ffffff;
+  outline:none;
+}
+
+.employeeProcessLogDeleteBtn:disabled{
+  cursor:not-allowed;
+  opacity:.45;
 }
 
 .employeeProcessLogAvatar{
@@ -7356,8 +7710,13 @@
     align-items:flex-start;
   }
 
-  .employeeProcessLogHead h4{
-    font-size:12px;
+  .employeeProcessLogHeadActions{
+    width:100%;
+    justify-content:flex-start;
+  }
+
+  .employeeProcessLogDateLabel{
+    width:100%;
   }
 
   .employeeProcessLogItem{
@@ -7365,10 +7724,18 @@
     align-items:start;
   }
 
+  .employeeProcessLogItem.canDelete{
+    grid-template-columns:24px auto minmax(0,1fr);
+  }
+
   .employeeProcessLogTime{
     grid-column:2;
     text-align:left;
     padding-top:2px;
+  }
+
+  .employeeProcessLogItem.canDelete .employeeProcessLogTime{
+    grid-column:3;
   }
 }
 
@@ -7378,11 +7745,11 @@
   bottom: 22px;
   z-index: 1200;
   width: min(300px, calc(100vw - 28px));
-  border: 1px solid rgba(15, 23, 42, .12);
+  border: 1px solid rgba(148, 163, 184, .24);
   border-radius: 12px;
   padding: 12px;
-  background: rgba(255, 255, 255, .96);
-  box-shadow: 0 20px 46px rgba(15, 23, 42, .22);
+  background: linear-gradient(180deg, rgba(15, 23, 42, .98), rgba(2, 6, 23, .96));
+  box-shadow: 0 22px 54px rgba(2, 6, 23, .42);
   backdrop-filter: blur(12px);
 }
 
@@ -7393,7 +7760,7 @@
 }
 
 .employeeLeadFloatingHead span {
-  color: #64748b;
+  color: #94a3b8;
   font-size: 10px;
   font-weight: 900;
   letter-spacing: .08em;
@@ -7401,7 +7768,7 @@
 }
 
 .employeeLeadFloatingHead strong {
-  color: #0f172a;
+  color: #f8fafc;
   font-size: 14px;
   font-weight: 950;
 }
@@ -7412,7 +7779,7 @@
 }
 
 .employeeLeadFloatingBtn {
-  border: 0;
+  border: 1px solid rgba(255, 255, 255, .12);
   border-radius: 10px;
   padding: 10px 12px;
   color: #fff;
@@ -7424,7 +7791,7 @@
   font-size: 13px;
   font-weight: 800;
   letter-spacing: .04em;
-  box-shadow: 0 10px 18px rgba(15, 23, 42, .16);
+  box-shadow: 0 12px 22px rgba(2, 6, 23, .34);
 }
 
 .employeeLeadFloatingBtn:hover{
@@ -7437,18 +7804,19 @@
   border-radius: 999px;
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, .2);
+  background: rgba(255, 255, 255, .16);
+  border: 1px solid rgba(255, 255, 255, .16);
   font-size: 13px;
   font-weight: 850;
   letter-spacing: .04em;
 }
 
 .employeeLeadFloatingBtn.isIb {
-  background: #2563eb;
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
 }
 
 .employeeLeadFloatingBtn.isNl {
-  background: #d97706;
+  background: linear-gradient(135deg, #b45309, #d97706);
 }
 
 .employeeLeadFloatingBtn:disabled {
@@ -7460,5 +7828,516 @@
   .employeeLeadFloatingModal {
     right: 14px;
     bottom: 14px;
+  }
+}
+
+/* Mobile responsiveness pass */
+.empDashShell.isStackedLayout .empPanel,
+.empDashShell.isStackedLayout .scheduleCard,
+.empDashShell.isStackedLayout .empSideColumn,
+.empDashShell.isStackedLayout .greetingPanel,
+.empDashShell.isStackedLayout .agentAttendancePanel {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.empDashShell.isStackedLayout .empPanelBody {
+  display: block;
+  overflow: visible;
+}
+
+.empDashShell.isStackedLayout .empGrid2 {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  height: auto;
+  min-height: 0;
+  gap: 12px;
+}
+
+.empDashShell.isStackedLayout .empSideColumn {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  align-self: stretch;
+}
+
+.empDashShell.isStackedLayout .empSideColumnResizeHandle {
+  display: none;
+}
+
+.empDashShell.isStackedLayout .dashboardNotepadStack {
+  width: min(100%, 420px);
+  margin-inline: auto;
+}
+
+.empDashShell.isStackedLayout .breakDonutRow {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.empDashShell.isStackedLayout .donut-container {
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+}
+
+.empDashShell.isStackedLayout .breakEmployeeDotPanel {
+  width: 100%;
+  min-width: 0;
+}
+
+.empDashShell.isStackedLayout .empBreakLogsBtn,
+.empDashShell.isStackedLayout .empTaskListBtn,
+.empDashShell.isStackedLayout .empAnnouncementBtn {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  gap: 0;
+}
+
+.empDashShell.isStackedLayout .empBreakLogsBtnLabel,
+.empDashShell.isStackedLayout .empTaskListBtnLabel,
+.empDashShell.isStackedLayout .empAnnouncementBtnLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 1000px) {
+  .empDash,
+  .empDash * {
+    box-sizing: border-box;
+  }
+
+  .empDashShell {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .empPanel,
+  .scheduleCard,
+  .empSideColumn,
+  .greetingPanel,
+  .agentAttendancePanel,
+  .callActivityLeaderboardPanel,
+  .callActivityPanel,
+  .callActivityRecentPanel {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .empPanelBody {
+    display: block;
+    overflow: visible;
+  }
+
+  .empGrid2 {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    height: auto;
+    min-height: 0;
+    gap: 12px;
+  }
+
+  .empSideColumn {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    align-self: stretch;
+  }
+
+  .empSideColumnResizeHandle {
+    display: none;
+  }
+
+  .dashboardNotepadCard {
+    max-width: 100%;
+    overflow: visible;
+  }
+
+  .dashboardNotepadStack {
+    width: min(100%, 420px);
+    margin-inline: auto;
+  }
+
+  .employeeProcessLogList {
+    max-height: min(260px, 42vh);
+  }
+}
+
+@media (max-width: 720px) {
+  .empDash {
+    padding: 10px;
+  }
+
+  .empDashTop {
+    justify-content: stretch;
+    align-items: stretch;
+  }
+
+  .empDashTop > div,
+  .employee-select {
+    width: 100%;
+  }
+
+  .empPanel {
+    border-radius: 12px;
+  }
+
+  .empPanelHead {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px;
+  }
+
+  .empPanelHeadLeft,
+  .empPanelHeadRight {
+    width: 100%;
+    padding: 0;
+  }
+
+  .empPanelHeadLeft {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .empPanelHeadRight {
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .scheduleBoxes {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .miniBox {
+    min-height: 34px;
+    justify-content: flex-start;
+    border-left: 0;
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: #f8fafc;
+  }
+
+  .miniLabel,
+  .miniValue {
+    font-size: 10px;
+  }
+
+  .empBreakLogsBtn,
+  .empTaskListBtn,
+  .empAnnouncementBtn {
+    min-width: 0;
+    height: 32px;
+    padding: 0 9px;
+    font-size: 10px;
+  }
+
+  .empAnnouncementBtnLabel {
+    max-width: 92px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .scheduleCard {
+    padding: 10px;
+    overflow: visible;
+  }
+
+  .breakDonutRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .donut-container {
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+  }
+
+  .breakDonutButton {
+    --donutSize: clamp(132px, 46vw, 170px);
+  }
+
+  .breakEmployeeDotPanel {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .breakEmployeeDotTableRow {
+    padding: 10px 8px;
+  }
+
+  .breakEmployeeDotIdentity {
+    justify-content: flex-start;
+  }
+
+  .breakEmployeeDotWeekTrack {
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .breakEmployeeDotWeekCell {
+    flex: 0 0 38px;
+  }
+
+  .employeeLeadProcessPanel {
+    margin-top: 12px;
+  }
+
+  .employeeLeadProcessTop {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .employeeLeadProcessTitleRow {
+    align-items: flex-start;
+  }
+
+  .employeeLeadGuideTooltip {
+    width: min(280px, calc(100vw - 34px));
+  }
+
+  .employeeLeadProcessBadge {
+    align-self: flex-start;
+  }
+
+  .employeeLeadProcessTableWrap {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .employeeLeadProcessTable,
+  .employeeLeadProcessTable thead,
+  .employeeLeadProcessTable tbody,
+  .employeeLeadProcessTable tr,
+  .employeeLeadProcessTable td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .employeeLeadProcessTable {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .employeeLeadProcessTable thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .employeeLeadProcessRow {
+    margin-bottom: 8px;
+    border: 1px solid rgba(148, 163, 184, .26);
+    border-radius: 10px;
+    background: #ffffff;
+    overflow: hidden;
+  }
+
+  .employeeLeadProcessTable td {
+    min-height: 0;
+    padding: 9px 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, .18);
+  }
+
+  .employeeLeadProcessTable td:last-child {
+    border-bottom: 0;
+  }
+
+  .employeeLeadProcessRow.isAvailable td:nth-child(2)::before,
+  .employeeLeadProcessRow.isAvailable td:nth-child(3)::before {
+    display: block;
+    margin-bottom: 5px;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+
+  .employeeLeadProcessRow.isAvailable td:nth-child(2)::before {
+    content: "Inbound";
+  }
+
+  .employeeLeadProcessRow.isAvailable td:nth-child(3)::before {
+    content: "New Lead";
+  }
+
+  .employeeLeadUnavailableContent {
+    grid-template-columns: 1fr;
+  }
+
+  .employeeLeadUnavailableStatus {
+    min-height: 42px;
+    padding: 9px 12px;
+    font-size: 12px;
+  }
+
+  .employeeLeadMarkStack,
+  .employeeLeadMark,
+  .employeeLeadSecondaryPrompt {
+    min-height: 38px;
+  }
+
+  .employeeProcessLogPane {
+    margin-top: 4px;
+  }
+
+  .employeeProcessLogList {
+    max-height: 280px;
+  }
+
+  .greetingPanel {
+    padding: 12px;
+  }
+
+  .statsRow {
+    grid-template-columns: 1fr;
+  }
+
+  .callActivityLeaderboardStrip {
+    gap: 8px;
+    scroll-snap-type: x proximity;
+  }
+
+  .callActivityLeaderboardItem {
+    flex: 0 0 min(74vw, 180px);
+    max-width: none;
+    scroll-snap-align: start;
+  }
+
+  .callActivityPanel,
+  .callActivityRecentPanel {
+    border-radius: 12px;
+    padding: 10px;
+  }
+
+  .callActivityDurationPreview {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .callActivityTimePopover {
+    width: min(100%, 300px);
+    flex-wrap: wrap;
+  }
+
+  .callActivityTimePopover select {
+    flex: 1 1 72px;
+  }
+
+  .callActivityTimePopover button {
+    flex: 1 1 100%;
+  }
+
+  .callActivityRecentTableWrap {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .callActivityRecentTable {
+    min-width: 640px;
+  }
+
+  .employeeLeadFloatingModal {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: auto;
+    padding: 10px;
+  }
+
+  .employeeLeadFloatingMarks {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .empDash {
+    padding: 6px;
+  }
+
+  .empPanelBody {
+    padding: 4px;
+  }
+
+  .scheduleBoxes {
+    grid-template-columns: 1fr;
+  }
+
+  .empPanelHeadRight {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .empDatePill,
+  .empBreakLogsBtn,
+  .empTaskListBtn,
+  .empAnnouncementBtn,
+  .empNotepadBtn {
+    width: 100%;
+  }
+
+  .empNotepadBtn {
+    height: 32px;
+  }
+
+  .dashboardNotepadStack {
+    width: 100%;
+  }
+
+  .dashboardNotepadFrontNav {
+    right: 6px;
+  }
+
+  .employeeProcessLogItem {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .employeeProcessLogItem.canDelete {
+    grid-template-columns: 24px 28px minmax(0, 1fr);
+  }
+
+  .employeeProcessLogTime {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .employeeProcessLogItem.canDelete .employeeProcessLogTime {
+    grid-column: 3;
+  }
+
+  .callActivityRecentPager {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) 28px;
+  }
+
+  .callActivityRecentPager span {
+    text-align: center;
+    white-space: normal;
+  }
+
+  .employeeLeadFloatingMarks {
+    grid-template-columns: 1fr;
   }
 }
