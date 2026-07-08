@@ -298,10 +298,64 @@ const formatTaskDeadlineLabel = (task = {}, businessTimeZone = "America/Chicago"
 };
 
 const pickTs = (log) => pick(log, ["timestamp", "createdAt", "time"], "");
+const pickOutTs = (log) =>
+  pick(
+    log,
+    [
+      "timeOut",
+      "time_out",
+      "clockOut",
+      "clock_out",
+      "timestampOut",
+      "outTimestamp",
+      "timeout",
+      "outTime",
+      "endTime",
+      "checkedOutAt",
+      "timeEnd",
+      "clockedOutAt",
+    ],
+    ""
+  );
 
 const tsMs = (ts) => {
   const t = new Date(ts).getTime();
   return Number.isFinite(t) ? t : NaN;
+};
+
+const isAttendanceInLog = (log) => {
+  const type = normalize(pick(log, ["type", "logType", "eventType"], ""));
+  return type.includes("in") || type.includes("clockin") || type.includes("timein");
+};
+
+const hasAttendanceTimeOut = (log) => {
+  const outTs = pickOutTs(log || {});
+  return !!outTs && Number.isFinite(tsMs(outTs));
+};
+
+const isAttendanceClockedOutLog = (log) => {
+  const type = normalize(pick(log, ["type", "logType", "eventType"], ""));
+  return type.includes("out") || type.includes("clockout") || type.includes("timeout") || type.includes("checkout") || hasAttendanceTimeOut(log);
+};
+
+const getAttendanceEventMs = (log) => {
+  const ts = isAttendanceClockedOutLog(log) ? pickOutTs(log) || pickTs(log) : pickTs(log) || pickOutTs(log);
+  return ts ? tsMs(ts) : NaN;
+};
+
+const latestAttendanceLog = (logs, predicate) => {
+  let best = null;
+  let bestMs = -Infinity;
+
+  for (const log of Array.isArray(logs) ? logs : []) {
+    if (!predicate(log)) continue;
+    const eventMs = getAttendanceEventMs(log);
+    if (!Number.isFinite(eventMs) || eventMs <= bestMs) continue;
+    best = log;
+    bestMs = eventMs;
+  }
+
+  return best ? { log: best, t: bestMs } : null;
 };
 
 const getPartsInTimeZone = (dateLike, timeZone) => {
@@ -1943,6 +1997,62 @@ export default function EmployeeDashboard({
         return { available: false, label: "Loading", tone: "unavailable" };
       }
 
+      const localLogs = Array.isArray(logsByUserId?.[uid]) ? logsByUserId[uid] : [];
+      const localIsOnBreak = !!activeBreaksByUserId?.[uid];
+      const lastIn = latestAttendanceLog(localLogs, isAttendanceInLog);
+      const lastOut = latestAttendanceLog(localLogs, isAttendanceClockedOutLog);
+      const localIsLive = !!lastIn && (!lastOut || lastOut.t < lastIn.t || localIsOnBreak);
+      const localScheduleMatch = resolveScheduleItemForInstant(schedulesByUserId?.[uid], nowMs);
+      const localScheduleHasStarted = !!localScheduleMatch?.scheduleItem;
+
+      if ((status.tone || "") === "scheduled" && localIsLive) {
+        if (localIsOnBreak) {
+          return {
+            available: false,
+            label: "On Break",
+            tone: "break",
+            canReady: false,
+            autoAdvanceUnavailable: true,
+            readySignature: status.readySignature || "",
+            isReadyOverride: !!status.isReadyOverride,
+            scheduleTimeLabel: formatDutyTimeRangeLabel(
+              status.startMs ?? localScheduleMatch?.startMs,
+              status.endMs ?? localScheduleMatch?.endMs
+            ),
+          };
+        }
+
+        if (localScheduleHasStarted) {
+          return {
+            available: true,
+            label: "Available",
+            tone: "available",
+            canReady: false,
+            autoAdvanceUnavailable: !!status.autoAdvanceUnavailable,
+            readySignature: status.readySignature || "",
+            isReadyOverride: !!status.isReadyOverride,
+            scheduleTimeLabel: formatDutyTimeRangeLabel(
+              status.startMs ?? localScheduleMatch?.startMs,
+              status.endMs ?? localScheduleMatch?.endMs
+            ),
+          };
+        }
+
+        return {
+          available: false,
+          label: "Logged in",
+          tone: "loggedin",
+          canReady: true,
+          autoAdvanceUnavailable: !!status.autoAdvanceUnavailable,
+          readySignature: status.readySignature || "",
+          isReadyOverride: !!status.isReadyOverride,
+          scheduleTimeLabel: formatDutyTimeRangeLabel(
+            status.startMs ?? localScheduleMatch?.startMs,
+            status.endMs ?? localScheduleMatch?.endMs
+          ),
+        };
+      }
+
       return {
         available: !!status.available,
         label: status.label || "Unavailable",
@@ -1954,7 +2064,7 @@ export default function EmployeeDashboard({
         scheduleTimeLabel: formatDutyTimeRangeLabel(status.startMs, status.endMs),
       };
     },
-    [employeeProcessStatusByUserId]
+    [activeBreaksByUserId, employeeProcessStatusByUserId, logsByUserId, nowMs, schedulesByUserId]
   );
 
   const employeeProcessRows = useMemo(() => {

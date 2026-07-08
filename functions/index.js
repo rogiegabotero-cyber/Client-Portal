@@ -2455,14 +2455,6 @@ const normalizeStatusText = (value = "") => toText(value).toLowerCase();
 const getAttendanceStatusTextNarrow = (log = {}) =>
   toText(pick(log || {}, ["status", "attendanceStatus", "dailyStatus", "remark"], ""));
 
-const isEmployeeProcessLoggedInStatus = (status = "") => {
-  const s = normalizeStatusText(status).replace(/[_-]+/g, " ");
-  if (!s || s.includes("no log")) return false;
-  return (
-    s.includes("early in") || s.includes("logged in") || s === "logged" || s.includes("clocked in early")
-  );
-};
-
 const buildEmployeeProcessReadySignature = (userId, scheduledItem, logs = [], dayKey = "") => {
   const uid = toText(userId);
   const startMs = resolveScheduledStartUtcMsForDayKey(scheduledItem, dayKey);
@@ -2491,10 +2483,10 @@ const buildEmployeeProcessReadySignature = (userId, scheduledItem, logs = [], da
 // live-agents badge and the Attendance page's "Live" status already use
 // (src/App.jsx isUserLiveNow) and have proven reliable on. The schedule fetch
 // (a second, independent external call) is only consulted for the Scheduled/
-// Day Off distinction and for the early-clock-in/duty-start comparison that
-// upgrades Logged in -> Available - if THAT call fails, we still know the
-// employee is live from logs and report Logged in, instead of losing the
-// signal entirely or misreporting Day Off/Unavailable.
+// Day Off distinction and for the duty-start comparison that upgrades
+// Logged in -> Available once their shift actually starts - if THAT call
+// fails, we still know the employee is live from logs and report Logged in,
+// instead of losing the signal entirely or misreporting Day Off/Unavailable.
 // activeBreakUserIds is intentionally NOT consulted here - the caller checks
 // it first and short-circuits, since it's a local Firestore query unaffected
 // by external API fetch outcomes.
@@ -2577,13 +2569,15 @@ const computeEmployeeProcessStatusForUser = (
   }
 
   const dutyStartMs = scheduleMatch?.startMs;
-  const clockInMs = toMillis(
-    pick(clockInLog, ["timeIn", "clockIn", "startedAt", "createdAt", "inAt"], null)
-  );
-  const clockedInEarly =
-    Number.isFinite(dutyStartMs) && Number.isFinite(clockInMs) && clockInMs < dutyStartMs;
-  const hasLoggedInStatus = statusTexts.some(isEmployeeProcessLoggedInStatus);
-  if (clockedInEarly || hasLoggedInStatus) {
+  // clockInLog already confirms they're logged in (checked above), so the only
+  // question left is whether duty start has actually arrived yet - no need to
+  // separately re-derive "clocked in early" from the log's own timestamp
+  // (that field's name varies across log shapes and was unreliable). If duty
+  // start is unknown (dutyStartMs not finite) we can't confirm it has passed,
+  // so stay on the conservative "Logged in" side unless the employee/admin
+  // explicitly applied the ready override above.
+  const beforeDutyStart = !Number.isFinite(dutyStartMs) || nowMs < dutyStartMs;
+  if (beforeDutyStart) {
     return {
       available: false,
       label: "Logged in",
