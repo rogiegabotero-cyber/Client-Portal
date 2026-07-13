@@ -72,13 +72,14 @@ import {
   updateBreakLogEntry,
 } from "./services/breakService";
 import {
+  getDefaultEmployeeProcessSettings,
+  refreshEmployeeProcessNow,
+  subscribeEmployeeProcessSettings,
+} from "./services/employeeProcessService";
+import {
   subscribeEmployeeProcessActionLogs,
 } from "./services/employeeProcessLogService";
-import {
-  getBusinessDayKey,
-  getStoredAttendanceResetTime,
-  setStoredAttendanceResetTime,
-} from "./utils/attendanceDate";
+import { getBusinessDayKey, getStoredAttendanceResetTime, setStoredAttendanceResetTime } from "./utils/attendanceDate";
 import {
   getScheduleTimeZone,
   resolveScheduledEndUtcMsForDayKey,
@@ -1246,6 +1247,9 @@ export default function App() {
   const [archivedNotifications, setArchivedNotifications] = useState([]);
   const [overBreakNotes, setOverBreakNotes] = useState([]);
   const [archivedOverBreakNotes, setArchivedOverBreakNotes] = useState([]);
+  const [employeeProcessSettings, setEmployeeProcessSettings] = useState(() =>
+    getDefaultEmployeeProcessSettings()
+  );
   const [employeeProcessActionLogs, setEmployeeProcessActionLogs] = useState([]);
   const [employeeProcessActionLogsLoading, setEmployeeProcessActionLogsLoading] = useState(false);
   const [employeeProcessActionLogsError, setEmployeeProcessActionLogsError] = useState("");
@@ -1254,6 +1258,7 @@ export default function App() {
   const seenToastIdsRef = useRef(new Set());
   const notificationToastSessionStartMsRef = useRef(0);
   const seenEmployeeProcessActionLogToastIdsRef = useRef(new Set());
+  const employeeProcessAutoRefreshSignatureRef = useRef("");
   const notificationsRef = useRef([]);
   const archivedNotificationsRef = useRef([]);
   const employeeProcessActionLogsRef = useRef([]);
@@ -1428,7 +1433,9 @@ export default function App() {
       notificationToastSessionStartMsRef.current = 0;
       seenToastIdsRef.current = new Set();
       seenEmployeeProcessActionLogToastIdsRef.current = new Set();
+      employeeProcessAutoRefreshSignatureRef.current = "";
       employeeProcessActionLogsRef.current = [];
+      setEmployeeProcessSettings(getDefaultEmployeeProcessSettings());
       setEmployeeProcessActionLogs((prev) => (prev.length ? [] : prev));
       setEmployeeProcessActionLogsLoading(false);
       setEmployeeProcessActionLogsError("");
@@ -1440,7 +1447,9 @@ export default function App() {
       notificationToastSessionStartMsRef.current = Date.now();
       seenToastIdsRef.current = new Set();
       seenEmployeeProcessActionLogToastIdsRef.current = new Set();
+      employeeProcessAutoRefreshSignatureRef.current = "";
       employeeProcessActionLogsRef.current = [];
+      setEmployeeProcessSettings(getDefaultEmployeeProcessSettings());
       setEmployeeProcessActionLogs((prev) => (prev.length ? [] : prev));
       setEmployeeProcessActionLogsLoading(false);
       setEmployeeProcessActionLogsError("");
@@ -2982,6 +2991,30 @@ export default function App() {
         setEmployeeProcessActionLogs([]);
         setEmployeeProcessActionLogsError(err?.message || "Unable to load activity log.");
         setEmployeeProcessActionLogsLoading(false);
+      }
+    );
+
+    return () => {
+      active = false;
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
+  }, [isAuthenticated, user]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) return undefined;
+
+    let active = true;
+    const unsubscribe = subscribeEmployeeProcessSettings(
+      (settings) => {
+        if (!active) return;
+        setEmployeeProcessSettings({
+          ...getDefaultEmployeeProcessSettings(),
+          ...(settings || {}),
+        });
+      },
+      () => {
+        if (!active) return;
+        setEmployeeProcessSettings(getDefaultEmployeeProcessSettings());
       }
     );
 
@@ -5087,6 +5120,52 @@ export default function App() {
           setNowMs(Date.now());
         }
 
+        const currentProcessAssignments = [
+          { type: "ib", userId: String(employeeProcessSettings?.ibUserId || "").trim() },
+          { type: "nl", userId: String(employeeProcessSettings?.nlUserId || "").trim() },
+        ].filter((item) => item.userId);
+
+        if (currentProcessAssignments.length > 0) {
+          const refreshCandidates = currentProcessAssignments
+            .map(({ type, userId }) => {
+              const userLogs = Array.isArray(resolvedTodayLogsByUserId?.[userId])
+                ? resolvedTodayLogsByUserId[userId]
+                : [];
+              const lastIn = latestOf(userLogs, isIn);
+              const lastOut = latestOf(userLogs, isClockedOutLog);
+              const isOnBreak = !!activeBreaksByUserId?.[userId];
+              const isLiveNow = isOnBreak || (!!lastIn && !(lastOut && lastOut.t >= lastIn.t));
+              const hasCompletedStatus = userLogs.some((log) =>
+                String(getAttendanceStatusText(log) || "").toLowerCase().includes("complete")
+              );
+
+              if (isLiveNow || (!hasCompletedStatus && !(lastOut && lastIn && lastOut.t >= lastIn.t))) {
+                return null;
+              }
+
+              return `${type}:${userId}:${lastOut?.t || "na"}`;
+            })
+            .filter(Boolean);
+
+          const refreshSignature = refreshCandidates.join("|");
+          if (!refreshSignature) {
+            employeeProcessAutoRefreshSignatureRef.current = "";
+          } else if (employeeProcessAutoRefreshSignatureRef.current !== refreshSignature) {
+            employeeProcessAutoRefreshSignatureRef.current = refreshSignature;
+            try {
+              await refreshEmployeeProcessNow({
+                source: "reloadTodayLogs",
+                reason: "completed-holder-left-live-agents",
+                triggerUserIds: refreshCandidates.map((entry) => String(entry).split(":")[1]).filter(Boolean),
+              });
+            } catch (refreshErr) {
+              console.error("Failed to refresh employee process after completed attendance change:", refreshErr);
+            }
+          }
+        } else {
+          employeeProcessAutoRefreshSignatureRef.current = "";
+        }
+
         return resolvedTodayLogsByUserId;
       } catch (err) {
         if (err?.name !== "AbortError") {
@@ -5105,6 +5184,9 @@ export default function App() {
       validEmployees,
       attendanceResetTime,
       businessTimeZone,
+      activeBreaksByUserId,
+      employeeProcessSettings?.ibUserId,
+      employeeProcessSettings?.nlUserId,
       loadingUsers,
       startDate,
       endDate,

@@ -1450,7 +1450,10 @@ exports.processBreakLogWrite = onDocumentWritten(
       ]);
 
       try {
-        await refreshEmployeeProcessStatusForUsers([userId]);
+        await recomputeAndAutoAdvanceEmployeeProcess({
+          nowMs: startedAtMs,
+          source: "processBreakLogWrite",
+        });
       } catch (err) {
         logger.error("Failed to refresh employee process status after break start.", {
           userId,
@@ -1491,7 +1494,10 @@ exports.processBreakLogWrite = onDocumentWritten(
       });
 
       try {
-        await refreshEmployeeProcessStatusForUsers([userId]);
+        await recomputeAndAutoAdvanceEmployeeProcess({
+          nowMs: endedAtMs,
+          source: "processBreakLogWrite",
+        });
       } catch (err) {
         logger.error("Failed to refresh employee process status after break end.", {
           userId,
@@ -2755,6 +2761,168 @@ const refreshEmployeeProcessStatusForUsers = async (userIds, { nowMs = Date.now(
   return statusPatch;
 };
 
+const autoAdvanceEmployeeProcessAssignments = async ({
+  settingsRef,
+  settings = {},
+  statusByUserId = {},
+  source = "refreshEmployeeProcessStatus",
+} = {}) => {
+  for (const { key, type, label, scope } of REFRESH_EMPLOYEE_PROCESS_KEY_ORDER) {
+    const currentUserId = toText(settings[key]);
+    const needsBootstrap = !currentUserId;
+    if (!needsBootstrap && statusByUserId?.[currentUserId]?.available !== false) continue;
+
+    try {
+      const result = await db.runTransaction(async (transaction) => {
+        const freshSnap = await transaction.get(settingsRef);
+        const fresh = freshSnap.exists ? freshSnap.data() || {} : {};
+        const freshCurrentUserId = toText(fresh[key]);
+        const freshRotationUserIds = Array.isArray(fresh.rotationUserIds)
+          ? fresh.rotationUserIds
+          : Array.isArray(settings.rotationUserIds)
+            ? settings.rotationUserIds
+            : [];
+        const isInbound = key === "ibUserId";
+        const pendingPurpleIbSkipUserIds =
+          isInbound && Array.isArray(fresh.purpleIbSkipUserIds) ? fresh.purpleIbSkipUserIds : [];
+
+        if (needsBootstrap) {
+          if (freshCurrentUserId) return null;
+          const firstAvailable = freshRotationUserIds.find(
+            (rowUserId) => statusByUserId?.[toText(rowUserId)]?.available === true
+          );
+          if (!firstAvailable) return null;
+
+          const updates = {
+            [key]: firstAvailable,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedByUserId: "system",
+            updatedByName: "Automatic rotation",
+          };
+          if (isInbound) {
+            updates.purpleIbSkipUserIds = removeOneEmployeeProcessUserIdOccurrence(
+              pendingPurpleIbSkipUserIds,
+              firstAvailable
+            );
+          }
+          transaction.set(settingsRef, updates, { merge: true });
+          return { previousUserId: "", nextUserId: firstAvailable, bootstrap: true };
+        }
+
+        if (freshCurrentUserId !== currentUserId) return null;
+
+        const unavailableUserIds = freshRotationUserIds.filter(
+          (rowUserId) => statusByUserId?.[toText(rowUserId)]?.available !== true
+        );
+
+        const { nextUserId, skippedUserIds } = getNextEmployeeProcessAssignment({
+          rotationUserIds: freshRotationUserIds,
+          currentUserId: freshCurrentUserId,
+          unavailableUserIds,
+          skipUserIds: pendingPurpleIbSkipUserIds,
+        });
+        if (!nextUserId || nextUserId === freshCurrentUserId) return null;
+
+        const updates = {
+          [key]: nextUserId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedByUserId: "system",
+          updatedByName: "Automatic rotation",
+        };
+        if (isInbound) {
+          updates.purpleIbSkipUserIds = skippedUserIds.length
+            ? skippedUserIds.reduce(
+                (ids, skippedId) => removeOneEmployeeProcessUserIdOccurrence(ids, skippedId),
+                pendingPurpleIbSkipUserIds
+              )
+            : pendingPurpleIbSkipUserIds;
+        }
+
+        transaction.set(settingsRef, updates, { merge: true });
+        return { previousUserId: freshCurrentUserId, nextUserId };
+      });
+
+      if (result) {
+        await db.collection(EMPLOYEE_PROCESS_ACTION_LOGS_COLLECTION).add({
+          employeeUserId: result.previousUserId,
+          employeeName: "",
+          employeeProfileImageUrl: "",
+          actionType: `auto_${type}`,
+          actionLabel: result.bootstrap
+            ? `Auto-assigned ${label} (initial)`
+            : `Auto-advanced ${label} (unavailable)`,
+          actionScope: scope,
+          relatedUserId: result.nextUserId,
+          relatedUserName: "",
+          createdByUserId: "system",
+          createdByName: "Automatic rotation",
+          source,
+          createdAtMs: Date.now(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (err) {
+      logger.error(`Failed to auto-advance ${type} rotation.`, { message: toText(err?.message), source });
+    }
+  }
+
+  try {
+    await db.runTransaction(async (transaction) => {
+      const freshSnap = await transaction.get(settingsRef);
+      const fresh = freshSnap.exists ? freshSnap.data() || {} : {};
+      const purpleIbUserId = toText(fresh.purpleIbUserId);
+      if (!purpleIbUserId) return;
+
+      const freshRotationUserIds = Array.isArray(fresh.rotationUserIds) ? fresh.rotationUserIds : [];
+      const freshIbUserId = toText(fresh.ibUserId);
+      const isInRotation = freshRotationUserIds.map(toText).includes(purpleIbUserId);
+      const isAvailable = statusByUserId?.[purpleIbUserId]?.available === true;
+
+      if (!isInRotation || !isAvailable || purpleIbUserId === freshIbUserId) {
+        transaction.set(
+          settingsRef,
+          {
+            purpleIbUserId: "",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedByUserId: "system",
+            updatedByName: "Automatic rotation",
+          },
+          { merge: true }
+        );
+      }
+    });
+  } catch (err) {
+    logger.error("Failed to clear stale Purple IB mark.", { message: toText(err?.message), source });
+  }
+};
+
+const recomputeAndAutoAdvanceEmployeeProcess = async ({
+  nowMs = Date.now(),
+  source = "refreshEmployeeProcessStatus",
+} = {}) => {
+  const settingsRef = db
+    .collection(EMPLOYEE_PROCESS_SETTINGS_COLLECTION)
+    .doc(EMPLOYEE_PROCESS_SETTINGS_DOC_ID);
+  const settingsSnap = await settingsRef.get();
+  const settings = settingsSnap.exists ? settingsSnap.data() || {} : {};
+  const rotationUserIds = Array.isArray(settings.rotationUserIds) ? settings.rotationUserIds : [];
+  if (!rotationUserIds.length) {
+    return { settingsRef, settings, statusByUserId: {} };
+  }
+
+  const statusByUserId = await computeEmployeeProcessStatus(rotationUserIds, { nowMs });
+  await persistEmployeeProcessStatus(statusByUserId);
+  await autoAdvanceEmployeeProcessAssignments({
+    settingsRef,
+    settings,
+    statusByUserId,
+    source,
+  });
+
+  return { settingsRef, settings, statusByUserId };
+};
+
 /* ---- rotation "next" picker (ported from getNextEmployeeProcessAssignment in
  * src/services/employeeProcessService.js) - keep both in sync. ---- */
 
@@ -2867,152 +3035,10 @@ exports.refreshEmployeeProcessStatus = onSchedule(
     secrets: [HYACINTH_API_KEY],
   },
   async () => {
-    const settingsRef = db
-      .collection(EMPLOYEE_PROCESS_SETTINGS_COLLECTION)
-      .doc(EMPLOYEE_PROCESS_SETTINGS_DOC_ID);
-    const settingsSnap = await settingsRef.get();
-    const settings = settingsSnap.exists ? settingsSnap.data() || {} : {};
-    const rotationUserIds = Array.isArray(settings.rotationUserIds) ? settings.rotationUserIds : [];
-    if (!rotationUserIds.length) return;
-
-    const nowMs = Date.now();
-    const statusByUserId = await computeEmployeeProcessStatus(rotationUserIds, { nowMs });
-    await persistEmployeeProcessStatus(statusByUserId);
-
-    for (const { key, type, label, scope } of REFRESH_EMPLOYEE_PROCESS_KEY_ORDER) {
-      const currentUserId = toText(settings[key]);
-      // Bootstrap: nobody assigned yet (brand new rotation, or everyone was
-      // unavailable and this was cleared) - assign the first available employee,
-      // mirroring the old client-side "!hasSavedIbUser" initial-assignment case.
-      const needsBootstrap = !currentUserId;
-      if (!needsBootstrap && statusByUserId?.[currentUserId]?.available !== false) continue;
-
-      try {
-        const result = await db.runTransaction(async (transaction) => {
-          const freshSnap = await transaction.get(settingsRef);
-          const fresh = freshSnap.exists ? freshSnap.data() || {} : {};
-          const freshCurrentUserId = toText(fresh[key]);
-          const freshRotationUserIds = Array.isArray(fresh.rotationUserIds)
-            ? fresh.rotationUserIds
-            : rotationUserIds;
-          const isInbound = key === "ibUserId";
-          const pendingPurpleIbSkipUserIds =
-            isInbound && Array.isArray(fresh.purpleIbSkipUserIds) ? fresh.purpleIbSkipUserIds : [];
-
-          if (needsBootstrap) {
-            if (freshCurrentUserId) return null; // someone else already assigned it
-            const firstAvailable = freshRotationUserIds.find(
-              (rowUserId) => statusByUserId?.[toText(rowUserId)]?.available === true
-            );
-            if (!firstAvailable) return null;
-
-            const updates = {
-              [key]: firstAvailable,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedByUserId: "system",
-              updatedByName: "Automatic rotation",
-            };
-            if (isInbound) {
-              updates.purpleIbSkipUserIds = removeOneEmployeeProcessUserIdOccurrence(
-                pendingPurpleIbSkipUserIds,
-                firstAvailable
-              );
-            }
-            transaction.set(settingsRef, updates, { merge: true });
-            return { previousUserId: "", nextUserId: firstAvailable, bootstrap: true };
-          }
-
-          // Someone else (a manual finish, or a previous tick) already moved this
-          // on - don't act on data that's no longer current.
-          if (freshCurrentUserId !== currentUserId) return null;
-
-          const unavailableUserIds = freshRotationUserIds.filter(
-            (rowUserId) => statusByUserId?.[toText(rowUserId)]?.available !== true
-          );
-
-          const { nextUserId, skippedUserIds } = getNextEmployeeProcessAssignment({
-            rotationUserIds: freshRotationUserIds,
-            currentUserId: freshCurrentUserId,
-            unavailableUserIds,
-            skipUserIds: pendingPurpleIbSkipUserIds,
-          });
-          if (!nextUserId || nextUserId === freshCurrentUserId) return null;
-
-          const updates = {
-            [key]: nextUserId,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedByUserId: "system",
-            updatedByName: "Automatic rotation",
-          };
-          if (isInbound) {
-            updates.purpleIbSkipUserIds = skippedUserIds.length
-              ? skippedUserIds.reduce(
-                  (ids, skippedId) => removeOneEmployeeProcessUserIdOccurrence(ids, skippedId),
-                  pendingPurpleIbSkipUserIds
-                )
-              : pendingPurpleIbSkipUserIds;
-          }
-
-          transaction.set(settingsRef, updates, { merge: true });
-          return { previousUserId: freshCurrentUserId, nextUserId };
-        });
-
-        if (result) {
-          await db.collection(EMPLOYEE_PROCESS_ACTION_LOGS_COLLECTION).add({
-            employeeUserId: result.previousUserId,
-            employeeName: "",
-            employeeProfileImageUrl: "",
-            actionType: `auto_${type}`,
-            actionLabel: result.bootstrap
-              ? `Auto-assigned ${label} (initial)`
-              : `Auto-advanced ${label} (unavailable)`,
-            actionScope: scope,
-            relatedUserId: result.nextUserId,
-            relatedUserName: "",
-            createdByUserId: "system",
-            createdByName: "Automatic rotation",
-            source: "refreshEmployeeProcessStatus",
-            createdAtMs: Date.now(),
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
-      } catch (err) {
-        logger.error(`Failed to auto-advance ${type} rotation.`, { message: toText(err?.message) });
-      }
-    }
-
-    // Mirrors the old client-side auto-clear: drop a stale Purple IB mark if
-    // that employee is no longer available, no longer in the rotation, or has
-    // since become the primary IB.
-    try {
-      await db.runTransaction(async (transaction) => {
-        const freshSnap = await transaction.get(settingsRef);
-        const fresh = freshSnap.exists ? freshSnap.data() || {} : {};
-        const purpleIbUserId = toText(fresh.purpleIbUserId);
-        if (!purpleIbUserId) return;
-
-        const freshRotationUserIds = Array.isArray(fresh.rotationUserIds) ? fresh.rotationUserIds : [];
-        const freshIbUserId = toText(fresh.ibUserId);
-        const isInRotation = freshRotationUserIds.map(toText).includes(purpleIbUserId);
-        const isAvailable = statusByUserId?.[purpleIbUserId]?.available === true;
-
-        if (!isInRotation || !isAvailable || purpleIbUserId === freshIbUserId) {
-          transaction.set(
-            settingsRef,
-            {
-              purpleIbUserId: "",
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedByUserId: "system",
-              updatedByName: "Automatic rotation",
-            },
-            { merge: true }
-          );
-        }
-      });
-    } catch (err) {
-      logger.error("Failed to clear stale Purple IB mark.", { message: toText(err?.message) });
-    }
+    await recomputeAndAutoAdvanceEmployeeProcess({
+      nowMs: Date.now(),
+      source: "refreshEmployeeProcessStatus",
+    });
   }
 );
 
@@ -3206,5 +3232,33 @@ exports.markEmployeeProcessReady = onCall(
     }
 
     return { success: true };
+  }
+);
+
+exports.refreshEmployeeProcessNow = onCall(
+  { region: "us-central1", invoker: "public", cors: true, secrets: [HYACINTH_API_KEY] },
+  async (request) => {
+    await resolveEmployeeProcessCaller(request);
+
+    const sourceSuffix = toText(request?.data?.source);
+    const reason = toText(request?.data?.reason);
+    const triggerUserIds = Array.from(
+      new Set(
+        (Array.isArray(request?.data?.triggerUserIds) ? request.data.triggerUserIds : [])
+          .map(toText)
+          .filter(Boolean)
+      )
+    );
+
+    await recomputeAndAutoAdvanceEmployeeProcess({
+      nowMs: Date.now(),
+      source: sourceSuffix ? `refreshEmployeeProcessNow:${sourceSuffix}` : "refreshEmployeeProcessNow",
+    });
+
+    return {
+      success: true,
+      reason,
+      triggerUserIds,
+    };
   }
 );

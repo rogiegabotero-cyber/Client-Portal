@@ -19,6 +19,7 @@ const STATUS_COLLECTION_NAME = "employee_process_status";
 const functions = getFunctions(app, "us-central1");
 const finishEmployeeProcessTurnCallable = httpsCallable(functions, "finishEmployeeProcessTurn");
 const markEmployeeProcessReadyCallable = httpsCallable(functions, "markEmployeeProcessReady");
+const refreshEmployeeProcessNowCallable = httpsCallable(functions, "refreshEmployeeProcessNow");
 
 export const getDefaultEmployeeProcessSettings = () => ({
   rotationUserIds: [],
@@ -218,6 +219,18 @@ export async function markEmployeeProcessReady({
     employeeName: String(employeeName || "").trim(),
     employeeProfileImageUrl: String(employeeProfileImageUrl || "").trim(),
     actingAsName: String(actingAsName || "").trim(),
+  });
+
+  return response?.data || { success: false };
+}
+
+export async function refreshEmployeeProcessNow({ source = "", reason = "", triggerUserIds = [] } = {}) {
+  const response = await refreshEmployeeProcessNowCallable({
+    source: String(source || "").trim(),
+    reason: String(reason || "").trim(),
+    triggerUserIds: (Array.isArray(triggerUserIds) ? triggerUserIds : [])
+      .map((userId) => String(userId || "").trim())
+      .filter(Boolean),
   });
 
   return response?.data || { success: false };
