@@ -96,8 +96,8 @@ import {
   subscribeEmployeeProcessStatuses,
 } from "../services/employeeProcessService";
 import {
+  archiveEmployeeProcessActionLogs,
   createEmployeeProcessActionLog,
-  deleteEmployeeProcessActionLog,
   subscribeEmployeeProcessActionLogs,
 } from "../services/employeeProcessLogService";
 
@@ -2584,6 +2584,9 @@ export default function EmployeeDashboard({
     setEmployeeProcessDeleteLogTarget(null);
   }, [employeeProcessDeleteLogBusy]);
 
+  // Moves the entry to the log archive instead of permanently deleting it -
+  // recoverable/manageable from the Control Panel's Activity Log archive
+  // view rather than gone for good.
   const confirmEmployeeProcessDeleteLog = useCallback(async () => {
     if (!canManageEmployeeProcessActionLogs || employeeProcessDeleteLogBusy) return;
     const logId = String(employeeProcessDeleteLogTarget?.id || "").trim();
@@ -2594,11 +2597,15 @@ export default function EmployeeDashboard({
 
     setEmployeeProcessDeleteLogBusy(true);
     try {
-      await deleteEmployeeProcessActionLog(logId);
+      await archiveEmployeeProcessActionLogs([employeeProcessDeleteLogTarget], {
+        archivedByUserId: viewerUserId,
+        archivedByName:
+          pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+      });
       setEmployeeProcessActionLogsError("");
       setEmployeeProcessDeleteLogTarget(null);
     } catch (err) {
-      setEmployeeProcessActionLogsError(err?.message || "Unable to delete inbound and new lead log entry.");
+      setEmployeeProcessActionLogsError(err?.message || "Unable to archive inbound and new lead log entry.");
     } finally {
       setEmployeeProcessDeleteLogBusy(false);
     }
@@ -2606,6 +2613,10 @@ export default function EmployeeDashboard({
     canManageEmployeeProcessActionLogs,
     employeeProcessDeleteLogBusy,
     employeeProcessDeleteLogTarget,
+    pageData?.currentUser?.name,
+    pageData?.user?.name,
+    pageData?.viewer?.name,
+    viewerUserId,
   ]);
 
   const employeeProcessActionUserId =
@@ -9102,8 +9113,8 @@ export default function EmployeeDashboard({
                                   className="employeeProcessLogDeleteBtn"
                                   onClick={(event) => openEmployeeProcessDeleteLogConfirm(event, log)}
                                   disabled={employeeProcessDeleteLogBusy}
-                                  aria-label={`Delete ${logActionLabel} log for ${logEmployeeName}`}
-                                  title="Delete log entry"
+                                  aria-label={`Archive ${logActionLabel} log for ${logEmployeeName}`}
+                                  title="Archive log entry"
                                 >
                                   <Trash2 size={13} aria-hidden="true" />
                                 </button>
@@ -10660,15 +10671,15 @@ export default function EmployeeDashboard({
 
           <ConfirmModal
             open={!!employeeProcessDeleteLogTarget}
-            title="Delete Log Entry?"
-            message={`Delete "${
+            title="Archive Log Entry?"
+            message={`Move "${
               employeeProcessDeleteLogTarget?.actionLabel || "this action"
             }" for ${
               employeeProcessDeleteLogTarget?.employeeName ||
               employeeProcessDeleteLogTarget?.createdByName ||
               "this employee"
-            }? This cannot be undone.`}
-            confirmText="Delete"
+            } to the log archive? It will no longer appear here, but stays recoverable from the Control Panel's archive view.`}
+            confirmText="Archive"
             cancelText="Cancel"
             tone="danger"
             busy={employeeProcessDeleteLogBusy}

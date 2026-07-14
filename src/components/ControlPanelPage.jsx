@@ -22,7 +22,11 @@ import {
   saveEmployeeProcessRotation,
   subscribeEmployeeProcessSettings,
 } from "../services/employeeProcessService";
-import { resetEmployeeProcessActionLogs } from "../services/employeeProcessLogService";
+import {
+  subscribeEmployeeProcessActionLogArchive,
+  subscribeEmployeeProcessActionLogs,
+} from "../services/employeeProcessLogService";
+import EmployeeProcessLogArchiveModal from "./EmployeeProcessLogArchiveModal";
 import { getDeviceTimeZone } from "../utils/common";
 import { auth, db } from "../firebase";
 import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
@@ -593,9 +597,11 @@ export default function ControlPanelPage({
   const [employeeProcessDraftIds, setEmployeeProcessDraftIds] = useState([]);
   const [employeeProcessLoading, setEmployeeProcessLoading] = useState(false);
   const [employeeProcessSaving, setEmployeeProcessSaving] = useState(false);
-  const [employeeProcessResettingLog, setEmployeeProcessResettingLog] = useState(false);
   const [employeeProcessMessage, setEmployeeProcessMessage] = useState("");
   const [employeeProcessError, setEmployeeProcessError] = useState("");
+  const [employeeProcessActionLogs, setEmployeeProcessActionLogs] = useState([]);
+  const [employeeProcessArchiveLogs, setEmployeeProcessArchiveLogs] = useState([]);
+  const [showEmployeeProcessLogArchiveModal, setShowEmployeeProcessLogArchiveModal] = useState(false);
   const [draggingEmployeeProcessId, setDraggingEmployeeProcessId] = useState("");
   const [localError, setLocalError] = useState("");
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
@@ -736,48 +742,59 @@ export default function ControlPanelPage({
     }
   };
 
-  const handleResetEmployeeProcessActiveLog = async () => {
-    if (employeeProcessResettingLog) return;
-
-    const confirmed =
-      typeof window === "undefined"
-        ? true
-        : window.confirm(
-            "Reset the Inbound & New Lead active log? This clears the visible log history and keeps the saved employee order."
-          );
-    if (!confirmed) return;
-
-    setEmployeeProcessResettingLog(true);
-    setEmployeeProcessError("");
-    setEmployeeProcessMessage("");
-
-    try {
-      const deletedCount = await resetEmployeeProcessActionLogs();
-      setEmployeeProcessMessage(
-        deletedCount > 0
-          ? `Reset active IB/NL log and cleared ${deletedCount} log item(s).`
-          : "Active IB/NL log is already empty."
-      );
-      onToast?.({
-        type: deletedCount > 0 ? "success" : "info",
-        title: deletedCount > 0 ? "Active Log Reset" : "No Active Logs",
-        message:
-          deletedCount > 0
-            ? `${deletedCount} inbound/new lead log item(s) cleared.`
-            : "There are no inbound/new lead log items to clear.",
-      });
-    } catch (err) {
-      const message = err?.message || "Failed to reset active IB/NL log.";
-      setEmployeeProcessError(message);
-      onToast?.({
-        type: "error",
-        title: "Reset Failed",
-        message,
-      });
-    } finally {
-      setEmployeeProcessResettingLog(false);
+  // Active/archive log lists are only subscribed while the admin actually has
+  // the Employee Process settings drawer open, same as the settings-loading
+  // pattern above - no reason to keep two extra Firestore listeners running
+  // for a panel nobody is looking at.
+  useEffect(() => {
+    if (settingsDrawerView !== SETTINGS_DRAWER_VIEWS.EMPLOYEE_PROCESS) {
+      setEmployeeProcessActionLogs([]);
+      return undefined;
     }
-  };
+
+    let active = true;
+    const unsubscribe = subscribeEmployeeProcessActionLogs(
+      { maxRows: 3000 },
+      (rows) => {
+        if (!active) return;
+        setEmployeeProcessActionLogs(Array.isArray(rows) ? rows : []);
+      },
+      () => {
+        if (!active) return;
+        setEmployeeProcessActionLogs([]);
+      }
+    );
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [settingsDrawerView]);
+
+  useEffect(() => {
+    if (settingsDrawerView !== SETTINGS_DRAWER_VIEWS.EMPLOYEE_PROCESS) {
+      setEmployeeProcessArchiveLogs([]);
+      return undefined;
+    }
+
+    let active = true;
+    const unsubscribe = subscribeEmployeeProcessActionLogArchive(
+      { maxRows: 3000 },
+      (rows) => {
+        if (!active) return;
+        setEmployeeProcessArchiveLogs(Array.isArray(rows) ? rows : []);
+      },
+      () => {
+        if (!active) return;
+        setEmployeeProcessArchiveLogs([]);
+      }
+    );
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [settingsDrawerView]);
 
   useEffect(() => {
     setResetTimeDraft(normalizeResetTime(attendanceResetTime));
@@ -3123,23 +3140,23 @@ export default function ControlPanelPage({
                         type="button"
                         className="control-panel-btn secondary"
                         onClick={() => resetEmployeeProcessDraft()}
-                        disabled={employeeProcessSaving || employeeProcessResettingLog}
+                        disabled={employeeProcessSaving}
                       >
                         Reset Draft
                       </button>
                       <button
                         type="button"
                         className="control-panel-btn danger"
-                        onClick={handleResetEmployeeProcessActiveLog}
-                        disabled={employeeProcessSaving || employeeProcessResettingLog}
+                        onClick={() => setShowEmployeeProcessLogArchiveModal(true)}
+                        disabled={employeeProcessSaving}
                       >
-                        {employeeProcessResettingLog ? "Resetting..." : "Reset Active Log"}
+                        Reset Active Log
                       </button>
                       <button
                         type="button"
                         className="control-panel-btn primary"
                         onClick={saveEmployeeProcessDraft}
-                        disabled={employeeProcessSaving || employeeProcessResettingLog}
+                        disabled={employeeProcessSaving}
                       >
                         {employeeProcessSaving ? "Saving..." : "Save Order"}
                       </button>
@@ -4181,6 +4198,18 @@ export default function ControlPanelPage({
           </div>
         </div>
       ) : null}
+
+      <EmployeeProcessLogArchiveModal
+        open={showEmployeeProcessLogArchiveModal}
+        onClose={() => setShowEmployeeProcessLogArchiveModal(false)}
+        activeLogs={employeeProcessActionLogs}
+        archiveLogs={employeeProcessArchiveLogs}
+        attendanceResetTime={attendanceResetTime}
+        businessTimeZone={businessTimeZone}
+        actingAsUserId={getPortalUserDocId(viewer)}
+        actingAsName={getUserDisplayLabel(viewer || {})}
+        onToast={onToast}
+      />
     </div>
   );
 }
