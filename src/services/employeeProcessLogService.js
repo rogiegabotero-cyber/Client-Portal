@@ -8,6 +8,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
   where,
   writeBatch,
 } from "firebase/firestore";
@@ -46,6 +47,15 @@ const toMs = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+// dedupeKey is for events that get detected passively by every open session
+// watching the same live data (break start/end, shift completion) rather
+// than fired once by a single user's button click - without it, two open
+// tabs/admins can each independently notice the same transition and each
+// write their own duplicate entry. Passing a dedupeKey (stable across every
+// session that could observe the same event, e.g. the break_logs doc id, or
+// `${userId}:${dayKey}` for a once-per-day event) targets a fixed document
+// id instead of creating a new one, so every session's write collapses onto
+// the same doc no matter how many of them fire.
 export async function createEmployeeProcessActionLog(payload = {}) {
   const employeeUserId = toText(payload.employeeUserId);
   if (!employeeUserId) throw new Error("Missing employeeUserId.");
@@ -69,6 +79,13 @@ export async function createEmployeeProcessActionLog(payload = {}) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
+
+  const dedupeKey = toText(payload.dedupeKey);
+  if (dedupeKey) {
+    const safeId = dedupeKey.replace(/\//g, "_");
+    await setDoc(doc(db, COLLECTION_NAME, safeId), docPayload);
+    return { id: safeId };
+  }
 
   return addDoc(collection(db, COLLECTION_NAME), docPayload);
 }

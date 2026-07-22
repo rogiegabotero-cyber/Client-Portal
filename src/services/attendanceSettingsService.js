@@ -1,17 +1,31 @@
+import { doc, getDoc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
+import { db } from "../firebase";
 import { normalizeResetTime } from "../utils/attendanceDate";
 import { getDeviceTimeZone, toText } from "../utils/common";
 
 const STORAGE_KEY = "hyacinth_attendance_settings_v2";
+// Same direct-client-write pattern as employee_process_settings (no Cloud
+// Function involved) - one shared doc so every admin's browser and the
+// backend's own hardcoded default (functions/index.js) agree on the same
+// business timezone, instead of each browser defaulting to its own device tz.
+const COLLECTION_NAME = "attendance_settings";
+const DOC_ID = "global";
+const settingsRef = () => doc(db, COLLECTION_NAME, DOC_ID);
 
 export const DISPLAY_TIME_ZONE_MODE_DEVICE = "device";
 export const DISPLAY_TIME_ZONE_MODE_FIXED = "fixed";
 export const DEFAULT_STORAGE_TIME_ZONE = "America/New_York";
 export const DEFAULT_DISPLAY_TIME_ZONE_FALLBACK = "America/Chicago";
 
+// Business day boundaries (schedule matching, IB/NL availability, "today" bucketing)
+// must be computed against one shared clock, not whichever timezone the viewing
+// admin's device happens to be in - a device-tz default causes IB/NL misbehavior
+// specifically near shift end times, when the viewer's local day has already
+// rolled over while the schedule (authored in the business's own zone) hasn't.
 const DEFAULT_SETTINGS = {
   resetTime: "05:00",
-  displayTimeZoneMode: DISPLAY_TIME_ZONE_MODE_DEVICE,
-  displayTimeZone: "",
+  displayTimeZoneMode: DISPLAY_TIME_ZONE_MODE_FIXED,
+  displayTimeZone: DEFAULT_DISPLAY_TIME_ZONE_FALLBACK,
   storageTimeZone: DEFAULT_STORAGE_TIME_ZONE,
 };
 
@@ -121,8 +135,47 @@ export function getAttendanceSettingsSync() {
   }
 }
 
+// Mirrors the last-known-good settings into localStorage, which is what
+// getAttendanceSettingsSync (and every resolveStorageTimeZone() caller that
+// needs a synchronous read) falls back to when Firestore is unreachable.
+function cacheSettingsLocally(next) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage errors (e.g. private browsing)
+  }
+}
+
 export async function getAttendanceSettings() {
+  try {
+    const snap = await getDoc(settingsRef());
+    if (snap.exists()) {
+      const next = normalizeSettings(snap.data());
+      cacheSettingsLocally(next);
+      return next;
+    }
+  } catch {
+    // offline / permission error - fall back to the local cache below
+  }
+
   return getAttendanceSettingsSync();
+}
+
+// Live equivalent of getAttendanceSettings - every open session picks up a
+// change the moment it's saved, instead of only on next load.
+export function subscribeAttendanceSettings(onChange, onError) {
+  return onSnapshot(
+    settingsRef(),
+    (snapshot) => {
+      const next = snapshot.exists() ? normalizeSettings(snapshot.data()) : normalizeSettings(DEFAULT_SETTINGS);
+      cacheSettingsLocally(next);
+      onChange?.(next);
+    },
+    (err) => {
+      onChange?.(getAttendanceSettingsSync());
+      onError?.(err);
+    }
+  );
 }
 
 export async function saveAttendanceSettings(settings = {}, audit = {}) {
@@ -131,7 +184,8 @@ export async function saveAttendanceSettings(settings = {}, audit = {}) {
 
   const payload = {
     ...next,
-    updatedAt: new Date().toISOString(),
+    updatedAt: serverTimestamp(),
+    updatedAtClientIso: new Date().toISOString(),
     updatedBy: {
       uid: audit?.uid || "",
       email: audit?.email || "",
@@ -140,7 +194,8 @@ export async function saveAttendanceSettings(settings = {}, audit = {}) {
     },
   };
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  await setDoc(settingsRef(), payload, { merge: true });
+  cacheSettingsLocally(next);
   return next;
 }
 

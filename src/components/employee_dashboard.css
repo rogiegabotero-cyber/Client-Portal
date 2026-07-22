@@ -395,6 +395,53 @@
   padding:0 3px;
 }
 
+.empAnnouncementBtn.hasAnnouncements{
+  border-color:rgba(91,0,8,.45);
+  animation:empAnnouncementPulse 1.4s ease-in-out infinite;
+}
+
+.empAnnouncementBtn.hasAnnouncements .empAnnouncementBtnIcon{
+  transform-origin:center;
+  animation:empAnnouncementShake 1.4s ease-in-out infinite;
+}
+
+@keyframes empAnnouncementPulse{
+  0%, 100%{
+    box-shadow:
+      0 0 0 1px rgba(91,0,8,.22),
+      0 0 8px rgba(91,0,8,.32);
+  }
+  50%{
+    box-shadow:
+      0 0 0 1px rgba(91,0,8,.4),
+      0 0 16px rgba(91,0,8,.55);
+  }
+}
+
+@keyframes empAnnouncementShake{
+  0%, 62%, 100%{
+    transform:rotate(0deg);
+  }
+  66%{
+    transform:rotate(-14deg);
+  }
+  70%{
+    transform:rotate(12deg);
+  }
+  74%{
+    transform:rotate(-10deg);
+  }
+  78%{
+    transform:rotate(8deg);
+  }
+  82%{
+    transform:rotate(-4deg);
+  }
+  86%{
+    transform:rotate(0deg);
+  }
+}
+
 .empTaskListBtnLabel{
   line-height:1;
 }
@@ -7612,6 +7659,18 @@
   background:linear-gradient(90deg, rgba(100,116,139,.08) 0%, rgba(100,116,139,.035) 58%, #ffffff 100%);
 }
 
+.employeeProcessLogItem.tone-break{
+  border-color:rgba(8,145,178,.16);
+  border-left:3px solid rgba(8,145,178,.32);
+  background:linear-gradient(90deg, rgba(8,145,178,.1) 0%, rgba(8,145,178,.04) 58%, #ffffff 100%);
+}
+
+.employeeProcessLogItem.tone-shiftComplete{
+  border-color:rgba(51,65,85,.16);
+  border-left:3px solid rgba(51,65,85,.32);
+  background:linear-gradient(90deg, rgba(51,65,85,.1) 0%, rgba(51,65,85,.04) 58%, #ffffff 100%);
+}
+
 .employeeProcessLogDeleteBtn{
   width:24px;
   height:24px;
@@ -7817,6 +7876,10 @@
 
 .employeeLeadFloatingBtn.isNl {
   background: linear-gradient(135deg, #b45309, #d97706);
+}
+
+.employeeLeadFloatingBtn.isReady {
+  background: linear-gradient(135deg, #047857, #059669);
 }
 
 .employeeLeadFloatingBtn:disabled {

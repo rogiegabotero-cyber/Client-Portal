@@ -1449,17 +1449,6 @@ exports.processBreakLogWrite = onDocumentWritten(
         enqueueBreakThresholdCheck(breakLogId, OVERBREAK_TRIGGER_MINUTES, startedAtMs),
       ]);
 
-      try {
-        await recomputeAndAutoAdvanceEmployeeProcess({
-          nowMs: startedAtMs,
-          source: "processBreakLogWrite",
-        });
-      } catch (err) {
-        logger.error("Failed to refresh employee process status after break start.", {
-          userId,
-          message: toText(err?.message),
-        });
-      }
       return;
     }
 
@@ -1492,18 +1481,6 @@ exports.processBreakLogWrite = onDocumentWritten(
         totalBreakMinutes,
         overBreakMinutes,
       });
-
-      try {
-        await recomputeAndAutoAdvanceEmployeeProcess({
-          nowMs: endedAtMs,
-          source: "processBreakLogWrite",
-        });
-      } catch (err) {
-        logger.error("Failed to refresh employee process status after break end.", {
-          userId,
-          message: toText(err?.message),
-        });
-      }
     }
   }
 );
@@ -3013,34 +2990,6 @@ const REFRESH_EMPLOYEE_PROCESS_KEY_ORDER = [
   { key: "ibUserId", type: "ib", label: "Inbound", scope: "inbound" },
   { key: "nlUserId", type: "nl", label: "New Lead", scope: "new_lead" },
 ];
-
-// Primary path for catching a now-unavailable IB/NL holder and advancing the
-// rotation - replaces the old client-side auto-reassignment useEffect. Runs on
-// a schedule (rather than only reacting to writes) because some transitions
-// are purely time-based (e.g. a duty-start boundary passing) with no Firestore
-// write to trigger off of. Runs at :00/:05/:30/:55 past each hour instead of
-// every minute - cuts the external attendance API polling (and its cost) by
-// ~93% while still catching duty-start/clock-out/day-off changes within 5-25
-// minutes. Break start/end, Finish IB/NL, and Mark Ready all still refresh
-// their own status immediately and don't wait on this schedule at all.
-exports.refreshEmployeeProcessStatus = onSchedule(
-  {
-    region: "us-central1",
-    schedule: "0,5,30,55 * * * *",
-    timeZone: "America/Chicago",
-    retryCount: 0,
-    maxInstances: 1,
-    memory: "256MiB",
-    timeoutSeconds: 120,
-    secrets: [HYACINTH_API_KEY],
-  },
-  async () => {
-    await recomputeAndAutoAdvanceEmployeeProcess({
-      nowMs: Date.now(),
-      source: "refreshEmployeeProcessStatus",
-    });
-  }
-);
 
 // Replaces the client's direct Firestore write in handleAdvanceEmployeeProcess.
 // Recomputes fresh status for the whole rotation before deciding "next" (so a

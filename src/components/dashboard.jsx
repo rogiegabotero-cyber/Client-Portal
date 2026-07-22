@@ -19,6 +19,7 @@ import {
   resolveScheduledEndUtcMsForDayKey,
   resolveScheduledStartUtcMsForDayKey,
 } from "../utils/scheduleTime";
+import { resolveDailyStatus } from "../utils/dailyAttendanceStatus";
 import {
   ResponsiveContainer,
   BarChart,
@@ -584,94 +585,11 @@ const formatScheduleRangeLabelForDay = (
 };
 
 /* ------------------------ status logic ------------------------ */
-const resolveDailyStatus = ({
-  userId,
-  dayKey,
-  dayLogs,
-  schedulesByUserId,
-  nowMs,
-  endDate,
-  businessTimeZone = "America/Chicago",
-}) => {
-  const logs = Array.isArray(dayLogs) ? dayLogs : [];
-  const hasLogs = logs.length > 0;
-
-  if (hasLogs) {
-    const statuses = logs.map((log) => getRawAttendanceStatus(log)).filter(Boolean);
-
-    if (statuses.some((s) => s.includes("no schedule"))) {
-      return "No Schedule";
-    }
-    if (statuses.some((s) => s === "ncns" || s.includes("no show"))) {
-      return "No Show";
-    }
-    if (statuses.some((s) => s.includes("absent"))) {
-      return "Absent";
-    }
-    if (statuses.some((s) => s.includes("pto") || s.includes("leave") || s.includes("vacation"))) {
-      return "PTO";
-    }
-    if (statuses.some((s) => s.includes("holiday"))) {
-      return "Holiday";
-    }
-    if (statuses.some((s) => s.includes("day off") || s.includes("rest day"))) {
-      return "Day Off";
-    }
-
-    const hasOut = logs.some((l) => isClockedOutLog(l));
-    const hasIn = logs.some((l) => isIn(l));
-
-    if (hasOut) return "Completed";
-    if (statuses.some((s) => s.includes("completed") || s.includes("complete"))) return "Completed";
-    if (statuses.some((s) => s.includes("on break"))) return "On Break";
-    if (hasIn || statuses.some((s) => s.includes("live"))) return "Live";
-    if (
-      statuses.some(
-        (s) =>
-          s.includes("present") ||
-          s.includes("on time") ||
-          s.includes("on-time") ||
-          s.includes("ontime") ||
-          s.includes("early") ||
-          s.includes("late")
-      )
-    ) {
-      return "Live";
-    }
-
-    if (statuses.some((s) => s.includes("scheduled"))) {
-      return "Scheduled";
-    }
-
-    return "No Log";
-  }
-
-  const schedArr = schedulesByUserId?.[String(userId)];
-  const hasAnySchedule = Array.isArray(schedArr) && schedArr.length > 0;
-  if (!hasAnySchedule) return "No Schedule";
-
-  const todayKey = String(endDate || "");
-  const isLiveToday = dayKey === todayKey;
-
-  // Live "today" must be resolved per-schedule-row timezone against the actual current
-  // instant, since the viewing device's own timezone may differ from the row's.
-  const liveMatch = isLiveToday ? resolveScheduleItemForInstant(schedArr, nowMs) : null;
-  const schedItem = isLiveToday
-    ? liveMatch?.scheduleItem || null
-    : getScheduleItemForDay(schedulesByUserId, userId, dayKey);
-  if (!schedItem) return "Day Off";
-
-  const startMs = isLiveToday
-    ? liveMatch.startMs
-    : getScheduledStartUtcMsForDayKey(schedItem, dayKey, businessTimeZone);
-  const GRACE_MS = 2 * 60 * 60 * 1000;
-  if (!Number.isFinite(startMs)) return "Scheduled";
-
-  const endOfDayMs = new Date(`${dayKey}T23:59:59.999Z`).getTime();
-  const referenceNow = isLiveToday ? nowMs : endOfDayMs;
-
-  return referenceNow >= startMs + GRACE_MS ? "No Show" : "Scheduled";
-};
+// resolveDailyStatus itself now lives in ../utils/dailyAttendanceStatus so the
+// Inbound/New Lead panel can import the exact same implementation - see the
+// import above. getRawAttendanceStatus/getScheduleItemForDay/etc. below stay
+// local since they're also used elsewhere in this file independent of
+// resolveDailyStatus.
 
 /* ------------------------ payable hours helpers ------------------------ */
 const computeWorkedMinutesForDay = (logs, liveNowMs = null, { applyDiff = true } = {}) => {

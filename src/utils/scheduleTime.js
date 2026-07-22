@@ -368,7 +368,13 @@ export const resolveScheduleItemForInstant = (scheduleList, nowMs = Date.now()) 
   const list = Array.isArray(scheduleList) ? scheduleList : [];
   if (!list.length || !Number.isFinite(nowMs)) return null;
 
+  // An employee can have more than one schedule row for the same weekday
+  // (e.g. a split shift - a morning block and a separate evening block).
+  // Collect every row that matches this weekday instead of stopping at the
+  // first one, then pick whichever window actually covers "now" so the IB/NL
+  // panel and Team Attendance grid key off the shift that's really running.
   const findMatch = (referenceMs) => {
+    const candidates = [];
     for (const item of list) {
       const tz = getScheduleTimeZone(item);
       const { dayKey, weekday } = getZonedDateKeyAndWeekday(referenceMs, tz);
@@ -377,9 +383,29 @@ export const resolveScheduleItemForInstant = (scheduleList, nowMs = Date.now()) 
 
       const startMs = resolveScheduledStartUtcMsForDayKey(item, dayKey);
       const endMs = resolveScheduledEndUtcMsForDayKey(item, dayKey);
-      return { scheduleItem: item, dayKey, startMs, endMs };
+      candidates.push({ scheduleItem: item, dayKey, startMs, endMs });
     }
-    return null;
+
+    if (!candidates.length) return null;
+    if (candidates.length === 1) return candidates[0];
+
+    const active = candidates.find(
+      (c) => Number.isFinite(c.startMs) && Number.isFinite(c.endMs) && nowMs >= c.startMs && nowMs <= c.endMs
+    );
+    if (active) return active;
+
+    const upcoming = candidates
+      .filter((c) => Number.isFinite(c.startMs) && c.startMs > nowMs)
+      .sort((a, b) => a.startMs - b.startMs)[0];
+    if (upcoming) return upcoming;
+
+    return candidates
+      .slice()
+      .sort(
+        (a, b) =>
+          (Number.isFinite(b.startMs) ? b.startMs : -Infinity) -
+          (Number.isFinite(a.startMs) ? a.startMs : -Infinity)
+      )[0];
   };
 
   // Prefer yesterday's row (in that row's own zone) if it's an overnight shift still running now.

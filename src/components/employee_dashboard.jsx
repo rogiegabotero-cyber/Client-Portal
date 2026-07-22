@@ -70,7 +70,6 @@ import {
   resolveScheduledDurationMinutes,
 } from "../utils/scheduleTime";
 import {
-  getDeviceTimeZone,
   getDisplayName,
   getProfileImageUrl,
   getUserId,
@@ -78,6 +77,7 @@ import {
   toMillis,
   toText,
 } from "../utils/common";
+import { resolveDailyStatus } from "../utils/dailyAttendanceStatus";
 import {
   CALL_ACTIVITY_TYPES,
   calculateDurationMinutes,
@@ -87,13 +87,14 @@ import {
   subscribeCallActivityLogs,
 } from "../services/callActivityService";
 import {
+  autoAdvanceEmployeeProcessAssignment,
   finishEmployeeProcessTurn,
   getDefaultEmployeeProcessSettings,
   getNextEmployeeProcessUserId,
-  markEmployeeProcessReady,
   setEmployeeProcessAssignments,
+  setEmployeeProcessReadyOverride,
+  subscribeEmployeeProcessReadyOverrides,
   subscribeEmployeeProcessSettings,
-  subscribeEmployeeProcessStatuses,
 } from "../services/employeeProcessService";
 import {
   archiveEmployeeProcessActionLogs,
@@ -112,6 +113,16 @@ const normalize = (value = "") => String(value || "").trim().toLowerCase();
 const EMPLOYEE_PROCESS_LOCAL_STORAGE_KEY = "hyacinth_employee_process_assignment_v1";
 const EMPLOYEE_PROCESS_GUIDE_TEXT =
   "IB and NL start on the first available employee, move separately when finished, and skip break, day off, completed, or unavailable rows. Purple IB is one optional secondary IB for the next available employee. Each Purple IB mark adds one pending Blue IB skip, even if the Purple IB mark is removed.";
+// Maps resolveDailyStatus's exact attendance-status labels to this panel's
+// existing tone classes (see employee_dashboard.css). Anything not listed
+// (No Show/No Schedule/No Log/Absent/PTO/Holiday) falls back to "unavailable".
+const DAILY_STATUS_TONE_BY_LABEL = {
+  Live: "available",
+  "On Break": "break",
+  Completed: "completed",
+  "Day Off": "dayoff",
+  Scheduled: "scheduled",
+};
 
 const getEmployeeProcessLogTone = (log = {}) => {
   const scope = normalize(log?.actionScope);
@@ -120,6 +131,8 @@ const getEmployeeProcessLogTone = (log = {}) => {
   const text = `${scope} ${type} ${label}`;
   if (text.includes("new_lead") || text.includes("new lead") || text.includes("nl")) return "nl";
   if (text.includes("secondary_ib") || text.includes("purple")) return "secondaryIb";
+  if (text.includes("break")) return "break";
+  if (text.includes("shift_complete") || text.includes("completed shift")) return "shiftComplete";
   if (text.includes("ready")) return "ready";
   if (text.includes("inbound") || text.includes("ib")) return "ib";
   return "neutral";
@@ -298,64 +311,10 @@ const formatTaskDeadlineLabel = (task = {}, businessTimeZone = "America/Chicago"
 };
 
 const pickTs = (log) => pick(log, ["timestamp", "createdAt", "time"], "");
-const pickOutTs = (log) =>
-  pick(
-    log,
-    [
-      "timeOut",
-      "time_out",
-      "clockOut",
-      "clock_out",
-      "timestampOut",
-      "outTimestamp",
-      "timeout",
-      "outTime",
-      "endTime",
-      "checkedOutAt",
-      "timeEnd",
-      "clockedOutAt",
-    ],
-    ""
-  );
 
 const tsMs = (ts) => {
   const t = new Date(ts).getTime();
   return Number.isFinite(t) ? t : NaN;
-};
-
-const isAttendanceInLog = (log) => {
-  const type = normalize(pick(log, ["type", "logType", "eventType"], ""));
-  return type.includes("in") || type.includes("clockin") || type.includes("timein");
-};
-
-const hasAttendanceTimeOut = (log) => {
-  const outTs = pickOutTs(log || {});
-  return !!outTs && Number.isFinite(tsMs(outTs));
-};
-
-const isAttendanceClockedOutLog = (log) => {
-  const type = normalize(pick(log, ["type", "logType", "eventType"], ""));
-  return type.includes("out") || type.includes("clockout") || type.includes("timeout") || type.includes("checkout") || hasAttendanceTimeOut(log);
-};
-
-const getAttendanceEventMs = (log) => {
-  const ts = isAttendanceClockedOutLog(log) ? pickOutTs(log) || pickTs(log) : pickTs(log) || pickOutTs(log);
-  return ts ? tsMs(ts) : NaN;
-};
-
-const latestAttendanceLog = (logs, predicate) => {
-  let best = null;
-  let bestMs = -Infinity;
-
-  for (const log of Array.isArray(logs) ? logs : []) {
-    if (!predicate(log)) continue;
-    const eventMs = getAttendanceEventMs(log);
-    if (!Number.isFinite(eventMs) || eventMs <= bestMs) continue;
-    best = log;
-    bestMs = eventMs;
-  }
-
-  return best ? { log: best, t: bestMs } : null;
 };
 
 const getPartsInTimeZone = (dateLike, timeZone) => {
@@ -453,30 +412,6 @@ const formatUtcIsoToHHMM = (utcIso, timeZone) => {
     minute: "2-digit",
     hour12: false,
   }).format(d);
-};
-
-const formatDutyClockTime = (ms, timeZone) => {
-  if (!Number.isFinite(ms)) return "";
-  return new Date(ms).toLocaleTimeString(undefined, {
-    timeZone: String(timeZone || "").trim() || "America/Chicago",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-};
-
-// Duty start/end are already correct absolute instants (resolved from the
-// schedule's own timezone). For display, always render them in the viewing
-// device's timezone so the label matches what the viewer expects to see -
-// when the schedule's own timezone happens to match the device's, this is a
-// no-op; when it differs (e.g. schedule authored in Chicago, device in New
-// York), the times shown here are the converted, device-local equivalent.
-const formatDutyTimeRangeLabel = (startMs, endMs) => {
-  const timeZone = getDeviceTimeZone();
-  const start = formatDutyClockTime(startMs, timeZone);
-  const end = formatDutyClockTime(endMs, timeZone);
-  if (start && end) return `${start} - ${end}`;
-  if (start) return `Starts ${start}`;
-  return "";
 };
 
 const dayKeyFromMsInZone = (ms, timeZone) => {
@@ -1491,6 +1426,8 @@ export default function EmployeeDashboard({
   assignments = [],
   schedulesByUserId = {},
   logsByUserId = {},
+  loadingSchedules = false,
+  loadingTodayLogs = false,
   loadingAssignments = false,
   assignmentsError = "",
   onFetchFullHistory,
@@ -1498,6 +1435,7 @@ export default function EmployeeDashboard({
   loadingHistoryByUserId = {},
   historyErrorByUserId = {},
   nowMs,
+  onScheduleReached,
   endDate,
   businessTimeZone = "America/Chicago",
   selectedEmployeeId,
@@ -1512,6 +1450,9 @@ export default function EmployeeDashboard({
   const requestedHistoryRef = useRef(new Set());
   const breakLogsCacheRef = useRef({});
   const notepadMetaLoadedRef = useRef(false);
+  const employeeProcessAutoAdvanceAttemptRef = useRef({ ib: "", nl: "" });
+  const employeeProcessCompletionSnapshotRef = useRef({ initialized: false, toneByUserId: {} });
+  const employeeProcessBreakSnapshotRef = useRef({ initialized: false, breakLogIdByUserId: {} });
 
   const employeeIds = useMemo(
     () =>
@@ -1573,9 +1514,9 @@ export default function EmployeeDashboard({
   const [employeeProcessSettings, setEmployeeProcessSettings] = useState(() =>
     readEmployeeProcessLocalSettings()
   );
-  const [employeeProcessStatusByUserId, setEmployeeProcessStatusByUserId] = useState({});
   const [employeeProcessLoading, setEmployeeProcessLoading] = useState(false);
   const [employeeProcessSettingsLoaded, setEmployeeProcessSettingsLoaded] = useState(false);
+  const [employeeProcessReadyOverridesByUserId, setEmployeeProcessReadyOverridesByUserId] = useState({});
   const [employeeProcessError, setEmployeeProcessError] = useState("");
   const [employeeProcessBusy, setEmployeeProcessBusy] = useState("");
   const [employeeProcessConfirmAction, setEmployeeProcessConfirmAction] = useState(null);
@@ -1919,22 +1860,21 @@ export default function EmployeeDashboard({
     };
   }, []);
 
-  // Computed status (Available/Logged in/Scheduled/Day Off/Completed/On break)
-  // lives in its own per-employee collection now, separate from rotation
-  // config - see functions/index.js EMPLOYEE_PROCESS_STATUS_COLLECTION. This
-  // subscription hands back the full { [userId]: statusDoc } map on every
-  // change, same as the old employeeProcessSettings.statusByUserId field did.
+  // The "I'm Ready" override (early-logged-in employee manually flipped to
+  // available before the schedule's start time) is the one piece of per-
+  // employee IB/NL state still stored server-side (Firestore, no Cloud
+  // Function) - everything else is derived live in resolveEmployeeProcessStatus.
   useEffect(() => {
     let active = true;
 
-    const unsubscribe = subscribeEmployeeProcessStatuses(
-      (statusByUserId) => {
+    const unsubscribe = subscribeEmployeeProcessReadyOverrides(
+      (overrideByUserId) => {
         if (!active) return;
-        setEmployeeProcessStatusByUserId(statusByUserId || {});
+        setEmployeeProcessReadyOverridesByUserId(overrideByUserId || {});
       },
       () => {
         if (!active) return;
-        setEmployeeProcessStatusByUserId({});
+        setEmployeeProcessReadyOverridesByUserId({});
       }
     );
 
@@ -1980,91 +1920,75 @@ export default function EmployeeDashboard({
     };
   }, []);
 
-  // Status (Available/Logged in/Scheduled/Day Off/Completed/On break) is now
-  // computed server-side (functions/index.js computeEmployeeProcessStatus) from
-  // canonical schedule/attendance/break data, and pushed here via the live
-  // employee_process_status collection subscription - every session sees the
-  // same answer at the same time, instead of each tab computing its own from a
-  // mix of live and locally-polled data. This is now just a lookup plus local
-  // formatting of the duty-time label in the viewer's own device timezone.
+  // Status here starts from exactly the same "today's attendance status" the
+  // dashboard's Team Attendance grid shows for this employee (shared
+  // resolveDailyStatus, see ../utils/dailyAttendanceStatus). On top of that,
+  // IB/NL adds one hold-back rule the Team Attendance grid doesn't have: an
+  // employee who clocked in before their scheduled start time shows "Logged
+  // in" (unavailable) instead of "Live" until either the schedule's start
+  // time arrives, or an "I'm Ready" override is recorded for this exact
+  // day/shift. No schedule today means there's nothing to hold back for, so
+  // the gate is already cleared in that case.
   const resolveEmployeeProcessStatus = useCallback(
     (userId) => {
       const uid = String(userId || "").trim();
       if (!uid) return { available: false, label: "Unavailable", tone: "unavailable" };
 
-      const status = employeeProcessStatusByUserId?.[uid];
-      if (!status) {
-        return { available: false, label: "Loading", tone: "unavailable" };
-      }
+      const dayLogs = Array.isArray(logsByUserId?.[uid]) ? logsByUserId[uid] : [];
+      const baseLabel = resolveDailyStatus({
+        userId: uid,
+        dayKey: String(endDate || ""),
+        dayLogs,
+        schedulesByUserId,
+        nowMs,
+        endDate,
+        businessTimeZone,
+        isOnBreak: !!activeBreaksByUserId?.[uid],
+      });
 
-      const localLogs = Array.isArray(logsByUserId?.[uid]) ? logsByUserId[uid] : [];
-      const localIsOnBreak = !!activeBreaksByUserId?.[uid];
-      const lastIn = latestAttendanceLog(localLogs, isAttendanceInLog);
-      const lastOut = latestAttendanceLog(localLogs, isAttendanceClockedOutLog);
-      const localIsLive = !!lastIn && (!lastOut || lastOut.t < lastIn.t || localIsOnBreak);
-      const localScheduleMatch = resolveScheduleItemForInstant(schedulesByUserId?.[uid], nowMs);
-      const localScheduleHasStarted = !!localScheduleMatch?.scheduleItem;
-
-      if ((status.tone || "") === "scheduled" && localIsLive) {
-        if (localIsOnBreak) {
-          return {
-            available: false,
-            label: "On Break",
-            tone: "break",
-            canReady: false,
-            autoAdvanceUnavailable: true,
-            readySignature: status.readySignature || "",
-            isReadyOverride: !!status.isReadyOverride,
-            scheduleTimeLabel: formatDutyTimeRangeLabel(
-              status.startMs ?? localScheduleMatch?.startMs,
-              status.endMs ?? localScheduleMatch?.endMs
-            ),
-          };
-        }
-
-        if (localScheduleHasStarted) {
-          return {
-            available: true,
-            label: "Available",
-            tone: "available",
-            canReady: false,
-            autoAdvanceUnavailable: !!status.autoAdvanceUnavailable,
-            readySignature: status.readySignature || "",
-            isReadyOverride: !!status.isReadyOverride,
-            scheduleTimeLabel: formatDutyTimeRangeLabel(
-              status.startMs ?? localScheduleMatch?.startMs,
-              status.endMs ?? localScheduleMatch?.endMs
-            ),
-          };
-        }
-
+      if (baseLabel !== "Live") {
         return {
           available: false,
-          label: "Logged in",
-          tone: "loggedin",
-          canReady: true,
-          autoAdvanceUnavailable: !!status.autoAdvanceUnavailable,
-          readySignature: status.readySignature || "",
-          isReadyOverride: !!status.isReadyOverride,
-          scheduleTimeLabel: formatDutyTimeRangeLabel(
-            status.startMs ?? localScheduleMatch?.startMs,
-            status.endMs ?? localScheduleMatch?.endMs
-          ),
+          label: baseLabel,
+          tone: DAILY_STATUS_TONE_BY_LABEL[baseLabel] || "unavailable",
+          canReady: false,
         };
       }
 
+      const scheduleMatch = resolveScheduleItemForInstant(schedulesByUserId?.[uid], nowMs);
+      const scheduleStartMs = scheduleMatch?.startMs;
+      const scheduleGateCleared =
+        !scheduleMatch?.scheduleItem || !Number.isFinite(scheduleStartMs) || nowMs >= scheduleStartMs;
+
+      // Ties an "I'm Ready" mark to this exact day/shift so a stale mark from
+      // a previous day or schedule window is ignored automatically.
+      const readySignature = `${scheduleMatch?.dayKey || getDateKey(new Date(nowMs))}:${scheduleStartMs || "none"}`;
+      const readyOverride = employeeProcessReadyOverridesByUserId?.[uid];
+      const isReadyOverride = !!readyOverride?.ready && readyOverride.signature === readySignature;
+
+      if (scheduleGateCleared || isReadyOverride) {
+        return { available: true, label: "Live", tone: "available", canReady: false, readySignature, isReadyOverride };
+      }
+
       return {
-        available: !!status.available,
-        label: status.label || "Unavailable",
-        tone: status.tone || "unavailable",
-        canReady: !!status.canReady,
-        autoAdvanceUnavailable: !!status.autoAdvanceUnavailable,
-        readySignature: status.readySignature || "",
-        isReadyOverride: !!status.isReadyOverride,
-        scheduleTimeLabel: formatDutyTimeRangeLabel(status.startMs, status.endMs),
+        available: false,
+        label: "Logged in",
+        tone: "loggedin",
+        canReady: true,
+        readySignature,
+        isReadyOverride,
+        scheduleStartMs,
       };
     },
-    [activeBreaksByUserId, employeeProcessStatusByUserId, logsByUserId, nowMs, schedulesByUserId]
+    [
+      activeBreaksByUserId,
+      businessTimeZone,
+      employeeProcessReadyOverridesByUserId,
+      endDate,
+      logsByUserId,
+      nowMs,
+      schedulesByUserId,
+    ]
   );
 
   const employeeProcessRows = useMemo(() => {
@@ -2096,11 +2020,10 @@ export default function EmployeeDashboard({
           statusLabel: status.label,
           statusTone: status.tone,
           isAvailable: !!status.available,
-          canAutoAdvanceProcess: !!status.autoAdvanceUnavailable,
           canReady: !!status.canReady,
           readySignature: status.readySignature || "",
           isReadyOverride: !!status.isReadyOverride,
-          scheduleTimeLabel: status.scheduleTimeLabel || "",
+          scheduleStartMs: status.scheduleStartMs,
         };
       });
   }, [employeeProcessSettings?.rotationUserIds, employees, resolveEmployeeProcessStatus]);
@@ -2131,11 +2054,10 @@ export default function EmployeeDashboard({
         .filter(Boolean),
     [employeeProcessSettings?.purpleIbSkipUserIds]
   );
-  // Whether there IS a saved assignment at all. Auto-advancing away from an
-  // unavailable holder (and the initial bootstrap assignment) now happens
-  // server-side in functions/index.js's refreshEmployeeProcessStatus, using the
-  // same canonical statusByUserId this component reads - this is just used for
-  // display fallback (effectiveIbUserId/effectiveNlUserId) while that catches up.
+  // Whether there IS a saved assignment at all. The effect below is what
+  // actually writes the auto-advance/bootstrap/clear decision to Firestore;
+  // this is just an instant display fallback for the brief window between an
+  // unavailable holder showing up here and that write landing.
   const hasSavedIbUser = !!savedIbUserId;
   const hasSavedNlUser = !!savedNlUserId;
   const effectiveIbUserId = hasSavedIbUser
@@ -2144,6 +2066,221 @@ export default function EmployeeDashboard({
   const effectiveNlUserId = hasSavedNlUser
     ? savedNlUserId
     : firstAvailableProcessUserId;
+
+  // Client-side equivalent of the old scheduled Cloud Function: the moment
+  // the current IB/NL holder isn't in the available set (including "no
+  // holder set yet"), move the mark to the next available employee; when
+  // nobody in the rotation is available, clear the mark instead of leaving
+  // it pointing at someone who can't take the call. This used to wait out a
+  // grace period first, added to guard against a holder getting bumped by a
+  // momentary data blip - but the actual cause of that turned out to be two
+  // now-removed Cloud Functions (a scheduled tick and a break-write trigger)
+  // running their own conflicting auto-advance in parallel, not a data blip.
+  // With those gone, this reacts immediately again.
+  // employeeProcessAutoAdvanceAttemptRef just stops this from re-firing the
+  // same transaction on every render while waiting for the settings
+  // subscription to reflect our own write.
+  useEffect(() => {
+    if (!employeeProcessSettingsLoaded || employeeProcessLoading || employeeProcessError) return undefined;
+    if (!employeeProcessRows.length) return undefined;
+    // Schedules/logs load from a separate, slower external API than the
+    // rotation settings doc above (see reloadSchedules/reloadTodayLogs in
+    // App.jsx) - right after any reload (a single employee's own refresh
+    // included, since this same effect runs on every session that has "My
+    // Workspace" open), there's a window where every row still reads as
+    // unavailable simply because its attendance data hasn't arrived yet, not
+    // because anyone actually became unavailable. Treating that window the
+    // same as a confirmed empty rotation clears the holder and re-bootstraps
+    // from the front of the configured list once data lands, silently moving
+    // IB/NL to whoever's first in that list instead of the real holder. Wait
+    // for both fetches to finish at least once before making any advance
+    // decision off employeeProcessRows.
+    if (loadingSchedules || loadingTodayLogs) return undefined;
+
+    const availableUserIds = employeeProcessRows.filter((row) => row.isAvailable).map((row) => row.userId);
+    const unavailableUserIds = employeeProcessRows.filter((row) => !row.isAvailable).map((row) => row.userId);
+    let cancelled = false;
+
+    const advance = async (type, currentUserId) => {
+      const isCurrentAvailable = !!currentUserId && availableUserIds.includes(currentUserId);
+      if (isCurrentAvailable) return;
+      if (!currentUserId && !availableUserIds.length) return;
+
+      // Keyed on currentUserId AND the available set, not just currentUserId -
+      // otherwise a cleared mark ("" holder) can never re-attempt bootstrapping
+      // once someone becomes available, since "" already equals the ref's
+      // initial/reset value and the guard would block every attempt forever.
+      const attemptKey = `${currentUserId}|${availableUserIds.slice().sort().join(",")}`;
+      if (employeeProcessAutoAdvanceAttemptRef.current[type] === attemptKey) return;
+      employeeProcessAutoAdvanceAttemptRef.current[type] = attemptKey;
+
+      try {
+        const result = await autoAdvanceEmployeeProcessAssignment({
+          type,
+          expectedCurrentUserId: currentUserId,
+          unavailableUserIds,
+        });
+        if (cancelled || !result?.previousUserId) return;
+
+        const label = type === "nl" ? "New Lead" : "Inbound";
+        try {
+          await createEmployeeProcessActionLog({
+            employeeUserId: result.previousUserId,
+            employeeName: employeeProcessRows.find((row) => row.userId === result.previousUserId)?.name || "",
+            actionType: `auto_${type}`,
+            actionLabel: result.cleared
+              ? `Cleared ${label} (no available employee)`
+              : `Auto-advanced ${label} (unavailable)`,
+            actionScope: type === "nl" ? "new_lead" : "inbound",
+            relatedUserId: result.nextUserId || "",
+            relatedUserName:
+              employeeProcessRows.find((row) => row.userId === result.nextUserId)?.name || "",
+            createdByUserId: "system",
+            createdByName: "Automatic rotation",
+          });
+        } catch (logErr) {
+          console.error("Unable to save employee process auto-advance log.", logErr);
+        }
+      } catch (err) {
+        console.error(`Unable to auto-advance ${type} rotation.`, err);
+      }
+    };
+
+    advance("ib", savedIbUserId);
+    advance("nl", savedNlUserId);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    employeeProcessError,
+    employeeProcessLoading,
+    employeeProcessRows,
+    employeeProcessSettingsLoaded,
+    loadingSchedules,
+    loadingTodayLogs,
+    savedIbUserId,
+    savedNlUserId,
+  ]);
+
+  // Everything above only re-evaluates when nowMs ticks (every 30s in
+  // App.jsx) or other live data changes. That's fine for a focused tab, but
+  // a session that's in the background (another admin's tab, a second
+  // monitor, a different device entirely) still needs to actually notice
+  // the moment a "Logged in" employee's schedule starts - waiting up to 30s
+  // for the next generic tick is unnecessary lag. This schedules a single
+  // precise wake-up for whichever "Logged in" employee's schedule starts
+  // soonest, and bumps the shared nowMs (via onScheduleReached, wired to
+  // setNowMs in App.jsx) right when it arrives, which cascades through this
+  // component's re-render exactly like a normal tick would - the employee
+  // flips to Live/available immediately instead of waiting for the next
+  // periodic tick, in this session as much as any other.
+  useEffect(() => {
+    if (typeof onScheduleReached !== "function") return undefined;
+
+    const pendingStartTimes = employeeProcessRows
+      .filter((row) => row.statusTone === "loggedin" && Number.isFinite(row.scheduleStartMs))
+      .map((row) => row.scheduleStartMs)
+      .filter((startMs) => startMs > nowMs);
+
+    if (!pendingStartTimes.length) return undefined;
+
+    const nextStartMs = Math.min(...pendingStartTimes);
+    const delayMs = Math.max(250, nextStartMs - nowMs + 250);
+    const timerId = window.setTimeout(() => {
+      onScheduleReached();
+    }, delayMs);
+
+    return () => window.clearTimeout(timerId);
+  }, [employeeProcessRows, nowMs, onScheduleReached]);
+
+  // Logs a "Completed Shift" entry the moment a rotation employee's status
+  // first flips to Completed this session - a passive transition, not a
+  // button click, so it's detected here rather than at some single call
+  // site. The snapshot baseline on first run avoids logging everyone who was
+  // already Completed before this page loaded as if they'd just finished.
+  useEffect(() => {
+    const snapshot = employeeProcessCompletionSnapshotRef.current;
+    const nextToneByUserId = {};
+    for (const row of employeeProcessRows) {
+      nextToneByUserId[row.userId] = row.statusTone;
+    }
+
+    if (!snapshot.initialized) {
+      employeeProcessCompletionSnapshotRef.current = { initialized: true, toneByUserId: nextToneByUserId };
+      return;
+    }
+
+    for (const row of employeeProcessRows) {
+      const wasCompleted = snapshot.toneByUserId[row.userId] === "completed";
+      const isCompleted = row.statusTone === "completed";
+      if (!isCompleted || wasCompleted) continue;
+
+      createEmployeeProcessActionLog({
+        employeeUserId: row.userId,
+        employeeName: row.name || "",
+        employeeProfileImageUrl: row.profileImg || "",
+        actionType: "shift_complete",
+        actionLabel: "Completed Shift",
+        actionScope: "attendance",
+        createdByUserId: "system",
+        createdByName: "Automatic rotation",
+        dedupeKey: `shift_complete:${row.userId}:${String(endDate || "")}`,
+      }).catch((err) => console.error("Unable to save employee process action log.", err));
+    }
+
+    employeeProcessCompletionSnapshotRef.current = { initialized: true, toneByUserId: nextToneByUserId };
+  }, [employeeProcessRows, endDate]);
+
+  // Logs "Started Break"/"Returned from Break" for every rotation employee,
+  // driven off activeBreaksByUserId itself rather than one button's click
+  // handler - mirrors how the real break notification works (a Firestore
+  // trigger reacting to the break_logs write, so it fires no matter which
+  // page/button actually started or ended the break). Same snapshot-baseline
+  // pattern as the shift-completion log above, so a break already in
+  // progress when this page loads isn't logged as if it just started.
+  // Every open session (other tabs, other admins) runs this same effect
+  // independently, so the dedupeKey below - built from the break_logs doc's
+  // own id - is what keeps two sessions noticing the same transition from
+  // writing two log entries; both target the same document instead of each
+  // creating their own.
+  useEffect(() => {
+    const snapshot = employeeProcessBreakSnapshotRef.current;
+    const nextBreakLogIdByUserId = {};
+    for (const row of employeeProcessRows) {
+      nextBreakLogIdByUserId[row.userId] = String(activeBreaksByUserId?.[row.userId]?.id || "").trim();
+    }
+
+    if (!snapshot.initialized) {
+      employeeProcessBreakSnapshotRef.current = { initialized: true, breakLogIdByUserId: nextBreakLogIdByUserId };
+      return;
+    }
+
+    for (const row of employeeProcessRows) {
+      const previousBreakLogId = snapshot.breakLogIdByUserId[row.userId] || "";
+      const currentBreakLogId = nextBreakLogIdByUserId[row.userId] || "";
+      if (previousBreakLogId === currentBreakLogId) continue;
+
+      const isOnBreakNow = !!currentBreakLogId;
+      const breakLogId = isOnBreakNow ? currentBreakLogId : previousBreakLogId;
+      if (!breakLogId) continue;
+
+      createEmployeeProcessActionLog({
+        employeeUserId: row.userId,
+        employeeName: row.name || "",
+        employeeProfileImageUrl: row.profileImg || "",
+        actionType: isOnBreakNow ? "break_start" : "break_end",
+        actionLabel: isOnBreakNow ? "Started Break" : "Returned from Break",
+        actionScope: "break",
+        createdByUserId: "system",
+        createdByName: "Automatic rotation",
+        dedupeKey: `${isOnBreakNow ? "break_start" : "break_end"}:${breakLogId}`,
+      }).catch((err) => console.error("Unable to save employee process action log.", err));
+    }
+
+    employeeProcessBreakSnapshotRef.current = { initialized: true, breakLogIdByUserId: nextBreakLogIdByUserId };
+  }, [employeeProcessRows, activeBreaksByUserId]);
+
   const employeeProcessSecondaryIbUnavailableUserIds = useMemo(
     () =>
       Array.from(
@@ -2294,12 +2431,10 @@ export default function EmployeeDashboard({
     playEmployeeProcessNotificationSound,
   ]);
 
-  // The IB/NL auto-reassignment decision (what used to live in a client-side
-  // effect here) now happens entirely server-side: functions/index.js's
-  // refreshEmployeeProcessStatus runs on a schedule and advances the rotation
-  // transactionally the moment it detects the current holder went unavailable,
-  // using the same canonical status this component just reads. This removes
-  // the multi-tab race the old client-side write had no protection against.
+  // The IB/NL auto-reassignment decision (advancing off an unavailable
+  // holder, or bootstrapping/clearing when nobody's available) runs
+  // client-side in the effect further down, via autoAdvanceEmployeeProcessAssignment -
+  // no Cloud Function involved.
 
   const canAdvanceEmployeeProcessForRow = useCallback(
     (userId) => {
@@ -2314,11 +2449,10 @@ export default function EmployeeDashboard({
     [normalizedSelectedUserId, viewerLinkedEmployeeId, viewerRole]
   );
 
-  // Delegates to the markEmployeeProcessReady Cloud Function, which
-  // re-verifies eligibility (canReady + a freshly-recomputed readySignature)
-  // server-side rather than trusting this client's local state, and writes
-  // both the override and the resulting action log itself.
-  const requestEmployeeProcessReady = useCallback(
+  // Direct client write of the ready override (same tier as Purple IB /
+  // setEmployeeProcessAssignments) - lets an early-logged-in employee become
+  // available/Live before their schedule's start time is reached.
+  const handleEmployeeProcessReady = useCallback(
     async (userId) => {
       const uid = String(userId || "").trim();
       if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return false;
@@ -2330,14 +2464,28 @@ export default function EmployeeDashboard({
       setEmployeeProcessBusy("ready");
 
       try {
-        const result = await markEmployeeProcessReady({
+        await setEmployeeProcessReadyOverride({
           userId: uid,
-          employeeName: row?.name || "",
-          employeeProfileImageUrl: row?.profileImg || "",
-          actingAsName:
-            pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+          signature: row.readySignature,
+          updatedByUserId: viewerUserId,
+          updatedByName: pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
         });
-        return !!result?.success;
+        try {
+          await createEmployeeProcessActionLog({
+            employeeUserId: uid,
+            employeeName: row?.name || "",
+            employeeProfileImageUrl: row?.profileImg || "",
+            actionType: "ready",
+            actionLabel: "Marked Ready",
+            actionScope: "ready",
+            createdByUserId: viewerUserId,
+            createdByName:
+              pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+          });
+        } catch (logErr) {
+          console.error("Unable to save employee process action log.", logErr);
+        }
+        return true;
       } catch (err) {
         setEmployeeProcessError(err?.message || "Unable to save ready status.");
         return false;
@@ -2351,36 +2499,71 @@ export default function EmployeeDashboard({
       pageData?.currentUser?.name,
       pageData?.user?.name,
       pageData?.viewer?.name,
+      viewerUserId,
     ]
   );
 
-  // Delegates to the finishEmployeeProcessTurn Cloud Function, which
-  // recomputes fresh status for the whole rotation and picks/writes the next
-  // assignee inside a Firestore transaction - closing the multi-tab race and
-  // stale-data issues the old direct client write had no protection against.
-  // The live employee_process_settings subscription (see the effect above)
-  // picks up the resulting change automatically, so no local optimistic write
-  // is needed here.
+  const requestEmployeeProcessReady = useCallback(
+    (userId) => {
+      const uid = String(userId || "").trim();
+      if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return;
+      const row = employeeProcessRows.find((item) => item.userId === uid);
+      if (!row?.canReady) return;
+      setEmployeeProcessConfirmAction({ type: "ready", userId: uid });
+    },
+    [canAdvanceEmployeeProcessForRow, employeeProcessRows]
+  );
+
+  // Direct Firestore write (same tier as Purple IB/setEmployeeProcessAssignments)
+  // instead of a Cloud Function call. unavailableUserIds comes straight from
+  // employeeProcessRows, which is already wired to the same live attendance
+  // data the panel displays, so "who's eligible for the handoff" is always
+  // current. The action log write below is what actually drives the toast
+  // (App.jsx's employee_process_action_logs listener) and the IB/NL
+  // notification sound (the effects above) - same as the Cloud Function
+  // version used to trigger them, just written from here instead.
   const handleAdvanceEmployeeProcess = useCallback(
     async (type, currentUserId) => {
       const uid = String(currentUserId || "").trim();
       if (!uid || !canAdvanceEmployeeProcessForRow(uid)) return false;
+      const normalizedType = String(type || "").toLowerCase() === "nl" ? "nl" : "ib";
       const row = employeeProcessRows.find((item) => item.userId === uid);
+      const unavailableUserIds = employeeProcessRows
+        .filter((item) => !item.isAvailable)
+        .map((item) => item.userId);
+      const actingAsName =
+        pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User";
 
-      setEmployeeProcessBusy(type);
+      setEmployeeProcessBusy(normalizedType);
       setEmployeeProcessError("");
       try {
-        await finishEmployeeProcessTurn({
-          type: String(type || "").toLowerCase() === "nl" ? "nl" : "ib",
+        const result = await finishEmployeeProcessTurn({
+          type: normalizedType,
           userId: uid,
-          employeeName: row?.name || "",
-          employeeProfileImageUrl: row?.profileImg || "",
-          actingAsName:
-            pageData?.viewer?.name || pageData?.currentUser?.name || pageData?.user?.name || "Portal User",
+          unavailableUserIds,
+          updatedByUserId: viewerUserId,
+          updatedByName: actingAsName,
         });
+        try {
+          await createEmployeeProcessActionLog({
+            employeeUserId: uid,
+            employeeName: row?.name || "",
+            employeeProfileImageUrl: row?.profileImg || "",
+            actionType: normalizedType === "nl" ? "finish_nl" : "finish_ib",
+            actionLabel: normalizedType === "nl" ? "Finished New Lead" : "Finished Inbound",
+            actionScope: normalizedType === "nl" ? "new_lead" : "inbound",
+            relatedUserId: result?.nextUserId || "",
+            relatedUserName:
+              employeeProcessRows.find((item) => item.userId === result?.nextUserId)?.name || "",
+            createdByUserId: viewerUserId,
+            createdByName: actingAsName,
+          });
+        } catch (logErr) {
+          console.error("Unable to save employee process action log.", logErr);
+        }
         return true;
       } catch (err) {
-        setEmployeeProcessError(err?.message || `Unable to advance ${String(type).toUpperCase()}.`);
+        setEmployeeProcessError(err?.message || `Unable to advance ${normalizedType.toUpperCase()}.`);
         return false;
       } finally {
         setEmployeeProcessBusy("");
@@ -2392,6 +2575,7 @@ export default function EmployeeDashboard({
       pageData?.currentUser?.name,
       pageData?.user?.name,
       pageData?.viewer?.name,
+      viewerUserId,
     ]
   );
 
@@ -2504,7 +2688,7 @@ export default function EmployeeDashboard({
     const action = employeeProcessConfirmAction;
     if (!action?.type || !action?.userId) return;
     if (action.type === "ready") {
-      const didMarkReady = await requestEmployeeProcessReady(action.userId);
+      const didMarkReady = await handleEmployeeProcessReady(action.userId);
       if (didMarkReady) setEmployeeProcessConfirmAction(null);
       return;
     }
@@ -2521,8 +2705,8 @@ export default function EmployeeDashboard({
   }, [
     employeeProcessConfirmAction,
     handleAdvanceEmployeeProcess,
+    handleEmployeeProcessReady,
     handleSetEmployeeProcessPurpleIb,
-    requestEmployeeProcessReady,
   ]);
 
   const employeeProcessConfirmEmployee = useMemo(
@@ -2550,7 +2734,7 @@ export default function EmployeeDashboard({
   const employeeProcessConfirmMessage = employeeProcessConfirmIsReady
     ? `Confirm that ${
         employeeProcessConfirmEmployee?.name || "this employee"
-      } is ready to take calls now? They'll be marked Available for the IB and New Lead rotation.`
+      } is ready to take calls now? They'll be marked available for the IB and New Lead rotation.`
     : employeeProcessConfirmIsPurpleIb
       ? employeeProcessConfirmIsPurpleRemove
         ? `Remove the secondary IB mark from ${employeeProcessConfirmEmployee?.name || "this employee"}?`
@@ -2625,18 +2809,19 @@ export default function EmployeeDashboard({
       : viewerRole === "admin" || viewerRole === "super_admin"
         ? String(normalizedSelectedUserId || "").trim()
       : "";
-  const showEmployeeProcessActionModal =
-    !!employeeProcessActionUserId &&
-    (
-      employeeProcessActionUserId === effectiveIbUserId ||
-      employeeProcessActionUserId === effectiveNlUserId
-    );
   const employeeProcessActionEmployee = useMemo(
     () =>
       employeeProcessRows.find((row) => row.userId === employeeProcessActionUserId) ||
       null,
     [employeeProcessActionUserId, employeeProcessRows]
   );
+  const showEmployeeProcessActionModal =
+    !!employeeProcessActionUserId &&
+    (
+      employeeProcessActionUserId === effectiveIbUserId ||
+      employeeProcessActionUserId === effectiveNlUserId ||
+      !!employeeProcessActionEmployee?.canReady
+    );
 
   const callActivityDurationMinutes = useMemo(
     () => calculateDurationMinutes(
@@ -8351,12 +8536,14 @@ export default function EmployeeDashboard({
                 </button>
                 <button
                   type="button"
-                  className={`empAnnouncementBtn ${isAnnouncementDrawerOpen ? "active" : ""}`}
+                  className={`empAnnouncementBtn ${isAnnouncementDrawerOpen ? "active" : ""} ${
+                    visitorAnnouncements.length > 0 && !isAnnouncementDrawerOpen ? "hasAnnouncements" : ""
+                  }`}
                   onClick={toggleAnnouncementPanel}
                   title="Open announcements"
                   aria-label={`Open announcements (${visitorAnnouncements.length} items)`}
                 >
-                  <Megaphone size={14} aria-hidden="true" />
+                  <Megaphone size={14} className="empAnnouncementBtnIcon" aria-hidden="true" />
                   <span className="empAnnouncementBtnLabel">Announcements</span>
                   {visitorAnnouncements.length > 0 ? (
                     <span className="empAnnouncementBtnCount" aria-hidden="true">
@@ -8652,46 +8839,39 @@ export default function EmployeeDashboard({
                                     <div className="employeeLeadUnavailableContent">
                                       <div className="employeeLeadIdentity">
                                         <div className="employeeLeadAvatar">
-                                            {row.profileImg ? (
-                                              <img src={row.profileImg} alt={`${row.name} profile`} />
-                                            ) : (
-                                              row.initials
-                                            )}
-                                          </div>
-                                          <div>
-                                            <div className="employeeLeadName">{row.name}</div>
-                                            {row.scheduleTimeLabel ? (
-                                              <div className="employeeLeadScheduleTime">
-                                                {row.scheduleTimeLabel}
-                                              </div>
-                                            ) : null}
-                                          </div>
+                                          {row.profileImg ? (
+                                            <img src={row.profileImg} alt={`${row.name} profile`} />
+                                          ) : (
+                                            row.initials
+                                          )}
                                         </div>
-                                        {row.statusTone === "loggedin" && canReadyForRow ? (
-                                          <button
-                                            type="button"
-                                            className={`employeeLeadStatus employeeLeadUnavailableStatus employeeLeadReadyStatus tone-${row.statusTone}`}
-                                            onClick={() =>
-                                              setEmployeeProcessConfirmAction({
-                                                type: "ready",
-                                                userId: row.userId,
-                                              })
-                                            }
-                                            aria-label={`Mark ${row.name} as ready for IB and New Lead rotation`}
-                                            title="Click to make available"
-                                          >
-                                            <span className="employeeLeadReadyTextDefault">{row.statusLabel}</span>
-                                            <span className="employeeLeadReadyTextHover">I'm ready</span>
-                                          </button>
-                                        ) : (
-                                          <div className={`employeeLeadStatus employeeLeadUnavailableStatus tone-${row.statusTone}`}>
-                                            {row.statusLabel}
-                                          </div>
-                                        )}
+                                        <div>
+                                          <div className="employeeLeadName">{row.name}</div>
+                                        </div>
                                       </div>
-                                    </td>
-                                  ) : (
-                                    <>
+                                      {row.statusTone === "loggedin" && canReadyForRow ? (
+                                        <button
+                                          type="button"
+                                          className={`employeeLeadStatus employeeLeadUnavailableStatus employeeLeadReadyStatus tone-${row.statusTone}`}
+                                          onClick={() => requestEmployeeProcessReady(row.userId)}
+                                          disabled={employeeProcessBusy === "ready"}
+                                          aria-label={`Mark ${row.name} as ready for IB and New Lead rotation`}
+                                          title="Click to make available"
+                                        >
+                                          <span className="employeeLeadReadyTextDefault">{row.statusLabel}</span>
+                                          <span className="employeeLeadReadyTextHover">
+                                            {employeeProcessBusy === "ready" ? "Marking..." : "I'm ready"}
+                                          </span>
+                                        </button>
+                                      ) : (
+                                        <div className={`employeeLeadStatus employeeLeadUnavailableStatus tone-${row.statusTone}`}>
+                                          {row.statusLabel}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                ) : (
+                                  <>
                                       <td>
                                         <div className="employeeLeadIdentity">
                                           <div className="employeeLeadAvatar">
@@ -8703,11 +8883,6 @@ export default function EmployeeDashboard({
                                           </div>
                                           <div>
                                             <div className="employeeLeadName">{row.name}</div>
-                                            {row.scheduleTimeLabel ? (
-                                              <div className="employeeLeadScheduleTime">
-                                                {row.scheduleTimeLabel}
-                                              </div>
-                                            ) : null}
                                             <div className={`employeeLeadStatus tone-${row.statusTone}`}>
                                               {row.statusLabel}
                                             </div>
@@ -10723,10 +10898,21 @@ export default function EmployeeDashboard({
         ? createPortal(
             <div className="employeeLeadFloatingModal" role="region" aria-label="IB and NL advance actions">
               <div className="employeeLeadFloatingHead">
-                <span>Current turn</span>
+                <span>{employeeProcessActionEmployee?.canReady ? "Get started" : "Current turn"}</span>
                 <strong>{employeeProcessActionEmployee?.name || "Your row"}</strong>
               </div>
               <div className="employeeLeadFloatingMarks">
+                {employeeProcessActionEmployee?.canReady ? (
+                  <button
+                    type="button"
+                    className="employeeLeadFloatingBtn isReady"
+                    onClick={() => requestEmployeeProcessReady(employeeProcessActionUserId)}
+                    disabled={employeeProcessBusy === "ready"}
+                  >
+                    <span>Rdy</span>
+                    {employeeProcessBusy === "ready" ? "Marking..." : "I'm Ready"}
+                  </button>
+                ) : null}
                 {employeeProcessActionUserId === effectiveIbUserId ? (
                   <button
                     type="button"
